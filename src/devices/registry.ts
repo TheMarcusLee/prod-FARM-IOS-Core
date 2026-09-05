@@ -3,10 +3,17 @@ import path from 'node:path';
 
 import { coordinatesForProfile, validateCoordinateOverrides, type DeviceCoordinateOverrides, type DeviceProfileName } from './coordinates.js';
 import type { JsonObject } from '../types.js';
+import type { AndroidDeviceConfig, DriverKind, Platform } from '../drivers/types.js';
 
 export interface RegisteredDevice {
     name: string;
+    /** iOS UDID or Android adb serial. */
     udid: string;
+    /** Defaults to 'ios' so existing devices.json files keep loading. */
+    platform?: Platform;
+    /** Defaults to 'wda' on iOS and 'adb' on Android. See docs/adr/0001. */
+    driver?: DriverKind;
+    android?: AndroidDeviceConfig;
     coordinateProfile?: DeviceProfileName;
     wdaLocalPort?: number;
     mjpegLocalPort?: number;
