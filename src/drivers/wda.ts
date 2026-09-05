@@ -1,7 +1,8 @@
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { WdaRemoteControl } from '../devices/wda-remote.js';
-import { pause, runCommand, type CommandRunner } from './common.js';
+import { pause } from './common.js';
 import {
     DriverError, UnsupportedOperationError,
     type DeviceDriver, type Key, type MediaFile, type Point, type ScreenGeometry, type Swipe, type UiNode,
@@ -12,9 +13,8 @@ export interface WdaDriverOptions {
     wdaUrl: string;
     passcode?: string;
     fetchImpl?: typeof fetch;
-    /** Override how media reaches the camera roll; defaults to pymobiledevice3 over USB. */
+    /** Override how media reaches the camera roll; defaults to the fork's `/wda/import-media` endpoint. */
     pushMedia?: (file: MediaFile) => Promise<void>;
-    run?: CommandRunner;
 }
 
 /** iOS via WebDriverAgent. Wraps the existing WdaRemoteControl so the plugin process and the worker share one client. */
@@ -31,7 +31,7 @@ export function createWdaDriver(options: WdaDriverOptions): DeviceDriver {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
     });
-    const pushMedia = options.pushMedia ?? ((file: MediaFile) => pushMediaWithPymobiledevice3(udid, file, options.run ?? runCommand));
+    const pushMedia = options.pushMedia ?? ((file: MediaFile) => pushMediaViaWda(file, post));
 
     return {
         kind: 'wda',
@@ -102,12 +102,33 @@ export function normaliseWdaNode(node: WdaSourceNode): UiNode {
     };
 }
 
+const MAX_IMPORT_BYTES = 350 * 1024 * 1024;
+
+const MIME_BY_EXTENSION: Record<string, string> = {
+    '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.m4v': 'video/x-m4v',
+    '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.heic': 'image/heic', '.gif': 'image/gif',
+};
+
+export function mimeTypeForFileName(fileName: string): string {
+    return MIME_BY_EXTENSION[path.extname(fileName).toLowerCase()] ?? 'application/octet-stream';
+}
+
 /**
- * WDA cannot write to the camera roll. pymobiledevice3 (pip install pymobiledevice3) can push
- * over USB via AFC; Photos indexes /DCIM on the next launch. Keep this on the sync pass before
- * the posting window, not inside the routine.
+ * This fork patches WebDriverAgent with `/wda/import-media`, which saves a base64 body into the
+ * Photos library (see tiktok/post.ts). The base64 copy plus JSON.stringify's copy put the practical
+ * ceiling near 350 MB, so refuse larger files with a clear message instead of an OOM.
  */
-async function pushMediaWithPymobiledevice3(udid: string, file: MediaFile, run: CommandRunner): Promise<void> {
+async function pushMediaViaWda(file: MediaFile, post: (pathname: string, body: unknown) => Promise<Response>): Promise<void> {
     const fileName = file.fileName ?? path.basename(file.localPath);
-    await run('pymobiledevice3', ['afc', 'push', '--udid', udid, file.localPath, `/DCIM/100APPLE/${fileName}`], { timeoutMs: 120_000 });
+    const data = await readFile(file.localPath);
+    if (data.length > MAX_IMPORT_BYTES) {
+        throw new DriverError(`${fileName} is ${(data.length / 1_048_576).toFixed(0)} MB; the WDA media import limit is 350 MB`);
+    }
+    const response = await post('/wda/import-media', {
+        name: fileName, mimeType: file.mimeType ?? mimeTypeForFileName(fileName), data: data.toString('base64'),
+    });
+    const result = await response.json() as { value?: { error?: unknown; assetCount?: number } };
+    if (result.value && typeof result.value === 'object' && 'error' in result.value) {
+        throw new DriverError(`WebDriverAgent could not import ${fileName}: ${JSON.stringify(result.value.error)}`);
+    }
 }

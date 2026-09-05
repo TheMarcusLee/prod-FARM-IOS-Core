@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 
 import type { PhoneFarmPlugin, TaskDefinition, TaskExecutionContext } from './plugin.js';
-import type { JsonObject, JsonValue, ScheduleTiming } from './types.js';
+import type { JsonObject, JsonValue, ScheduleTiming, TaskExecutionResult } from './types.js';
 
 export interface TikTokPluginConfiguration {
     doomscrollEntrypoint?: string;
@@ -42,6 +42,19 @@ function objectPayload(value: JsonValue): Record<string, JsonValue> {
     return value;
 }
 
+/**
+ * The shipped routines drive TikTok through WebDriverAgent and XCUITest. Until the Android
+ * routine lands, fail an Android execution up front with a message that says so, instead of
+ * letting webdriverio time out against a WDA port that does not exist.
+ */
+function unsupportedPlatform(context: TaskExecutionContext, taskName: string): TaskExecutionResult | undefined {
+    if (context.device.platform !== 'android') return;
+    return {
+        exitCode: null, stopped: false,
+        error: `TikTok ${taskName} is not implemented for Android yet (device ${context.device.udid} uses the ${context.driver.kind} driver); see docs/adr/0001`,
+    };
+}
+
 function optionalString(value: JsonValue | undefined, name: string): string | undefined {
     if (value === undefined) return;
     if (typeof value !== 'string') throw new Error(`${name} must be a string`);
@@ -74,7 +87,7 @@ function createDoomscrollTask(configuration: TikTokPluginConfiguration): TaskDef
         estimateDurationMs: (payload) => payload.durationMinutes * 60_000,
         retryPolicy: () => ({ retryLimit: 2, retryDelaySeconds: 60, retryBackoff: true }),
         supportsStop: () => true,
-        execute: (context, payload) => context.runProcess({
+        execute: async (context, payload) => unsupportedPlatform(context, 'doomscroll') ?? context.runProcess({
             entrypoint: configuration.doomscrollEntrypoint ?? fileURLToPath(new URL('./tiktok/doomscroll.ts', import.meta.url)),
             env: {
                 IOS_UDID: context.device.udid,
@@ -130,6 +143,8 @@ function createPostTask(configuration: TikTokPluginConfiguration): TaskDefinitio
         retryPolicy: () => ({ retryLimit: 0, retryDelaySeconds: 0, retryBackoff: false }),
         supportsStop: () => false,
         async execute(context: TaskExecutionContext, payload) {
+            const unsupported = unsupportedPlatform(context, 'post');
+            if (unsupported) return unsupported;
             const byId = new Map(context.assets.map((asset) => [asset.id, asset]));
             const files = payload.media.map((media) => {
                 const asset = byId.get(media.assetId);

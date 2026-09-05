@@ -70,8 +70,9 @@ so both modes work unchanged (it only needs a base URL and a token).
 
 4. **Media transfer is a driver concern.** `pushMedia` on Android does `adb push` into
    `DCIM/Camera` and broadcasts a media-scanner intent so TikTok's picker sees the file. On
-   iOS WDA cannot write the camera roll, so the `wda` driver shells out to `pymobiledevice3`
-   (Python, installed on the Mac) and this step stays separate from posting.
+   iOS this fork's patched WebDriverAgent exposes `/wda/import-media`, which writes straight
+   into the Photos library, so the `wda` driver posts the file there (as `tiktok/post.ts`
+   already does) and nothing else needs to be attached.
 
 5. **Both Android drivers are set up from day one.** `adb` is the fast path (ships in
    configuration + a new gesture pack); `a11y-bridge` is the quiet path. Because they sit

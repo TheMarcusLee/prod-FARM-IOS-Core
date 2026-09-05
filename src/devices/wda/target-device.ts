@@ -39,7 +39,8 @@ export async function resolveTargetUdid(options: ResolveTargetOptions = {}): Pro
     const argv = options.argv ?? process.argv;
     const env = options.env ?? process.env;
     const loadRegistered = options.loadRegistered ?? (() => loadRegisteredDevices());
-    const loadConnected = options.loadConnected ?? discoverConnectedDeviceUdids;
+    // WDA is iOS-only: an Android serial must never be picked as "the only connected device".
+    const loadConnected = options.loadConnected ?? (() => discoverConnectedDeviceUdids('ios'));
 
     const fromArgv = udidFromArgv(argv);
     if (fromArgv) return fromArgv;

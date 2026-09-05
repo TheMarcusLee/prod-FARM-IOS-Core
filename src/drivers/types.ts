@@ -57,6 +57,8 @@ export interface MediaFile {
     localPath: string;
     /** File name on the device; defaults to the local basename. */
     fileName?: string;
+    /** Needed by the iOS import; inferred from the extension when absent. */
+    mimeType?: string;
 }
 
 export interface DeviceDriver {

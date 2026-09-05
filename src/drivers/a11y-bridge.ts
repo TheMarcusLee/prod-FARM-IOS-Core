@@ -22,6 +22,11 @@ export interface A11yBridgeDriverOptions {
 
 const ANDROID_KEYCODES: Record<Key, number> = { home: 3, back: 4, enter: 66, delete: 67 };
 
+/** `GET /ping` is the bridge's one unauthenticated route; a 200 means the service is up. */
+export function bridgePingUrl(baseUrl: string): string {
+    return `${baseUrl.replace(/\/$/, '')}/ping`;
+}
+
 interface BridgeEnvelope<T> {
     status: 'success' | 'error';
     result?: T;

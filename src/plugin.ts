@@ -9,6 +9,7 @@ import type {
     TaskRetryPolicy,
 } from './types.js';
 import type { SchedulerRepository } from './scheduler/repository.js';
+import type { DeviceDriver } from './drivers/types.js';
 import type { RegisteredDevice } from './devices/registry.js';
 import type { RemoteControl } from './devices/wda-remote.js';
 
@@ -32,7 +33,10 @@ export interface TaskExecutionContext {
     workspaceDirectory: string;
     device: DeviceIdentity;
     devicePluginData: JsonObject;
+    /** iOS-era subset kept for existing plugins; new routines should use `driver`. */
     automation: DeviceAutomation;
+    /** Platform-neutral control channel for this device (WDA, adb, or the Android bridge). */
+    driver: DeviceDriver;
     assets: StoredAsset[];
     signal: AbortSignal;
     log(line: string): Promise<void>;

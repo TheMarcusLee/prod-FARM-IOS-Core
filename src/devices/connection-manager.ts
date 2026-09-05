@@ -1,6 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+import { bridgePingUrl } from '../drivers/a11y-bridge.js';
+import { driverKindOf, platformOf } from '../drivers/select.js';
 import { discoverConnectedDeviceUdids } from './discovery.js';
 import { activeDevices, loadRegisteredDevices, type RegisteredDevice } from './registry.js';
 
@@ -10,6 +12,7 @@ export type AppiumConnectionPhase = 'ready' | 'unavailable';
 export interface DeviceConnectionStatus {
     udid: string;
     physical: 'connected' | 'disconnected';
+    /** Control-channel phase. Named for WDA historically; on Android it reports adb or the bridge. */
     wda: DeviceConnectionPhase;
     appium: AppiumConnectionPhase;
     managed: boolean;
@@ -154,6 +157,8 @@ export class DeviceConnectionManager implements DeviceConnections {
                 const runtime = this.runtimes.get(device.udid) ?? this.createRuntime(device);
                 runtime.device = device;
                 runtime.status.physical = attached.has(device.udid) ? 'connected' : 'disconnected';
+                // Android phones have no WDA to supervise; their channel is adb or the on-device bridge.
+                if (platformOf(device) === 'android') return this.reconcileAndroid(runtime, attached.has(device.udid));
                 if (!runtime.child && this.now() >= runtime.retryAt) this.startChild(runtime);
                 const wdaPort = device.wdaLocalPort ?? Number(process.env.WDA_LOCAL_PORT ?? 8100);
                 const ready = attached.has(device.udid)
@@ -169,9 +174,29 @@ export class DeviceConnectionManager implements DeviceConnections {
         }
     }
 
+    private async reconcileAndroid(runtime: RuntimeState, attached: boolean): Promise<void> {
+        const device = runtime.device;
+        const bridgeUrl = driverKindOf(device) === 'a11y-bridge' ? device.android?.bridgeUrl : undefined;
+        if (!bridgeUrl) {
+            if (attached) this.update(runtime, 'ready', 'adb is connected');
+            else this.update(runtime, 'disconnected', 'Not visible to adb — check the USB cable or wireless debugging');
+            return;
+        }
+        const bridge = await this.endpointReady(bridgePingUrl(bridgeUrl));
+        // Over Wi-Fi the bridge answering is the connection; adb is optional once bootstrapped.
+        runtime.status.physical = attached || bridge ? 'connected' : 'disconnected';
+        if (bridge) this.update(runtime, 'ready', attached ? 'Bridge is ready (adb attached)' : 'Bridge is ready over Wi-Fi');
+        else if (attached) this.update(runtime, 'connecting', `adb sees the phone but the bridge at ${bridgeUrl} is not answering; check the accessibility service and the port forward`);
+        else this.update(runtime, 'disconnected', 'Neither adb nor the bridge can reach the phone');
+    }
+
     async reconnect(udid: string): Promise<DeviceConnectionStatus | undefined> {
         const runtime = this.runtimes.get(udid);
         if (!runtime) return;
+        if (platformOf(runtime.device) === 'android') {
+            await this.reconcile();
+            return this.status(udid);
+        }
         await this.stopChild(runtime);
         runtime.status.retryCount = 0;
         runtime.retryAt = 0;

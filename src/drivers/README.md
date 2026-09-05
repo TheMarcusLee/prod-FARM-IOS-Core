@@ -68,6 +68,21 @@ await tapText(driver, { text: 'Post' }, recognizeWords);   // tree first, OCR fa
 await waitForText(driver, { text: 'Posted' }, { timeoutMs: 60_000, signal });
 ```
 
-Follow-ups tracked outside this directory: Android branch in `devices/discovery.ts`, platform
-picker in device registration, `executor.ts` switching from inline `WdaRemoteControl` to
-`driverForDevice`, and an Android TikTok routine in the TikTok plugin.
+## How the farm uses this layer
+
+- `devices/discovery.ts` lists iPhones (usbmuxd) and Android phones (`adb devices -l`) together;
+  set `ANDROID_DISCOVERY=off` on an iOS-only host to skip adb entirely.
+- `devices/connection-manager.ts` supervises WDA for iOS devices only. Android devices report
+  `ready` when adb sees them, or, for `a11y-bridge`, when `GET <bridgeUrl>/ping` answers, so a
+  phone on Wi-Fi with nothing attached still shows as connected.
+- `scheduler/executor.ts` builds the driver with `driverForDevice` and hands it to plugins as
+  `context.driver`; the older `context.automation` is served by the same driver. Readiness before
+  a run follows the driver: WDA plus Appium on iOS, adb visibility for `adb`, the ping for the bridge.
+- Plugin child processes receive `DEVICE_UDID`, `DEVICE_PLATFORM` and `DEVICE_DRIVER` on every
+  platform; `IOS_UDID`, `WDA_URL` and `IOS_PASSCODE` on iOS; `ANDROID_SERIAL` (which adb honours
+  natively) plus `A11Y_BRIDGE_URL` / `A11Y_BRIDGE_TOKEN` on Android.
+- `POST /api/devices` accepts `platform`, `driver` and `android` so an Android phone can be
+  registered without the iOS registration wizard.
+
+Still open: a platform-aware registration wizard and device page in the dashboard, and the
+Android TikTok routine (the plugin currently fails Android executions with a clear message).

@@ -25,3 +25,4 @@ export {
     type RegistrationUpdate,
 } from './devices/registration.js';
 export * from './devices/wda-remote.js';
+export * from './drivers/index.js';

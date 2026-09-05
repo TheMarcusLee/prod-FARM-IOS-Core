@@ -10,6 +10,7 @@ import { Readable } from 'node:stream';
 
 import { discoverConnectedDevices } from '../devices/discovery.js';
 import { loadRegisteredDevices, mutateRegisteredDevices, saveRegisteredDevices, redactDevice, PASSCODE_PATTERN, type RegisteredDevice } from '../devices/registry.js';
+import type { AndroidDeviceConfig } from '../drivers/types.js';
 import {
     CALIBRATABLE_POINTS, POINT_LABELS, coordinatesForProfile, resolveDeviceCoordinates, validateCoordinateOverrides,
 } from '../devices/coordinates.js';
@@ -270,18 +271,36 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         await options.registrations.cancel(request.params.id);
         return reply.code(204).send();
     });
-    app.post<{ Body: { name?: string; udid?: string; wdaLocalPort?: number; mjpegLocalPort?: number; passcode?: string; coordinateProfile?: string; pluginData?: Record<string, JsonObject> } }>(
+    app.post<{ Body: { name?: string; udid?: string; wdaLocalPort?: number; mjpegLocalPort?: number; passcode?: string; coordinateProfile?: string; pluginData?: Record<string, JsonObject>; platform?: string; driver?: string; android?: { serial?: unknown; bridgeUrl?: unknown; bridgeToken?: unknown } | null } }>(
         '/api/devices', async (request, reply) => {
-            const { name, udid, wdaLocalPort, mjpegLocalPort, passcode, coordinateProfile, pluginData } = request.body;
+            const { name, udid, wdaLocalPort, mjpegLocalPort, passcode, coordinateProfile, pluginData, platform, driver, android } = request.body;
             if (!udid) return reply.code(400).send({ error: 'A device UDID is required' });
             if (passcode !== undefined && !PASSCODE_PATTERN.test(passcode)) {
                 return reply.code(400).send({ error: 'Device passcode must contain at least four digits' });
             }
+            if (platform !== undefined && platform !== 'ios' && platform !== 'android') {
+                return reply.code(400).send({ error: 'platform must be "ios" or "android"' });
+            }
+            if (driver !== undefined && driver !== 'wda' && driver !== 'adb' && driver !== 'a11y-bridge') {
+                return reply.code(400).send({ error: 'driver must be "wda", "adb" or "a11y-bridge"' });
+            }
+            if (android !== undefined && (typeof android !== 'object' || android === null || typeof android.serial !== 'string')) {
+                return reply.code(400).send({ error: 'android must be an object with a serial' });
+            }
+            // Narrowed here, outside the closure below, so the whitelist keeps its types.
+            const androidConfig: AndroidDeviceConfig | undefined = android && typeof android.serial === 'string' ? {
+                serial: android.serial,
+                ...(typeof android.bridgeUrl === 'string' ? { bridgeUrl: android.bridgeUrl } : {}),
+                ...(typeof android.bridgeToken === 'string' ? { bridgeToken: android.bridgeToken } : {}),
+            } : undefined;
             const created = await mutateRegisteredDevices((devices) => {
                 if (devices.some((device) => device.udid === udid)) throw httpError(409, 'A device with this UDID is already registered');
                 // Explicit whitelist — never mass-assign arbitrary body keys into devices.json.
                 const device: RegisteredDevice = {
                     name: name ?? udid, udid, pluginData: pluginData ?? {},
+                    ...(platform !== undefined ? { platform } : {}),
+                    ...(driver !== undefined ? { driver } : {}),
+                    ...(androidConfig ? { android: androidConfig } : {}),
                     ...(wdaLocalPort !== undefined ? { wdaLocalPort } : {}),
                     ...(mjpegLocalPort !== undefined ? { mjpegLocalPort } : {}),
                     ...(coordinateProfile !== undefined ? { coordinateProfile: coordinateProfile as RegisteredDevice['coordinateProfile'] } : {}),

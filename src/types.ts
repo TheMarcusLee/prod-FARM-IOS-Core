@@ -1,15 +1,23 @@
+import type { AndroidDeviceConfig, DriverKind, Platform } from './drivers/types.js';
+
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 export type JsonObject = { [key: string]: JsonValue };
 
 export interface DeviceIdentity {
+    /** iOS UDID or Android adb serial. */
     udid: string;
     name: string;
+    /** Absent means iOS. */
+    platform?: Platform;
     osVersion?: string;
     productType?: string;
 }
 
 export interface RegisteredDevice extends DeviceIdentity {
+    /** Defaults to 'wda' on iOS and 'adb' on Android. */
+    driver?: DriverKind;
+    android?: AndroidDeviceConfig;
     wdaLocalPort?: number;
     mjpegLocalPort?: number;
     /** Compiled tap-layout key; canonical here, not in pluginData. */

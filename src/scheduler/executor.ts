@@ -6,7 +6,9 @@ import type { DeviceAutomation, PluginProcessSpecification, TaskExecutionContext
 import { discoverConnectedDevices, type Device } from '../devices/discovery.js';
 import { loadRegisteredDevices, type RegisteredDevice } from '../devices/registry.js';
 import { passcodeForDevice } from '../devices/secrets.js';
-import { WdaRemoteControl } from '../devices/wda-remote.js';
+import { bridgePingUrl } from '../drivers/a11y-bridge.js';
+import { driverForDevice, driverKindOf, platformOf } from '../drivers/select.js';
+import type { DeviceDriver } from '../drivers/types.js';
 import type { ExecutionRow } from '../database/schema.js';
 import type { PluginRegistry } from '../registry.js';
 import type { TaskExecutionResult } from '../types.js';
@@ -20,54 +22,86 @@ async function endpointReady(url: string): Promise<boolean> {
     }
 }
 
+function wdaUrlFor(registered: RegisteredDevice): string {
+    return `http://127.0.0.1:${registered.wdaLocalPort ?? Number(process.env.WDA_LOCAL_PORT ?? 8100)}`;
+}
+
+/**
+ * Why the device cannot run yet, or undefined when every channel its driver needs is answering.
+ * iOS needs the phone on USB plus WDA and Appium; adb needs the phone visible to adb; the bridge
+ * only needs its HTTP port, so a phone on Wi-Fi with nothing attached still counts as ready.
+ */
+export async function readinessProblem(
+    registered: RegisteredDevice,
+    discovered: boolean,
+    ready: (url: string) => Promise<boolean> = endpointReady,
+): Promise<string | undefined> {
+    switch (driverKindOf(registered)) {
+        case 'wda': {
+            if (!discovered) return 'device is offline';
+            const wdaUrl = wdaUrlFor(registered);
+            if (!await ready(`${wdaUrl}/status`)) return `WDA is unavailable at ${wdaUrl}`;
+            const appium = `http://${process.env.APPIUM_HOST ?? '127.0.0.1'}:${Number(process.env.APPIUM_PORT ?? 4725)}`;
+            if (!await ready(`${appium}/status`)) return `Appium is unavailable at ${appium}`;
+            return;
+        }
+        case 'a11y-bridge': {
+            const bridgeUrl = registered.android?.bridgeUrl;
+            if (!bridgeUrl) return 'device uses the a11y-bridge driver but has no android.bridgeUrl';
+            if (!await ready(bridgePingUrl(bridgeUrl))) return `bridge is unavailable at ${bridgeUrl}`;
+            return;
+        }
+        case 'adb':
+            return discovered ? undefined : 'device is not visible to adb';
+    }
+}
+
+/** What a plugin sees as the device when it is reachable only through the bridge and not through adb. */
+function identityFromRegistration(registered: RegisteredDevice): Device {
+    return { name: registered.name, udid: registered.udid, osVersion: 'unknown', platform: platformOf(registered) };
+}
+
 async function waitForDevice(execution: ExecutionRow, registered: RegisteredDevice, signal: AbortSignal): Promise<Device> {
-    const wdaPort = registered.wdaLocalPort ?? Number(process.env.WDA_LOCAL_PORT ?? 8100);
-    const appiumHost = process.env.APPIUM_HOST ?? '127.0.0.1';
-    const appiumPort = Number(process.env.APPIUM_PORT ?? 4725);
     let lastProblem = 'device is offline';
     while (Date.now() <= execution.deadlineAt.getTime()) {
         if (signal.aborted) throw new Error('Execution stopped while waiting for the device');
-        const device = (await discoverConnectedDevices()).find(({ udid }) => udid === execution.deviceUdid);
-        if (!device) lastProblem = 'device is offline';
-        else if (!await endpointReady(`http://127.0.0.1:${wdaPort}/status`)) lastProblem = `WDA is unavailable on port ${wdaPort}`;
-        else if (!await endpointReady(`http://${appiumHost}:${appiumPort}/status`)) lastProblem = `Appium is unavailable on port ${appiumPort}`;
-        else return device;
+        const discovered = (await discoverConnectedDevices()).find(({ udid }) => udid === execution.deviceUdid);
+        const problem = await readinessProblem(registered, Boolean(discovered));
+        if (!problem) return discovered ?? identityFromRegistration(registered);
+        lastProblem = problem;
         await new Promise((resolve) => setTimeout(resolve, 5_000));
     }
     throw new Error(`Execution window expired: ${lastProblem}`);
 }
 
-function deviceAutomation(registered: RegisteredDevice, passcode: string | undefined): DeviceAutomation {
-    const udid = registered.udid;
-    const remote = new WdaRemoteControl({
-        deviceUdid: udid,
-        wdaUrl: `http://127.0.0.1:${registered.wdaLocalPort ?? Number(process.env.WDA_LOCAL_PORT ?? 8100)}`,
-        passcode,
-    });
-    const appRequest = async (pathname: string, bundleId: string): Promise<void> => {
-        await remote.request(pathname, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ bundleId }),
-        });
-    };
+/** The iOS-era automation surface, served by whichever driver the device uses. */
+export function automationFromDriver(driver: DeviceDriver): DeviceAutomation {
     return {
-        activateApp: (bundleId) => appRequest('/wda/apps/launch', bundleId),
-        terminateApp: (bundleId) => appRequest('/wda/apps/terminate', bundleId),
-        pause: (milliseconds, signal) => new Promise((resolve, reject) => {
-            if (signal?.aborted) return reject(signal.reason);
-            const onAbort = () => { clearTimeout(timer); reject(signal!.reason); };
-            const timer = setTimeout(() => {
-                signal?.removeEventListener('abort', onAbort);
-                resolve();
-            }, milliseconds);
-            signal?.addEventListener('abort', onAbort, { once: true });
-        }),
-        screenshot: () => remote.getScreenshot(udid),
-        tap: (x, y) => remote.performAction(udid, { type: 'tap', x, y }),
-        swipe: (startX, startY, endX, endY, durationMs) => remote.performAction(udid, {
-            type: 'swipe', startX, startY, endX, endY, durationMs,
-        }),
+        activateApp: (appId) => driver.launchApp(appId),
+        terminateApp: (appId) => driver.terminateApp(appId),
+        pause: (milliseconds, signal) => driver.pause(milliseconds, signal),
+        screenshot: () => driver.screenshot(),
+        tap: (x, y) => driver.tap({ x, y }),
+        swipe: (startX, startY, endX, endY, durationMs) => driver.swipe({ from: { x: startX, y: startY }, to: { x: endX, y: endY }, durationMs }),
+    };
+}
+
+/**
+ * Variables handed to the plugin child process. DEVICE_* are platform-neutral; IOS_UDID and
+ * WDA_URL stay for the existing iOS routines, ANDROID_SERIAL is honoured by adb itself.
+ */
+export function pluginEnvironment(registered: RegisteredDevice, passcode: string | undefined): Record<string, string> {
+    const platform = platformOf(registered);
+    const base = { DEVICE_UDID: registered.udid, DEVICE_PLATFORM: platform, DEVICE_DRIVER: driverKindOf(registered) };
+    if (platform === 'ios') {
+        return { ...base, IOS_UDID: registered.udid, WDA_URL: wdaUrlFor(registered), ...(passcode ? { IOS_PASSCODE: passcode } : {}) };
+    }
+    const android = registered.android ?? { serial: registered.udid };
+    return {
+        ...base,
+        ANDROID_SERIAL: android.serial,
+        ...(android.bridgeUrl ? { A11Y_BRIDGE_URL: android.bridgeUrl } : {}),
+        ...(android.bridgeToken ? { A11Y_BRIDGE_TOKEN: android.bridgeToken } : {}),
     };
 }
 
@@ -149,20 +183,17 @@ export async function executeAutomation(
     const task = { pluginId: execution.pluginId, taskType: execution.taskType, taskVersion: execution.taskVersion, payload: execution.payload };
     try {
         const definition = plugins.task(task);
-        const passcode = await passcodeForDevice(device.udid);
-        const environment: NodeJS.ProcessEnv = {
-            ...process.env,
-            IOS_UDID: device.udid,
-            WDA_URL: `http://127.0.0.1:${registered.wdaLocalPort ?? Number(process.env.WDA_LOCAL_PORT ?? 8100)}`,
-            ...(passcode ? { IOS_PASSCODE: passcode } : {}),
-        };
+        const passcode = platformOf(registered) === 'ios' ? await passcodeForDevice(device.udid) : undefined;
+        const driver = driverForDevice(registered, { passcode });
+        const environment: NodeJS.ProcessEnv = { ...process.env, ...pluginEnvironment(registered, passcode) };
         const context: TaskExecutionContext = {
             executionId: execution.id,
             attempt,
             workspaceDirectory,
             device,
             devicePluginData: registered.pluginData[execution.pluginId] ?? {},
-            automation: deviceAutomation(registered, passcode),
+            automation: automationFromDriver(driver),
+            driver,
             assets: await repository.executionAssets(execution),
             signal: controller.signal,
             log: (line) => repository.appendLogs(execution.id, attempt, [line]),
