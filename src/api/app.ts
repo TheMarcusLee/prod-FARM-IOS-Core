@@ -60,6 +60,8 @@ interface LoadedDashboardTheme {
     registerDeviceHtml: string;
     registerDeviceScript: string;
     htmx: string;
+    /** The Backline token stylesheet every shell-rendered page loads. */
+    backlineStyles: string;
 }
 
 function errorMessage(error: unknown): string {
@@ -363,7 +365,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     if (options.dashboardTheme) {
         const root = options.dashboardTheme.rootDirectory;
         const require = createRequire(import.meta.url);
-        const [indexHtml, deviceHtml, tasksHtml, registerDeviceHtml, styles, deviceScript, tasksScript, registerDeviceScript, htmx] = await Promise.all([
+        const [indexHtml, deviceHtml, tasksHtml, registerDeviceHtml, styles, deviceScript, tasksScript, registerDeviceScript, htmx, backlineStyles] = await Promise.all([
             readFile(path.join(root, 'templates/index.html'), 'utf8'),
             readFile(path.join(root, 'templates/device.html'), 'utf8'),
             readFile(path.join(root, 'templates/tasks.html'), 'utf8'),
@@ -373,13 +375,14 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
             readFile(path.join(root, 'assets/tasks.js'), 'utf8'),
             readFile(path.join(root, 'assets/register-device.js'), 'utf8'),
             readFile(require.resolve('htmx.org/dist/htmx.min.js'), 'utf8'),
+            readFile(path.join(root, 'backline.css'), 'utf8'),
         ]);
         // Content-hash every asset URL in the templates so a changed file gets a
         // fresh URL that no browser or CDN can serve stale.
         const versions: Record<string, string> = {
             'styles.css': assetHash(styles), 'device.js': assetHash(deviceScript),
             'tasks.js': assetHash(tasksScript), 'register-device.js': assetHash(registerDeviceScript),
-            'htmx.min.js': assetHash(htmx),
+            'htmx.min.js': assetHash(htmx), 'backline.css': assetHash(backlineStyles),
         };
         const finalize = (html: string) => {
             let out = html.replaceAll('__AUTH_NAV__', authNavHtml).replaceAll('__PLUGIN_NAV__', pluginNavHtml)
@@ -390,7 +393,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         themed = {
             indexHtml: finalize(indexHtml), deviceHtml: finalize(deviceHtml),
             tasksHtml: finalize(tasksHtml), registerDeviceHtml: finalize(registerDeviceHtml),
-            styles, deviceScript, tasksScript, registerDeviceScript, htmx,
+            styles, deviceScript, tasksScript, registerDeviceScript, htmx, backlineStyles,
         };
     }
 
@@ -837,6 +840,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
             };
         };
         app.get('/assets/styles.css', asset('text/css', theme.styles));
+        app.get('/assets/backline.css', asset('text/css', theme.backlineStyles));
         app.get('/assets/device.js', asset('text/javascript', theme.deviceScript));
         app.get('/assets/tasks.js', asset('text/javascript', theme.tasksScript));
         app.get('/assets/register-device.js', asset('text/javascript', theme.registerDeviceScript));
