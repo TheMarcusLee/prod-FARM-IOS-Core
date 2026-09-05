@@ -5,20 +5,27 @@ import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node
 import os from 'node:os';
 import path from 'node:path';
 
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+
 import { PluginRegistry } from '../src/registry.js';
+import type { McpDependencies } from '../src/mcp/types.js';
+import type { RegisteredDevice } from '../src/devices/registry.js';
 import type { SchedulerRepository } from '../src/scheduler/repository.js';
 
 // `src/devices/registry.ts` resolves DEVICES_CONFIG_PATH once at first import,
 // so it has to be set before the dynamic import of the app below.
 const configPath = path.join(await mkdtemp(path.join(os.tmpdir(), 'pf-harden-')), 'devices.json');
 process.env.DEVICES_CONFIG_PATH = configPath;
+process.env.ANDROID_DISCOVERY = 'off';
 
 const { createApp } = await import('../src/api/app.js');
 const { createLocalAuthProvider, SESSION_COOKIE } = await import('../src/auth/local.js');
 const { setPassword } = await import('../src/auth/state.js');
 const { resolveUploadPath } = await import('../src/mcp/uploads.js');
 const { originAllowed } = await import('../src/api/routes/mcp.js');
-const { shrinkScreenshot } = await import('../src/mcp/server.js');
+const { shrinkScreenshot, createFarmMcpServer } = await import('../src/mcp/server.js');
+const { redactDevice, saveRegisteredDevices, loadRegisteredDevices } = await import('../src/devices/registry.js');
 
 const seed = (devices: unknown[]) => writeFile(configPath, JSON.stringify(devices));
 const onDisk = async () => JSON.parse(await readFile(configPath, 'utf8')) as Array<Record<string, unknown>>;
@@ -26,6 +33,7 @@ const onDisk = async () => JSON.parse(await readFile(configPath, 'utf8')) as Arr
 const scheduler = {
     async activeExecution() { return null; },
     async listSchedules() { return []; },
+    async listExecutions() { return []; },
     async deleteAssets() { /* nothing to delete in these tests */ },
 } as unknown as SchedulerRepository;
 
@@ -98,6 +106,59 @@ test('ports and the bridge URL are validated rather than stored as given', async
     assert.deepEqual(await onDisk(), []);
 });
 
+test('android.bridgeOnly is whitelisted, typed, and only stored when true', async (context) => {
+    await seed([]);
+    const app = await plainApp(context);
+
+    const refused = await inject(app, {
+        method: 'POST', url: '/api/devices', headers: json,
+        payload: { udid: 'p1', platform: 'android', android: { serial: 'S1', bridgeOnly: 'yes' } },
+    });
+    assert.equal(refused.statusCode, 400);
+    assert.match(refused.json().error, /android\.bridgeOnly/);
+
+    const created = await inject(app, {
+        method: 'POST', url: '/api/devices', headers: json,
+        payload: {
+            udid: 'p1', platform: 'android', driver: 'a11y-bridge',
+            android: { serial: 'S1', bridgeUrl: 'http://127.0.0.1:8080', bridgeOnly: true, nonsense: 1 },
+        },
+    });
+    assert.equal(created.statusCode, 201);
+    const [stored] = await onDisk();
+    assert.deepEqual(stored!.android, { serial: 'S1', bridgeUrl: 'http://127.0.0.1:8080', bridgeOnly: true });
+});
+
+test('devices.json is held to the same id shape as the API, so a hand edit cannot reach adb -s', async () => {
+    const registryPath = path.join(await mkdtemp(path.join(os.tmpdir(), 'pf-registry-')), 'devices.json');
+    const device = (overrides: Record<string, unknown>) => ({ name: 'Phone', udid: 'R58N1', pluginData: {}, ...overrides });
+
+    for (const udid of ['-s', '--help', 'a b', 'a;rm -rf /', 'a/../b', '', '-e']) {
+        await assert.rejects(
+            saveRegisteredDevices([device({ udid })] as never, registryPath),
+            /must be a device id/,
+            JSON.stringify(udid),
+        );
+    }
+    for (const serial of ['-e', 'a b', '']) {
+        await assert.rejects(
+            saveRegisteredDevices([device({ android: { serial } })] as never, registryPath),
+            /android\.serial .* must be a device id/,
+            JSON.stringify(serial),
+        );
+    }
+
+    // Nothing was written by any of the refusals, and the shapes a real fleet uses still save.
+    await assert.rejects(readFile(registryPath, 'utf8'));
+    const good = [
+        device({ udid: '00008030-001A2B3C4D5E802E' }),
+        device({ udid: '192.168.1.40:5555', android: { serial: '192.168.1.40:5555' } }),
+    ];
+    await saveRegisteredDevices(good as never, registryPath);
+    assert.deepEqual((await loadRegisteredDevices(registryPath)).map(({ udid }) => udid),
+        ['00008030-001A2B3C4D5E802E', '192.168.1.40:5555']);
+});
+
 // ---- secret redaction ------------------------------------------------------
 
 test('neither the passcode nor the bridge token leaves in a device response', async (context) => {
@@ -124,6 +185,68 @@ test('neither the passcode nor the bridge token leaves in a device response', as
 
     // Still on disk — redaction is about the wire, not about forgetting the value.
     assert.equal(((await onDisk())[0]!.android as { bridgeToken: string }).bridgeToken, 'super-secret-bridge');
+});
+
+test('no surface that serialises a device carries the bridge token', async (context) => {
+    const device = {
+        name: 'Phone', udid: 'phone-1', platform: 'android', driver: 'a11y-bridge', pluginData: {}, passcode: '123456',
+        android: { serial: 'R58N12ABCDE', bridgeUrl: 'http://127.0.0.1:8080', bridgeToken: 'super-secret-bridge' },
+    };
+    await seed([device]);
+    const app = await plainApp(context);
+
+    // Everything that turns a RegisteredDevice into a response: the device API, the mobile
+    // bootstrap, the fleet page and the MCP tools.
+    for (const url of ['/api/devices', '/api/devices/discovered', '/api/mobile/bootstrap', '/fleet']) {
+        const response = await inject(app, { method: 'GET', url });
+        assert.equal(response.statusCode, 200, url);
+        assert.doesNotMatch(response.body, /super-secret-bridge/, url);
+        assert.doesNotMatch(response.body, /123456/, url);
+    }
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createFarmMcpServer({
+        async loadDevices() { return [device]; },
+        async discoverDevices() { return []; },
+        scheduler, listPlugins: () => [], async listAssets() { return []; },
+        async screenshot() { return Buffer.alloc(0); },
+    } as unknown as McpDependencies);
+    const client = new Client({ name: 'test', version: '1.0.0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+        for (const call of [
+            { name: 'list_devices', arguments: {} },
+            { name: 'get_device', arguments: { udid: 'phone-1' } },
+        ]) {
+            const result = await client.callTool(call) as { content: Array<{ text?: string }> };
+            const text = result.content.map((part) => part.text ?? '').join('');
+            assert.match(text, /phone-1/, call.name);
+            assert.doesNotMatch(text, /super-secret-bridge/, call.name);
+            assert.doesNotMatch(text, /123456/, call.name);
+        }
+        const status = await client.readResource({ uri: 'farm://status' }) as { contents: Array<{ text?: string }> };
+        assert.doesNotMatch(status.contents.map((part) => part.text ?? '').join(''), /super-secret-bridge/);
+    } finally {
+        await client.close();
+        await server.close();
+    }
+});
+
+test('redaction lives in the registry, so it cannot be skipped by a new call site', () => {
+    const stored: RegisteredDevice = {
+        name: 'Phone', udid: 'phone-1', pluginData: {}, passcode: '1234',
+        android: { serial: 'S1', bridgeUrl: 'http://x', bridgeToken: 'secret', bridgeOnly: true },
+    };
+    const redacted = redactDevice(stored);
+    assert.deepEqual(redacted, {
+        name: 'Phone', udid: 'phone-1', pluginData: {}, hasPasscode: true,
+        android: { serial: 'S1', bridgeUrl: 'http://x', bridgeOnly: true, hasBridgeToken: true },
+    });
+    // No android block, and no secrets: the markers are still there and say so.
+    const plain: RegisteredDevice = { name: 'iPhone', udid: 'u', pluginData: {} };
+    assert.deepEqual(redactDevice(plain), { name: 'iPhone', udid: 'u', pluginData: {}, hasPasscode: false });
+    const noToken: RegisteredDevice = { name: 'p', udid: 'u', pluginData: {}, android: { serial: 'S1' } };
+    assert.deepEqual(redactDevice(noToken).android, { serial: 'S1', hasBridgeToken: false });
 });
 
 // ---- remote actions --------------------------------------------------------

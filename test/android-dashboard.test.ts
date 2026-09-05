@@ -303,6 +303,22 @@ test('the bridge token never reaches a snapshot, a log line or the state file', 
     assert.match(sanitizedLine(`GET /tap 401 authorization: Bearer ${token}`), /Bearer <redacted>/);
     assert.equal(sanitizedLine(`the phone answered with ${token}`, [token]), 'the phone answered with <redacted>');
 
+    // Every named credential a wizard step can put on a command line or in an environment dump.
+    for (const name of ['A11Y_BRIDGE_TOKEN', 'FARM_API_TOKEN', 'NOTIFY_SLACK_TOKEN', 'NOTIFY_TELEGRAM_TOKEN', 'EXPO_ACCESS_TOKEN']) {
+        assert.equal(sanitizedLine(`env: ${name}=${token} DEVICE_UDID=R58N1`),
+            `env: ${name}=<redacted> DEVICE_UDID=R58N1`, name);
+        // Short values and quoted ones too — the generic "token=" rule missed both.
+        assert.equal(sanitizedLine(`${name}="ab"`), `${name}=<redacted>`, name);
+    }
+
+    // A farm API token is redacted wherever it appears, named or not.
+    assert.equal(sanitizedLine('curl -H "authorization: pf_QQb2VuZG9mdGhlbGluZXNhcmVsb25n" http://x'),
+        'curl -H "authorization: <redacted>" http://x');
+    assert.equal(sanitizedLine('pf_short stays'), 'pf_short stays');
+
+    // Ordinary lines are untouched, and nothing that merely mentions a token is blanked out.
+    assert.equal(sanitizedLine('adb -s R58N1 shell input tap 100 200'), 'adb -s R58N1 shell input tap 100 200');
+
     const directory = path.join(workspace, 'redaction');
     const stateDirectory = path.join(directory, 'registrations');
     const service = new DeviceRegistrationService({

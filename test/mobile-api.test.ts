@@ -249,6 +249,41 @@ test('rate limit buckets separate remote actions per device from ordinary reads 
     assert.deepEqual(bucketFor('POST', '/api/schedules').max, 60);
 });
 
+test('/mcp gets a generous bucket of its own instead of the 60/min write budget', () => {
+    for (const url of ['/mcp', '/mcp/']) {
+        const bucket = bucketFor('POST', url);
+        assert.deepEqual([bucket.name, bucket.max, bucket.windowMs, bucket.scope], ['mcp', 600, 60_000, '']);
+    }
+    // GET (the SSE channel) and DELETE (session teardown) are the same bucket, not the read one.
+    assert.equal(bucketFor('GET', '/mcp').name, 'mcp');
+    assert.equal(bucketFor('DELETE', '/mcp').name, 'mcp');
+    // Nothing else is caught by the prefix.
+    assert.equal(bucketFor('POST', '/mcp-console').name, 'write');
+});
+
+test('a runaway agent on /mcp is bounded, and not by the ordinary read budget', async (context) => {
+    const names = ['RATE_LIMIT_MCP', 'RATE_LIMIT_READ'] as const;
+    const previous = names.map((name) => process.env[name]);
+    process.env.RATE_LIMIT_MCP = '2';
+    process.env.RATE_LIMIT_READ = '1';
+    context.after(() => {
+        names.forEach((name, index) => {
+            const value = previous[index];
+            if (value === undefined) delete process.env[name]; else process.env[name] = value;
+        });
+    });
+    const app = await createApp({ plugins: new PluginRegistry([]), scheduler: fakeScheduler() });
+    context.after(() => app.close());
+
+    // No token: /mcp answers 401, but the request is counted before it gets there.
+    const call = () => app.inject({ method: 'GET', url: '/mcp' });
+    assert.equal((await call()).statusCode, 401, 'the read budget of 1 was applied to /mcp');
+    assert.equal((await call()).statusCode, 401);
+    const limited = await call();
+    assert.equal(limited.statusCode, 429);
+    assert.equal(limited.headers['x-ratelimit-limit'], '2');
+});
+
 // ---- MCP upload allowlist --------------------------------------------------
 
 test('upload directories default to the content directory and the data inbox', () => {

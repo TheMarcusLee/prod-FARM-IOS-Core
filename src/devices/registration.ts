@@ -148,14 +148,23 @@ function normalizeAccounts(accounts: string[]): string[] {
 /**
  * Log lines end up in the public snapshot and on disk, so anything that looks like a credential
  * is removed. The bridge token is the Android one: it reaches the wizard through `content query`
- * and would otherwise ride along in an adb error message.
+ * and would otherwise ride along in an adb error message. The named variables are the ones a
+ * wizard step can genuinely put on a command line or in a child's environment dump —
+ * A11Y_BRIDGE_TOKEN, FARM_API_TOKEN, the NOTIFY_*_TOKEN channel secrets and EXPO_ACCESS_TOKEN —
+ * and `pf_…` is the shape of a farm API token wherever it appears with no name attached.
  */
 export function sanitizedLine(line: string, secrets: Array<string | undefined> = []): string {
     let value = line
         .replace(/IOS_PASSCODE[^\s=]*=\S+/gi, 'IOS_PASSCODE=<redacted>')
         .replace(/(-?password\s*[=:]\s*)\S+/gi, '$1<redacted>')
         .replace(/(Bearer\s+)\S+/gi, '$1<redacted>')
-        .replace(/((?:auth_)?token"?\s*[=:]\s*"?)[^\s,"}]{6,}/gi, '$1<redacted>');
+        // Any *_TOKEN / *_SECRET / *_KEY environment variable, whatever its value length: the
+        // generic rule below only fires on names ending in "token" and values of six or more.
+        .replace(/\b([A-Z][A-Z0-9_]*(?:TOKEN|SECRET|KEY|PASSCODE))(\s*[=:]\s*)("[^"]*"|'[^']*'|\S+)/g,
+            (_match, name: string) => `${name}=<redacted>`)
+        .replace(/((?:auth_)?token"?\s*[=:]\s*"?)[^\s,"}]{6,}/gi, '$1<redacted>')
+        // A farm API token is self-identifying wherever it lands — a curl line, a header dump.
+        .replace(/\bpf_[A-Za-z0-9_-]{20,}/g, '<redacted>');
     for (const secret of secrets) {
         if (secret && secret.length >= 6) value = value.split(secret).join('<redacted>');
     }

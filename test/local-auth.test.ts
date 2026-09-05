@@ -8,7 +8,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { inject, INJECT_ORIGIN } from './support.js';
 import { createApp } from '../src/api/app.js';
-import { createLocalAuthProvider, SESSION_COOKIE } from '../src/auth/local.js';
+import { createLocalAuthProvider, isTokenActive, SESSION_COOKIE } from '../src/auth/local.js';
 import { createApiToken, defaultAuthStatePath, revokeApiToken, setPassword } from '../src/auth/state.js';
 import { loadAuthProvider } from '../src/loader.js';
 import { PluginRegistry } from '../src/registry.js';
@@ -202,4 +202,22 @@ test('a bearer token reaches /mcp and a revoked one does not', async (context) =
         method: 'POST', url: '/mcp', headers: { ...headers, authorization: `Bearer ${token}` }, payload: initialize,
     });
     assert.equal(revoked.statusCode, 401);
+});
+
+test('isTokenActive answers from the state file, so a long-lived connection can re-check', async (context) => {
+    const state = await statePath(context);
+    await setPassword(state, PASSWORD);
+    const { record } = await createApiToken(state, 'agent-9');
+    const id = record.id;
+
+    assert.equal(await isTokenActive(id, state), true);
+    assert.equal(await isTokenActive('never-existed', state), false);
+    // A cookie session is not a token; its revocation is checked where the cookie is read.
+    assert.equal(await isTokenActive('session', state), true);
+
+    await revokeApiToken(state, 'agent-9');
+    assert.equal(await isTokenActive(id, state), false);
+
+    // A missing or unreadable state file is "not active", never a throw into a stream handler.
+    assert.equal(await isTokenActive(id, path.join(path.dirname(state), 'gone.json')), false);
 });

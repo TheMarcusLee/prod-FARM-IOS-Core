@@ -10,6 +10,21 @@ import { SESSION_IDENTITY } from './types.js';
 
 export const SESSION_COOKIE = 'phone_farm_session';
 
+/**
+ * Whether this token id is still in the state file. Authentication happens once, at the start of
+ * a request — which is fine for a request, and wrong for a connection that stays open for hours:
+ * a revoked phone kept receiving the fleet's whole event stream over SSE until it disconnected.
+ * Long-lived handlers call this on a timer, so it does only what it has to: one small JSON read,
+ * no scrypt, no hashing.
+ */
+export async function isTokenActive(id: string, statePath = defaultAuthStatePath()): Promise<boolean> {
+    // A cookie session is not a token; its own revocation is checked by `authenticate`, and there
+    // is no sid on the request to re-check here.
+    if (id === SESSION_IDENTITY.id) return true;
+    const state = await readAuthState(statePath).catch(() => null);
+    return Boolean(state?.tokens.some((token) => token.id === id));
+}
+
 export interface LocalAuthOptions {
     /** Defaults to AUTH_STATE_PATH, else `.auth.json` beside devices.json. */
     statePath?: string;

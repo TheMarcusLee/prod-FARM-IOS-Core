@@ -1,4 +1,4 @@
-import { errorMessage, httpClient, pause, type HttpClient } from './common.js';
+import { errorMessage, pause } from './common.js';
 import {
     DriverError, UnsupportedOperationError,
     type DeviceDriver, type Key, type Point, type ScreenGeometry, type Swipe, type UiNode,
@@ -14,6 +14,8 @@ export interface A11yBridgeDriverOptions {
     fetchImpl?: typeof fetch;
     /** Deadline for a tap/swipe/key call. Screenshots and tree reads get four times this. */
     timeoutMs?: number;
+    /** Test seam for the retry backoff; production sleeps for real. */
+    sleep?: (milliseconds: number) => Promise<void>;
     /**
      * The bridge has no launch/terminate/push verbs (an AccessibilityService cannot start apps).
      * Hand it an adb driver for those, or leave undefined to have them throw. Launching by
@@ -23,6 +25,22 @@ export interface A11yBridgeDriverOptions {
 }
 
 const ANDROID_KEYCODES: Record<Key, number> = { home: 3, back: 4, enter: 66, delete: 67 };
+
+/**
+ * The bridge answers `503 {"status":"error","code":"server_busy"}` when its on-device handler
+ * queue is full — a transient "ask again", not a failed step. Its tiny HTTP server also drops
+ * connections under load, which arrives here as a transport-level reset. Three retries over just
+ * over a second cover a queue draining behind one slow screenshot without turning a genuinely
+ * wedged bridge into a long stall.
+ */
+export const BRIDGE_RETRY_BACKOFF_MS = [200, 400, 800] as const;
+
+/** Node's fetch reports a dropped socket through a cause; the message is what varies by version. */
+function connectionReset(error: unknown): boolean {
+    const text = `${errorMessage(error)} ${errorMessage((error as { cause?: unknown } | undefined)?.cause)}`;
+    if (/timed out|timeout|abort/i.test(text)) return false;
+    return /ECONNRESET|EPIPE|socket hang up|other side closed|closed prematurely|terminated|fetch failed/i.test(text);
+}
 
 /** Trailing slashes are what a copy-pasted base URL usually arrives with. */
 export function normaliseBridgeUrl(baseUrl: string): string {
@@ -49,12 +67,15 @@ export function createA11yBridgeDriver(options: A11yBridgeDriverOptions): Device
     const { serial, token } = options;
     const baseUrl = normaliseBridgeUrl(options.baseUrl);
     const timeoutMs = options.timeoutMs ?? 10_000;
-    const http = httpClient(options.fetchImpl, timeoutMs);
+    const sleep = options.sleep ?? ((milliseconds: number) => pause(milliseconds));
+    const fetchImpl = options.fetchImpl ?? fetch;
+    const context = (deadlineMs: number): BridgeContext => ({ fetchImpl, sleep, baseUrl, token, timeoutMs: deadlineMs });
+    const fast = context(timeoutMs);
     // A full-screen PNG and a deep accessibility tree both take the phone noticeably longer to
     // produce than a gesture does, and a timeout here reads as "the device is gone".
-    const slowHttp = httpClient(options.fetchImpl, timeoutMs * 4);
-    const call = <T>(method: 'GET' | 'POST', route: string, params?: Record<string, string>) => bridgeCall<T>(http, baseUrl, token, method, route, params);
-    const slowCall = <T>(method: 'GET' | 'POST', route: string, params?: Record<string, string>) => bridgeCall<T>(slowHttp, baseUrl, token, method, route, params);
+    const slow = context(timeoutMs * 4);
+    const call = <T>(method: 'GET' | 'POST', route: string, params?: Record<string, string>) => bridgeCall<T>(fast, method, route, params);
+    const slowCall = <T>(method: 'GET' | 'POST', route: string, params?: Record<string, string>) => bridgeCall<T>(slow, method, route, params);
     type FallbackOperation = 'launchApp' | 'terminateApp' | 'pushMedia';
     const fallback = <K extends FallbackOperation>(operation: K): Pick<DeviceDriver, FallbackOperation>[K] => {
         const target = options.fallback?.[operation];
@@ -91,30 +112,90 @@ export function createA11yBridgeDriver(options: A11yBridgeDriverOptions): Device
     };
 }
 
+interface BridgeContext {
+    fetchImpl: typeof fetch;
+    sleep: (milliseconds: number) => Promise<void>;
+    baseUrl: string;
+    token: string;
+    timeoutMs: number;
+}
+
+/** A short, quoted excerpt of whatever the bridge said, for the message. */
+async function detailOf(response: Response): Promise<string> {
+    const body = (await response.text().catch(() => '')).trim().replace(/\s+/g, ' ');
+    return body ? `: ${body.slice(0, 200)}` : '';
+}
+
+/**
+ * The statuses the on-device server actually produces, each turned into something an operator can
+ * act on rather than a bare "returned 408".
+ */
+async function statusError(route: string, url: string, response: Response, attempts: number): Promise<DriverError> {
+    const detail = await detailOf(response);
+    switch (response.status) {
+        case 503:
+            return new DriverError(`bridge ${route} is still busy after ${attempts} attempts — its handler queue is full `
+                + `(503 server_busy). Something else is driving this phone, or a screenshot is still being encoded${detail}`);
+        case 408:
+            return new DriverError(`bridge ${route} timed out reading the request (408) — the phone's HTTP server gave up `
+                + `waiting for the body. Usually a Wi-Fi link dropping mid-request${detail}`);
+        case 411:
+            return new DriverError(`bridge ${route} rejected a chunked request (411) — it needs a Content-Length, so the `
+                + `body must be a complete string and never a stream${detail}`);
+        default:
+            return new DriverError(`${url} returned ${response.status}${detail}`);
+    }
+}
+
 async function bridgeCall<T>(
-    http: HttpClient, baseUrl: string, token: string,
+    context: BridgeContext,
     method: 'GET' | 'POST', route: string, params: Record<string, string> = {},
 ): Promise<T> {
     const query = method === 'GET' && Object.keys(params).length ? `?${new URLSearchParams(params)}` : '';
-    const response = await http(`${baseUrl}${route}${query}`, {
+    const url = `${context.baseUrl}${route}${query}`;
+    const init: RequestInit = {
         method,
         headers: {
-            authorization: `Bearer ${token}`,
+            authorization: `Bearer ${context.token}`,
+            // The bridge's server is a handful of worker threads with no keep-alive bookkeeping;
+            // a reused connection is what shows up here as a reset mid-request.
+            connection: 'close',
             ...(method === 'POST' ? { 'content-type': 'application/x-www-form-urlencoded' } : {}),
         },
+        // A complete string, never a stream: a chunked body is what the bridge answers 411 to.
         ...(method === 'POST' ? { body: new URLSearchParams(params).toString() } : {}),
-    });
-    let envelope: BridgeEnvelope<T>;
-    try {
-        envelope = await response.json() as BridgeEnvelope<T>;
-    } catch (error) {
-        // A captive portal, a stale `adb forward` pointing at something else, or a crashed
-        // service all answer 200 with something that is not the bridge's envelope.
-        throw new DriverError(`bridge ${route} did not return JSON: ${errorMessage(error)}`);
+    };
+    const attempts = BRIDGE_RETRY_BACKOFF_MS.length + 1;
+    for (let attempt = 0; ; attempt += 1) {
+        const retriesLeft = attempt < BRIDGE_RETRY_BACKOFF_MS.length;
+        let response: Response;
+        try {
+            response = await context.fetchImpl(url, { ...init, signal: AbortSignal.timeout(context.timeoutMs) });
+        } catch (error) {
+            if (retriesLeft && connectionReset(error)) {
+                await context.sleep(BRIDGE_RETRY_BACKOFF_MS[attempt]!);
+                continue;
+            }
+            throw new DriverError(`${url} is unavailable: ${errorMessage(error)}`);
+        }
+        if (response.status === 503 && retriesLeft) {
+            await response.text().catch(() => '');
+            await context.sleep(BRIDGE_RETRY_BACKOFF_MS[attempt]!);
+            continue;
+        }
+        if (!response.ok) throw await statusError(route, url, response, attempts);
+        let envelope: BridgeEnvelope<T>;
+        try {
+            envelope = await response.json() as BridgeEnvelope<T>;
+        } catch (error) {
+            // A captive portal, a stale `adb forward` pointing at something else, or a crashed
+            // service all answer 200 with something that is not the bridge's envelope.
+            throw new DriverError(`bridge ${route} did not return JSON: ${errorMessage(error)}`);
+        }
+        if (!envelope || typeof envelope !== 'object') throw new DriverError(`bridge ${route} returned ${JSON.stringify(envelope)}, not an envelope`);
+        if (envelope.status !== 'success') throw new DriverError(`bridge ${route} failed: ${envelope.error ?? 'unknown error'}`);
+        return envelope.result as T;
     }
-    if (!envelope || typeof envelope !== 'object') throw new DriverError(`bridge ${route} returned ${JSON.stringify(envelope)}, not an envelope`);
-    if (envelope.status !== 'success') throw new DriverError(`bridge ${route} failed: ${envelope.error ?? 'unknown error'}`);
-    return envelope.result as T;
 }
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);

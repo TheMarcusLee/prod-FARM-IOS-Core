@@ -9,6 +9,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 
 import { discoverConnectedDevices, devicePlatform, type Device } from '../devices/discovery.js';
+import { DEVICE_ID_MESSAGE, validDeviceId } from '../devices/identifiers.js';
 import { loadRegisteredDevices, mutateRegisteredDevices, saveRegisteredDevices, redactDevice, PASSCODE_PATTERN, type RegisteredDevice } from '../devices/registry.js';
 import { driverForDevice, driverKindOf, platformOf } from '../drivers/select.js';
 import type { AndroidDeviceConfig, DeviceDriver } from '../drivers/types.js';
@@ -99,15 +100,8 @@ function clientErrorMessage(error: unknown): string {
     return isDeliberate(error) ? errorMessage(error) : 'Internal server error';
 }
 
-/**
- * A device id is not just a map key: on Android it is handed to `adb -s <id>`
- * and on iOS it names a WDA session, so it reaches `execFile` argument vectors
- * from a request body. execFile never goes through a shell, but a value that
- * starts with `-` is still read by adb as a flag, and whitespace or a slash
- * turns an id into something the callers assume it never is. iOS UDIDs, adb
- * serials and `host:port` wireless serials all fit this shape.
- */
-export const DEVICE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+/** Defined in `devices/identifiers.ts`, so devices.json is held to the same shape. */
+export { DEVICE_ID_PATTERN } from '../devices/identifiers.js';
 
 export const MAX_DEVICE_NAME_LENGTH = 200;
 
@@ -126,7 +120,7 @@ function validBridgeUrl(value: unknown): boolean {
 /** Returns the first problem with a device body, or null. Shared by POST and PATCH. */
 function deviceBodyProblem(body: {
     name?: unknown; wdaLocalPort?: unknown; mjpegLocalPort?: unknown;
-    android?: { serial?: unknown; bridgeUrl?: unknown; bridgeToken?: unknown } | null;
+    android?: { serial?: unknown; bridgeUrl?: unknown; bridgeToken?: unknown; bridgeOnly?: unknown } | null;
 }): string | null {
     if (body.name !== undefined && (typeof body.name !== 'string' || body.name.length > MAX_DEVICE_NAME_LENGTH)) {
         return `name must be a string of at most ${MAX_DEVICE_NAME_LENGTH} characters`;
@@ -137,14 +131,15 @@ function deviceBodyProblem(body: {
     const android = body.android;
     if (android !== undefined && android !== null) {
         if (typeof android !== 'object') return 'android must be an object with a serial';
-        if (typeof android.serial !== 'string' || !DEVICE_ID_PATTERN.test(android.serial)) {
-            return 'android.serial must be an adb serial: letters, digits, dot, colon, dash or underscore';
-        }
+        if (!validDeviceId(android.serial)) return `android.serial ${DEVICE_ID_MESSAGE}`;
         if (android.bridgeUrl !== undefined && !validBridgeUrl(android.bridgeUrl)) {
             return 'android.bridgeUrl must be an http(s) URL';
         }
         if (android.bridgeToken !== undefined && typeof android.bridgeToken !== 'string') {
             return 'android.bridgeToken must be a string';
+        }
+        if (android.bridgeOnly !== undefined && typeof android.bridgeOnly !== 'boolean') {
+            return 'android.bridgeOnly must be a boolean';
         }
     }
     return null;
@@ -207,17 +202,10 @@ body{font:15px system-ui,sans-serif;margin:0;background:#f6f7f9;color:#17202a}na
 }
 
 /**
- * `redactDevice` drops the unlock passcode, but `android.bridgeToken` is a
- * credential too — it is what authenticates control of the accessibility
- * bridge on that phone — and it was going out with every device response. Same
- * treatment: a boolean saying whether one is configured, never the value.
+ * Both the unlock passcode and `android.bridgeToken` are stripped by `redactDevice` itself, so
+ * this is the registry's own redaction under the name the routes already use.
  */
-export function publicDevice<T extends { passcode?: string; android?: AndroidDeviceConfig }>(device: T) {
-    const redacted = redactDevice(device);
-    if (!redacted.android) return redacted;
-    const { bridgeToken, ...android } = redacted.android;
-    return { ...redacted, android: { ...android, hasBridgeToken: Boolean(bridgeToken) } };
-}
+export const publicDevice = redactDevice;
 
 async function registeredWithStatus() {
     const [registered, connected] = await Promise.all([loadRegisteredDevices(), discoverConnectedDevices()]);
@@ -481,15 +469,11 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         await options.registrations.cancel(request.params.id);
         return reply.code(204).send();
     });
-    app.post<{ Body: { name?: string; udid?: string; wdaLocalPort?: number; mjpegLocalPort?: number; passcode?: string; coordinateProfile?: string; pluginData?: Record<string, JsonObject>; platform?: string; driver?: string; android?: { serial?: unknown; bridgeUrl?: unknown; bridgeToken?: unknown } | null } }>(
+    app.post<{ Body: { name?: string; udid?: string; wdaLocalPort?: number; mjpegLocalPort?: number; passcode?: string; coordinateProfile?: string; pluginData?: Record<string, JsonObject>; platform?: string; driver?: string; android?: { serial?: unknown; bridgeUrl?: unknown; bridgeToken?: unknown; bridgeOnly?: unknown } | null } }>(
         '/api/devices', async (request, reply) => {
             const { name, udid, wdaLocalPort, mjpegLocalPort, passcode, coordinateProfile, pluginData, platform, driver, android } = request.body;
             if (!udid) return reply.code(400).send({ error: 'A device UDID is required' });
-            if (typeof udid !== 'string' || !DEVICE_ID_PATTERN.test(udid)) {
-                return reply.code(400).send({
-                    error: 'udid must be a device id: letters, digits, dot, colon, dash or underscore',
-                });
-            }
+            if (!validDeviceId(udid)) return reply.code(400).send({ error: `udid ${DEVICE_ID_MESSAGE}` });
             const problem = deviceBodyProblem(request.body);
             if (problem) return reply.code(400).send({ error: problem });
             if (passcode !== undefined && !PASSCODE_PATTERN.test(passcode)) {
@@ -509,6 +493,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
                 serial: android.serial,
                 ...(typeof android.bridgeUrl === 'string' ? { bridgeUrl: android.bridgeUrl } : {}),
                 ...(typeof android.bridgeToken === 'string' ? { bridgeToken: android.bridgeToken } : {}),
+                ...(android.bridgeOnly === true ? { bridgeOnly: true } : {}),
             } : undefined;
             const created = await mutateRegisteredDevices((devices) => {
                 if (devices.some((device) => device.udid === udid)) throw httpError(409, 'A device with this UDID is already registered');

@@ -22,6 +22,7 @@ import { notificationConfigFromEnv, type NotificationConfig } from '../../notifi
 import { acknowledgedMark } from '../../push/acks.js';
 import { deliverEvent, type DeliveryOptions, type DeliveryResult } from '../../notifications/deliver.js';
 import { buildDigest, startDigestScheduler } from '../../notifications/digest.js';
+import { isTokenActive } from '../../auth/local.js';
 import type { SchedulerRepository } from '../../scheduler/repository.js';
 
 /** Structurally satisfied by CreateAppOptions, so app.ts passes its own options through. */
@@ -41,9 +42,20 @@ export interface FleetRouteOptions {
     summaryTtlMs?: number;
     /** Set false to keep the device/stuck/digest timers out of a test process. */
     backgroundTasks?: boolean;
+    /** How often an open SSE stream re-checks that its token still exists. */
+    tokenCheckIntervalMs?: number;
+    /** Test seam for that check; production reads `.auth.json`. */
+    tokenActive?: (id: string) => Promise<boolean>;
 }
 
 const HEARTBEAT_MS = 15_000;
+/**
+ * A stream authenticates once, when it connects, and then stays open for as long as the client
+ * keeps it — hours. Revoking a token has to reach those too, or a lost phone keeps reading the
+ * fleet's whole event timeline until somebody notices. A minute is soon enough for a revocation
+ * and rare enough to be one small file read per open stream.
+ */
+const TOKEN_RECHECK_MS = 60_000;
 const DEFAULT_MONITOR_MS = 30_000;
 /**
  * The fleet page polls its summary every 5 s, and so does every tray app. Each
@@ -201,9 +213,27 @@ export async function registerFleetRoutes(app: FastifyInstance, options: FleetRo
         });
         raw.write(': connected\n\n');
         const subscription = hub().add(raw, cursor);
-        request.raw.once('close', () => subscription.close());
-        request.raw.once('error', () => subscription.close());
-        raw.once('error', () => subscription.close());
+        // Revocation has to reach a connection that authenticated an hour ago, so the token is
+        // re-checked on a timer and the response ended the moment it is gone.
+        const tokenId = request.apiToken?.id;
+        const stillActive = options.tokenActive ?? ((id: string) => isTokenActive(id));
+        const recheck = tokenId === undefined ? undefined : setInterval(
+            () => void stillActive(tokenId).then((active) => {
+                if (active) return;
+                subscription.close();
+                raw.end();
+            }).catch((error: unknown) => app.log.debug(`SSE token re-check failed: ${String(error)}`)),
+            options.tokenCheckIntervalMs ?? TOKEN_RECHECK_MS,
+        );
+        recheck?.unref?.();
+        const close = () => {
+            if (recheck) clearInterval(recheck);
+            subscription.close();
+        };
+        request.raw.once('close', close);
+        request.raw.once('error', close);
+        raw.once('error', close);
+        raw.once('close', () => { if (recheck) clearInterval(recheck); });
         // First replay is immediate; everything after it rides the shared poll.
         await hub().poll();
     });

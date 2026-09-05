@@ -43,6 +43,39 @@ npm run web
 Visit `/` and you are redirected to `/login`. "Log out" appears in the dashboard
 nav automatically (the provider sets `logoutPath: '/auth/logout'`).
 
+## Sessions and logging out
+
+The session cookie is a self-contained HMAC: `base64url({ exp, sid }).signature`,
+signed with `sessionSecret` from the state file. `exp` is the expiry
+(`AUTH_SESSION_HOURS`, 12 by default) and `sid` is 16 random bytes naming *this*
+session.
+
+That `sid` is what makes logging out mean something. Clearing the browser's copy
+of a self-contained cookie is not sign-out — a copy captured beforehand keeps
+verifying until it expires. So `/auth/logout` records the `sid` server-side, in
+`revokedSessions` in the state file, and every later request checks the list:
+
+| | |
+|---|---|
+| Where | `revokedSessions: [{ sid, exp }]` in `.auth.json` |
+| Pruned | entries are dropped once `exp` passes — the cookie was dead anyway |
+| Capped | 500 entries (`MAX_REVOKED_SESSIONS`); a farm with one operator never approaches it |
+| Scope | one session. Other browsers stay signed in; that is the point of the id |
+
+Two consequences worth knowing:
+
+- **Cookies minted before this change are rejected, once.** They carry no `sid`,
+  so they cannot be revoked, so they are not honoured. Everyone signs in one
+  more time and gets a cookie that can be.
+- **Losing `.auth.json` signs everyone out**, because `sessionSecret` goes with
+  it — as does every token digest.
+
+Revoking an API token is separate and immediate: `npm run token:revoke` or
+`DELETE /api/tokens/:id`. Requests fail on the next call, and a connection that
+is already open — an `/api/events/stream` SSE tail — is re-checked about once a
+minute and ended when its token is gone, rather than streaming until the client
+happens to disconnect.
+
 ## API tokens
 
 ```sh
@@ -95,10 +128,20 @@ that logs out everything at once.
 
 ## Public paths
 
-`/login`, `/auth/logout`, `/health`, and `/assets/*` are reachable without a
-session. Everything else needs a cookie or a token. A browser navigation (a `GET`
-that accepts `text/html`) is redirected to `/login?next=…`; anything else gets a
-JSON `401`.
+Exactly four things are reachable with no cookie and no token
+(`isPublicPath` in `src/auth/local.ts`):
+
+| Path | Why |
+|---|---|
+| `/login` | the form itself, and the `POST` that submits it |
+| `/auth/logout` | must work even with a cookie the farm no longer honours |
+| `/health` | liveness for the desktop app, launchd and any monitor |
+| `/assets/*` | the dashboard's static CSS and JS, no data in them |
+
+Everything else needs a cookie or a token — including `/`, `/fleet`, every
+`/api/*` route, and `/mcp`, which takes a token only. A browser navigation (a
+`GET` that accepts `text/html`) is redirected to `/login?next=…`; anything else
+gets a JSON `401`.
 
 ## CSRF
 
@@ -127,12 +170,19 @@ API requests under `/api/*` are rate limited too, keyed on the **token id**
 from the same address. The budgets protect the *phones* more than the server: a
 retry loop hammering `remote/action` is a real way to wedge a WDA session.
 
-| Route | Default | Variable |
-|---|---|---|
-| `/api/devices/:udid/remote/action` | 10/s per device and token | `RATE_LIMIT_ACTION` |
-| `/api/devices/:udid/remote/screenshot` | 5/s per device and token | `RATE_LIMIT_SCREENSHOT` |
-| Other writes | 60/min per token | `RATE_LIMIT_WRITE` |
-| Reads | 300/min per token | `RATE_LIMIT_READ` |
+| Route | Bucket | Default | Variable |
+|---|---|---|---|
+| `/api/devices/:udid/remote/action` | `action` | 10/s per device and token | `RATE_LIMIT_ACTION` |
+| `/api/devices/:udid/remote/screenshot` | `screenshot` | 5/s per device and token | `RATE_LIMIT_SCREENSHOT` |
+| `/mcp` (all methods) | `mcp` | 600/min per token | `RATE_LIMIT_MCP` |
+| Other writes | `write` | 60/min per token | `RATE_LIMIT_WRITE` |
+| Reads | `read` | 300/min per token | `RATE_LIMIT_READ` |
+
+`/mcp` has a bucket of its own because every MCP call — `initialize`, each tool
+call, the session teardown — is one `POST` to the same path, so an agent's
+ordinary tool loop would spend the 60/min write budget in under a minute and
+stall. 600/min is ten calls a second: a ceiling on a runaway agent rather than a
+throttle on a working one. It is the only counted path outside `/api/*`.
 
 A refusal is a `429` with `x-ratelimit-limit`, `x-ratelimit-remaining`,
 `x-ratelimit-reset` and `retry-after`, and the usual `{ "error": … }` body. The
@@ -157,6 +207,7 @@ lands in the action bucket. `RATE_LIMITS=off` disables the whole layer — that 
 | `RATE_LIMIT_SCREENSHOT` | `5` | `remote/screenshot` requests per second, per device and token |
 | `RATE_LIMIT_WRITE` | `60` | Other writes per minute, per token |
 | `RATE_LIMIT_READ` | `300` | Reads per minute, per token |
+| `RATE_LIMIT_MCP` | `600` | `/mcp` requests per minute, per token |
 
 ## What this is not
 
