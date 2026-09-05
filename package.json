@@ -43,7 +43,7 @@
     "build:web": "tsc -p tsconfig.web.json",
     "preweb": "npm run build:web",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.web.json --noEmit",
-    "test": "node --import tsx --test test/*.test.ts",
+    "test": "node --import tsx --test --test-force-exit --test-timeout=60000 test/*.test.ts",
     "check": "npm run typecheck && npm test",
     "desktop:dev": "npm --prefix apps/desktop run dev",
     "desktop:build": "npm --prefix apps/desktop run dist",
