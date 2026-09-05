@@ -23,6 +23,7 @@ import type {
     AckResult,
     Bootstrap,
     BulkScheduleInput,
+    BulkScheduleOutcome,
     BulkScheduleResult,
     ContentQueueItem,
     CreateScheduleInput,
@@ -38,6 +39,7 @@ import type {
     FleetDevice,
     FleetSummary,
     HealthResponse,
+    JsonObject,
     PluginDescriptor,
     PushRegistration,
     PushRegistrationInput,
@@ -145,8 +147,7 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
             executionId: partial.executionId ?? null,
             scheduleId: partial.scheduleId ?? null,
             title: partial.title ?? `${kind} on ${deviceName(partial.deviceUdid) ?? 'the farm'}`,
-            message: partial.message ?? '',
-            data: partial.data,
+            detail: partial.detail ?? null,
             createdAt: new Date(Date.now()).toISOString(),
         };
         events.unshift(event);
@@ -186,8 +187,7 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
                 executionId: kind.startsWith('execution') ? execution.id : null,
                 scheduleId: kind.startsWith('schedule') ? execution.scheduleId : null,
                 title: titleFor(kind, name, execution.taskType),
-                message: messageFor(kind, execution.error),
-                data: kind === 'execution.failed' ? { attempt: 3, exitCode: 1 } : kind === 'execution.stuck' ? { stuckForSeconds: 900 } : undefined,
+                detail: detailFor(kind, execution),
                 createdAt: at,
             };
             events.unshift(event);
@@ -225,21 +225,34 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
         }
     }
 
-    function messageFor(kind: EventKind, error: string | null): string {
-        switch (kind) {
-            case 'execution.failed':
-                return error ?? 'TikTok did not reach the feed after 3 attempts';
-            case 'device.disconnected':
-                return 'The device dropped off the bus — check the cable';
-            case 'device.error':
-                return 'The bridge stopped responding after 3 retries';
-            case 'execution.stuck':
-                return 'No progress for 15m';
-            case 'execution.succeeded':
-                return 'Exit 0';
-            default:
-                return '';
+    /**
+     * The same `detail` payloads the farm's own recorders write
+     * (`src/fleet/scheduler-events.ts`, `src/fleet/device-monitor.ts`), so
+     * `eventText` renders demo events through exactly the real code path.
+     */
+    function detailFor(kind: EventKind, execution: ExecutionRow): JsonObject | null {
+        const task = `${execution.pluginId}/${execution.taskType}@${execution.taskVersion}`;
+        if (kind.startsWith('execution.')) {
+            return {
+                task,
+                status: execution.status,
+                scheduledFor: execution.scheduledFor,
+                deadlineAt: execution.deadlineAt,
+                exitCode: execution.exitCode,
+                ...(execution.error ? { error: execution.error } : {}),
+            };
         }
+        if (kind.startsWith('device.')) {
+            const state = states.get(execution.deviceUdid) ?? 'online';
+            const base = mockConnectionForState(state);
+            return {
+                physical: base.physical,
+                wda: base.wda,
+                message: base.message,
+                ...(kind === 'device.error' ? { error: 'The bridge stopped responding after 3 retries' } : {}),
+            };
+        }
+        return { task, status: execution.status };
     }
 
     function cap(value: string): string {
@@ -267,8 +280,7 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
             deviceUdid: device.udid,
             executionId: kind.startsWith('execution') ? execution.id : null,
             title: titleFor(kind, device.name, execution.taskType),
-            message: messageFor(kind, execution.error),
-            data: kind === 'execution.failed' ? { attempt: 3, exitCode: 1 } : undefined,
+            detail: detailFor(kind, execution),
         });
     }
 
@@ -343,7 +355,8 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
                 platform: device.platform,
                 tags: device.tags ?? [],
                 state,
-                connection: mockConnectionForState(state),
+                // Bootstrap sends only this; the full record is `getDeviceConnection`.
+                connection: { connected: state !== 'offline' && state !== 'disabled' },
                 currentExecution: active
                     ? {
                           id: active.id,
@@ -359,8 +372,9 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
         });
     }
 
+    /** `0` is a real mark ("nothing acknowledged"), not "no mark" — hence `=== null`. */
     function unacknowledgedCount(): number {
-        if (!acknowledgedUpTo) return events.length;
+        if (acknowledgedUpTo === null) return events.length;
         return events.filter((event) => event.id > acknowledgedUpTo!).length;
     }
 
@@ -380,12 +394,14 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
         bootstrap: () =>
             delay<Bootstrap>({
                 serverTime: new Date().toISOString(),
-                release: { sha: 'demo000', subject: 'demo data — no Mac in the loop', deployedAt: new Date(t0 - 86_400_000).toISOString() },
+                release: { version: '0.0.0-demo', sha: 'demo000' },
                 plugins: MOCK_PLUGINS,
                 fleet: { counts: countStates(fleetDevices()), devices: fleetDevices() },
-                recentEvents: events.slice(0, 50),
+                // The farm sends the newest 20; holding more here would let a
+                // demo screen page further than the real one can.
+                recentEvents: events.slice(0, 20),
                 unacknowledgedCount: unacknowledgedCount(),
-                capabilities: { events: true, sse: true, push: true, drip: true, screenshotThumbnails: true, eventAck: true },
+                capabilities: { push: true, eventAck: true, thumbnails: true, contentQueue: true, tokens: true, rateLimits: true },
             }),
 
         listPlugins: () => delay<PluginDescriptor[]>(MOCK_PLUGINS),
@@ -423,7 +439,7 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
                     kind: patch.disabled ? 'device.disconnected' : 'device.connected',
                     deviceUdid: udid,
                     title: `${device.name} ${patch.disabled ? 'deactivated' : 'activated'}`,
-                    message: patch.disabled ? 'Deactivated from the phone' : 'Activated from the phone',
+                    detail: { message: patch.disabled ? 'Deactivated from the phone' : 'Activated from the phone' },
                 });
             }
             return delay({ ...device });
@@ -434,7 +450,10 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
             if (activeExecutionFor(udid)) fail('conflict', 'Automation is running on this device', 409);
             states.set(udid, 'online');
             device.connected = { udid: device.udid, name: device.name, platform: device.platform };
-            record({ kind: 'device.connected', deviceUdid: udid, title: `${device.name} reconnected`, message: 'Reconnect requested from the phone' });
+            record({
+                kind: 'device.connected', deviceUdid: udid, title: `${device.name} reconnected`,
+                detail: { message: 'Reconnect requested from the phone' },
+            });
             return delay<ReconnectResult>({ ok: true, message: 'The shared WDA supervisor will reconnect automatically' });
         },
 
@@ -468,8 +487,29 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
         },
 
         getFleetSummary: () => {
-            const list = fleetDevices();
-            return delay<FleetSummary>({ generatedAt: new Date().toISOString(), counts: countStates(list), devices: list });
+            const counts = countStates(fleetDevices());
+            const byPlatform: Record<string, number> = {};
+            for (const device of devices) byPlatform[device.platform ?? 'ios'] = (byPlatform[device.platform ?? 'ios'] ?? 0) + 1;
+            const dayAhead = Date.now() + 86_400_000;
+            return delay<FleetSummary>({
+                generatedAt: new Date().toISOString(),
+                // `summarizeFleet` counts registration/USB state, so `busy` and
+                // `error` devices are counted as online here, exactly as there.
+                devices: {
+                    total: counts.total,
+                    online: counts.online + counts.busy + counts.error,
+                    offline: counts.offline,
+                    disabled: counts.disabled,
+                },
+                byPlatform,
+                running: executions.filter((row) => row.status === 'running').length,
+                queued: executions.filter((row) => row.status === 'queued').length,
+                stuck: 0,
+                failedLast24h: executions.filter((row) => row.status === 'failed').length,
+                succeededLast24h: executions.filter((row) => row.status === 'succeeded').length,
+                plannedNext24h: schedules.filter((row) => row.status === 'active' && row.nextRunAt
+                    && Date.parse(row.nextRunAt) <= dayAhead).length,
+            });
         },
 
         listSchedules: async (query: ListQuery = {}) => {
@@ -500,7 +540,7 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
                 updatedAt: new Date().toISOString(),
             };
             schedules.unshift(row);
-            record({ kind: 'schedule.created', deviceUdid: row.deviceUdid, scheduleId: row.id, title: `New schedule for ${device.name}`, message: `${cap(row.taskType)} · ${row.timing.kind}` });
+            record({ kind: 'schedule.created', deviceUdid: row.deviceUdid, scheduleId: row.id, title: `New schedule for ${device.name}` });
             if (input.timing.kind === 'now') {
                 const execution: ExecutionRow = {
                     id: executionId((executionSeq += 1)),
@@ -523,7 +563,7 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
                 };
                 executions.unshift(execution);
                 states.set(row.deviceUdid, 'busy');
-                record({ kind: 'execution.started', deviceUdid: row.deviceUdid, executionId: execution.id, title: `${cap(row.taskType)} started on ${device.name}`, message: '' });
+                record({ kind: 'execution.started', deviceUdid: row.deviceUdid, executionId: execution.id, title: `${cap(row.taskType)} started on ${device.name}` });
             }
             return delay(row);
         },
@@ -533,18 +573,16 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
             for (const device of devices) {
                 if ((input.tags ?? []).some((tag) => (device.tags ?? []).includes(tag))) targets.add(device.udid);
             }
-            const result: BulkScheduleResult = { created: [], failed: [] };
+            const results: BulkScheduleOutcome[] = [];
             for (const udid of targets) {
                 const device = devices.find((row) => row.udid === udid);
-                if (!device) {
-                    result.failed.push({ deviceUdid: udid, error: 'Unknown device' });
-                } else if (device.disabled) {
-                    result.failed.push({ deviceUdid: udid, error: 'This device is disabled — activate it before scheduling automation' });
-                } else {
-                    result.created.push({ deviceUdid: udid, scheduleId: `sch_bulk_${result.created.length}` });
-                }
+                if (!device) results.push({ deviceUdid: udid, ok: false, error: 'Unknown device' });
+                else if (device.disabled) {
+                    results.push({ deviceUdid: udid, ok: false, error: 'This device is disabled — activate it before scheduling automation' });
+                } else results.push({ deviceUdid: udid, ok: true, scheduleId: `sch_bulk_${results.length}` });
             }
-            return delay(result);
+            const created = results.filter(({ ok }) => ok).length;
+            return delay<BulkScheduleResult>({ created, failed: results.length - created, results });
         },
 
         setScheduleStatus: async (id, transition) => {
@@ -563,7 +601,6 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
                 deviceUdid: row.deviceUdid,
                 scheduleId: row.id,
                 title: `Schedule ${row.status} for ${deviceName(row.deviceUdid) ?? 'a device'}`,
-                message: '',
             });
             return delay({ ...row });
         },
@@ -591,7 +628,7 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
             row!.finishedAt = new Date().toISOString();
             row!.updatedAt = row!.finishedAt;
             if (!activeExecutionFor(row!.deviceUdid)) states.set(row!.deviceUdid, 'online');
-            record({ kind: 'execution.stopped', deviceUdid: row!.deviceUdid, executionId: row!.id, title: `${cap(row!.taskType)} stopped on ${deviceName(row!.deviceUdid) ?? 'a device'}`, message: 'Stopped from the phone' });
+            record({ kind: 'execution.stopped', deviceUdid: row!.deviceUdid, executionId: row!.id, title: `${cap(row!.taskType)} stopped on ${deviceName(row!.deviceUdid) ?? 'a device'}` });
             return delay<StopExecutionResult>({ result: previous });
         },
 
@@ -611,19 +648,23 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
                 updatedAt: new Date().toISOString(),
             };
             executions.unshift(retry);
-            record({ kind: 'execution.started', deviceUdid: retry.deviceUdid, executionId: retry.id, title: `${cap(retry.taskType)} requeued on ${deviceName(retry.deviceUdid) ?? 'a device'}`, message: 'Retried from the phone' });
+            record({ kind: 'execution.started', deviceUdid: retry.deviceUdid, executionId: retry.id, title: `${cap(retry.taskType)} requeued on ${deviceName(retry.deviceUdid) ?? 'a device'}` });
             return delay(retry);
         },
 
         listEvents: async (query: EventQuery = {}) => {
             let rows = events.slice();
             if (query.severity) rows = rows.filter((event) => event.severity === query.severity);
-            if (query.kind?.length) rows = rows.filter((event) => query.kind!.includes(event.kind));
+            if (query.kind) rows = rows.filter((event) => event.kind === query.kind);
             if (query.deviceUdid) rows = rows.filter((event) => event.deviceUdid === query.deviceUdid);
             if (query.since) rows = rows.filter((event) => event.createdAt >= query.since!);
             if (query.until) rows = rows.filter((event) => event.createdAt < query.until!);
-            if (query.acknowledged === false && acknowledgedUpTo) rows = rows.filter((event) => event.id > acknowledgedUpTo!);
-            if (query.before) rows = rows.filter((event) => event.id < query.before!);
+            if (query.acknowledged === false && acknowledgedUpTo !== null) {
+                rows = rows.filter((event) => event.id > acknowledgedUpTo!);
+            }
+            // `before: 0` is a valid (empty) page, so test the cursor for
+            // presence rather than truthiness.
+            if (query.before !== undefined) rows = rows.filter((event) => event.id < query.before!);
             const limit = Math.min(200, query.limit ?? 50);
             const slice = rows.slice(0, limit);
             const result: EventPage = { events: slice };
@@ -633,7 +674,7 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
 
         ackEvents: async (upToId) => {
             const before = unacknowledgedCount();
-            acknowledgedUpTo = !acknowledgedUpTo || upToId > acknowledgedUpTo ? upToId : acknowledgedUpTo;
+            acknowledgedUpTo = acknowledgedUpTo === null || upToId > acknowledgedUpTo ? upToId : acknowledgedUpTo;
             const after = unacknowledgedCount();
             return delay<AckResult>({ acknowledged: Math.max(0, before - after), unacknowledgedCount: after });
         },
@@ -683,18 +724,22 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
 
         listContentQueue: () => delay({ items: content.map((item) => ({ ...item })) }),
 
-        approveContentItem: async (id, approveOptions = {}) => {
-            const item = content.find((row) => row.id === id) ?? fail('not-found', 'Unknown content item', 404);
-            if (item.status !== 'planned') fail('conflict', `A ${item.status} item cannot be approved`, 409);
-            item.status = 'approved';
-            if (approveOptions.plannedFor) item.plannedFor = approveOptions.plannedFor;
-            item.scheduleId = `sch_content_${id}`;
+        // Approving twice is a **no-op success** on the farm — the operator's
+        // thumb lands twice on a train — so it is one here too.
+        approveContentItem: async (id) => {
+            const item = content.find((row) => row.id === id) ?? fail('not-found', 'Queued post not found', 404);
+            if (item.status === 'planned') {
+                item.status = 'approved';
+                item.scheduleId ??= `sch_content_${id}`;
+            }
             return delay<ContentQueueItem>({ ...item });
         },
 
+        // The farm only refuses a skip when the schedule itself cannot be
+        // cancelled — a posted item's schedule is `completed`.
         skipContentItem: async (id) => {
-            const item = content.find((row) => row.id === id) ?? fail('not-found', 'Unknown content item', 404);
-            if (item.status !== 'planned') fail('conflict', `A ${item.status} item cannot be skipped`, 409);
+            const item = content.find((row) => row.id === id) ?? fail('not-found', 'Queued post not found', 404);
+            if (item.status === 'posted') fail('conflict', 'Cannot change a completed schedule to cancelled', 409);
             item.status = 'skipped';
             return delay<ContentQueueItem>({ ...item });
         },
@@ -721,11 +766,14 @@ function page<T, K extends 'schedules' | 'executions'>(
     key: K,
 ): { [P in K]: T[] } & { nextBefore?: string } {
     let filtered = rows;
-    if (query.before) filtered = filtered.filter((row) => idOf(row) < query.before!);
+    if (query.before !== undefined) filtered = filtered.filter((row) => idOf(row) < query.before!);
     const limit = Math.min(200, query.limit ?? 200);
     const slice = filtered.slice(0, limit);
     const result = { [key]: slice } as { [P in K]: T[] } & { nextBefore?: string };
-    if (filtered.length > limit && slice.length > 0) result.nextBefore = idOf(slice[slice.length - 1]!);
+    // `keysetPage()` emits X-Next-Before only for a request that itself
+    // paginated, and only when the page came back full.
+    const paginating = query.limit !== undefined || query.before !== undefined;
+    if (paginating && slice.length === limit && slice.length > 0) result.nextBefore = idOf(slice[slice.length - 1]!);
     return result;
 }
 

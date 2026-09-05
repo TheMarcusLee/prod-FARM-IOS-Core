@@ -2,9 +2,10 @@
  * Event → human text, written once and shared by the Alerts list, the desktop
  * toast, and the push relay's notification body.
  *
- * The farm already sends an operator-facing `title` and `message`; prefer them.
- * This module is the fallback for an event whose text is missing, plus the
- * grouping and push-worthiness rules the UI needs.
+ * The farm sends an operator-facing `title` and a structured `detail` object
+ * (`serializeEvent`); there is no prose `message` on the wire. The title is used
+ * as-is and the body is composed here from `detail`, together with the grouping
+ * and push-worthiness rules the UI needs.
  *
  * Push bodies traverse Expo/APNs/FCM. `pushText()` therefore carries a device
  * *name* and a task name and nothing else — no UDIDs, no handles, no log lines.
@@ -84,8 +85,7 @@ export interface EventText {
  */
 export function eventText(event: FarmEvent, deviceName?: string): EventText {
     const title = event.title?.trim() || fallbackTitle(event, deviceName);
-    const body = event.message?.trim() || fallbackBody(event);
-    return { title, body };
+    return { title, body: bodyFor(event) };
 }
 
 function fallbackTitle(event: FarmEvent, deviceName?: string): string {
@@ -94,31 +94,37 @@ function fallbackTitle(event: FarmEvent, deviceName?: string): string {
     return where ? `${label} on ${where}` : label;
 }
 
-function fallbackBody(event: FarmEvent): string {
-    const data = event.data ?? {};
+/**
+ * `detail` keys are whatever the farm's recorders put there
+ * (`src/fleet/scheduler-events.ts`, `src/fleet/device-monitor.ts`,
+ * `src/api/routes/fleet.ts`). Everything is read defensively: an older farm, or
+ * a kind added later, simply produces no body rather than `undefined` on screen.
+ */
+function bodyFor(event: FarmEvent): string {
+    const detail = event.detail ?? {};
+    const error = stringOr(detail.error);
     switch (event.kind) {
         case 'execution.failed': {
-            const attempt = numberOr(data.attempt);
-            const exitCode = numberOr(data.exitCode);
-            const parts: string[] = [];
-            if (attempt !== undefined) parts.push(`after ${attempt} attempt${attempt === 1 ? '' : 's'}`);
-            if (exitCode !== undefined) parts.push(`exit ${exitCode}`);
-            return parts.length ? `The run failed ${parts.join(', ')}.` : 'The run failed.';
+            const exitCode = numberOr(detail.exitCode);
+            if (error) return exitCode === undefined ? error : `${error} (exit ${exitCode})`;
+            return exitCode === undefined ? 'The run failed.' : `The run failed with exit ${exitCode}.`;
         }
         case 'execution.stuck': {
-            const seconds = numberOr(data.stuckForSeconds);
-            return seconds === undefined
-                ? 'The run has stopped making progress.'
-                : `No progress for ${formatDuration(seconds * 1000)}.`;
+            const deadline = stringOr(detail.deadlineAt);
+            return Number.isFinite(Date.parse(deadline))
+                ? `No progress since its deadline ${formatRelative(deadline)}.`
+                : 'The run has stopped making progress.';
         }
+        case 'execution.stopped':
+            return error || 'The run was stopped.';
         case 'device.error':
-            return typeof data.message === 'string' ? data.message : 'The device reported an error.';
+            return error || stringOr(detail.message) || 'The device reported an error.';
         case 'device.disconnected':
-            return 'The device dropped off the bus — check the cable.';
+            return stringOr(detail.message) || 'The device dropped off the bus — check the cable.';
         case 'device.connected':
-            return 'The device is back.';
+            return stringOr(detail.message) || 'The device is back.';
         case 'digest.daily':
-            return summariseCounters(data);
+            return summariseCounters(detail);
         default:
             // The badge already says the kind; repeating it under the title is
             // noise on a list the operator scans.
@@ -178,6 +184,10 @@ export function formatRelative(iso: string | null | undefined, now: number = Dat
 
 function numberOr(value: unknown): number | undefined {
     return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function stringOr(value: unknown): string {
+    return typeof value === 'string' ? value.trim() : '';
 }
 
 function summariseCounters(data: Record<string, unknown>): string {

@@ -29,7 +29,7 @@ interface AlertsValue {
 const AlertsContext = createContext<AlertsValue | null>(null);
 
 export function AlertsProvider({ children }: { children: ReactNode }) {
-    const { client, needsSetup, setUnacknowledgedCount, snapshot } = useFarm();
+    const { client, needsSetup, setUnacknowledgedCount } = useFarm();
     const [events, setEvents] = useState<FarmEvent[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<FarmError | null>(null);
@@ -92,10 +92,11 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [client]);
 
-    // The stream, only while foregrounded and only if the farm advertises it.
+    // The stream, only while foregrounded. There is no `sse` capability flag —
+    // `/api/events/stream` has always existed and answers 503 when the event
+    // store is not wired up, which the reconnect backoff already handles.
     useEffect(() => {
         if (needsSetup) return;
-        if (snapshot && snapshot.capabilities.sse === false) return;
         let unsubscribe: (() => void) | null = null;
 
         const open = () => {
@@ -136,7 +137,7 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
             close();
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [client, needsSetup, snapshot?.capabilities.sse]);
+    }, [client, needsSetup]);
 
     const value = useMemo<AlertsValue>(
         () => ({ events, loading, error, streamStatus, loadMore, hasMore: Boolean(nextBefore), refresh, acknowledgeAll }),

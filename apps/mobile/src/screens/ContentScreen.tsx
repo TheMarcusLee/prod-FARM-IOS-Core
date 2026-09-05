@@ -64,7 +64,7 @@ export function ContentScreen() {
     );
 
     if (needsSetup) return <EmptyState title="No farm configured" detail="Add a server URL and token in Settings." />;
-    if (snapshot?.capabilities.drip === false) {
+    if (snapshot?.capabilities.contentQueue === false) {
         return <EmptyState title="No drip queue" detail="This farm does not advertise the content queue yet." />;
     }
     if (queue.loading && !queue.data) return <Loading label="Loading the queue…" />;

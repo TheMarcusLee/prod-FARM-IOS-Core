@@ -50,9 +50,11 @@ describe('Fleet', () => {
         });
     });
 
-    it('renders an offline device with the connection message rather than "idle"', async () => {
+    // Bootstrap sends `connection: { connected }` and nothing else, so the card
+    // says the cable is out rather than repeating a message it never received.
+    it('says an offline device is off the bus rather than "idle"', async () => {
         await renderWithProviders(<FleetScreen />);
         await screen.findByTestId('device-card-RF8M90XYZ03');
-        expect(screen.getByText('Not attached — check the cable')).toBeTruthy();
+        expect(screen.getByText('not on the bus — check the cable')).toBeTruthy();
     });
 });

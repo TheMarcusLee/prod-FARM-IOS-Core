@@ -153,7 +153,7 @@ function DeviceCard({
     const secondLine =
         device.currentExecution?.summary ??
         (device.state === 'error' ? device.lastError : null) ??
-        (device.state === 'offline' ? device.connection.message : null) ??
+        (device.state === 'offline' ? 'not on the bus — check the cable' : null) ??
         (device.nextRunAt ? `next ${formatRelative(device.nextRunAt)}` : 'idle');
 
     return (

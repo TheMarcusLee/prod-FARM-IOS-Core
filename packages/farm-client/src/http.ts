@@ -127,9 +127,18 @@ export class HttpTransport {
         }
     }
 
+    /** Body plus the response, for the few routes whose cursor is a header. */
+    async requestWithResponse<T>(path: string, options: RequestOptions = {}): Promise<{ body: T; response: Response }> {
+        const response = await this.fetchRaw(path, options);
+        return { body: await this.unwrap<T>(response, this.url(path, options.query)), response };
+    }
+
     async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
         const response = await this.fetchRaw(path, options);
-        const url = this.url(path, options.query);
+        return this.unwrap<T>(response, this.url(path, options.query));
+    }
+
+    private async unwrap<T>(response: Response, url: string): Promise<T> {
 
         if (!response.ok) {
             let body = '';

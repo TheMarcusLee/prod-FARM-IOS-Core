@@ -113,17 +113,36 @@ export interface FleetDevice {
     name: string;
     platform?: Platform;
     tags?: string[];
-    /** The single derived badge the app renders. */
+    /** The single derived badge the app renders (`derivedDeviceState`). */
     state: DeviceState;
-    connection: Pick<DeviceConnectionStatus, 'physical' | 'wda' | 'message'>;
+    /** Bootstrap sends only this; the full record is `/api/devices/:udid/connection`. */
+    connection: { connected: boolean };
     currentExecution: FleetCurrentExecution | null;
     nextRunAt: string | null;
     lastError: string | null;
 }
 
-/** `GET /api/fleet/summary` */
+/**
+ * `GET /api/fleet/summary` — `summarizeFleet()` in `src/fleet/summary.ts`.
+ * Counters only: it carries no device list, and its `devices` field is a
+ * four-way registration/USB count, *not* the derived per-device badge. The
+ * screen-shaped view comes from `GET /api/mobile/bootstrap` (`FleetView`).
+ */
 export interface FleetSummary {
     generatedAt: string;
+    devices: { total: number; online: number; offline: number; disabled: number };
+    /** `{ ios: 9, android: 3 }`. */
+    byPlatform: Record<string, number>;
+    running: number;
+    queued: number;
+    stuck: number;
+    failedLast24h: number;
+    succeededLast24h: number;
+    plannedNext24h: number;
+}
+
+/** The `fleet` half of `GET /api/mobile/bootstrap` — what the Fleet screen renders. */
+export interface FleetView {
     counts: FleetCounts;
     devices: FleetDevice[];
 }
@@ -176,9 +195,18 @@ export interface BulkScheduleInput {
     runWindowMinutes?: number;
 }
 
+export interface BulkScheduleOutcome {
+    deviceUdid: string;
+    ok: boolean;
+    scheduleId?: string;
+    error?: string;
+}
+
+/** `POST /api/schedules/bulk` — counts plus one row per targeted device. */
 export interface BulkScheduleResult {
-    created: { deviceUdid: string; scheduleId: string }[];
-    failed: { deviceUdid: string; error: string }[];
+    created: number;
+    failed: number;
+    results: BulkScheduleOutcome[];
 }
 
 /* --------------------------------------------------------------- executions */
@@ -263,25 +291,33 @@ export interface FarmEvent {
     id: number;
     kind: EventKind | (string & {});
     severity: EventSeverity;
-    deviceUdid?: string | null;
-    executionId?: string | null;
-    scheduleId?: string | null;
+    deviceUdid: string | null;
+    executionId: string | null;
+    scheduleId: string | null;
     title: string;
-    message: string;
-    data?: JsonObject;
+    /**
+     * The farm's structured payload — `serializeEvent` in `src/fleet/events.ts`
+     * sends exactly this key. There is no `message` and no `data` on the wire;
+     * the operator-facing sentence is derived from `detail` by `eventText`.
+     */
+    detail: JsonObject | null;
     createdAt: string;
-    /** Present once event acknowledgement lands (gap 5). */
-    acknowledged?: boolean;
 }
 
 export interface EventQuery {
     since?: string;
     until?: string;
-    kind?: (EventKind | string)[];
+    /**
+     * One kind, not a list: `parseEventQuery` reads a single string and answers
+     * `400 Unknown event kind` for a repeated `?kind=` (which Fastify parses as
+     * an array). Filter by more than one kind client-side.
+     */
+    kind?: EventKind | string;
     deviceUdid?: string;
     severity?: EventSeverity;
     limit?: number;
     before?: number;
+    /** Only `false` is meaningful — it narrows to this token's unread mark. */
     acknowledged?: boolean;
 }
 
@@ -318,7 +354,12 @@ export interface PushRegistration {
 
 /* ------------------------------------------------------------------ content */
 
-export type ContentItemStatus = 'planned' | 'approved' | 'skipped' | 'scheduled' | 'posted' | 'failed';
+/**
+ * Derived server-side from the plan's schedule (`queueStatus` in
+ * `src/api/routes/mobile.ts`). Only these four are emitted; treat anything else
+ * as `planned`.
+ */
+export type ContentItemStatus = 'planned' | 'approved' | 'skipped' | 'posted';
 
 export interface ContentQueueItem {
     id: string;
@@ -347,10 +388,17 @@ export interface PluginDescriptor {
     tasks: PluginTaskDescriptor[];
 }
 
+/** `/health`'s `release` — the deploy tooling's `RELEASED` marker. */
 export interface ReleaseInfo {
     sha: string;
     subject: string;
     deployedAt: string;
+}
+
+/** Bootstrap's `release` — `package.json` version plus the short git sha. */
+export interface BuildInfo {
+    version: string;
+    sha: string | null;
 }
 
 export interface HealthResponse {
@@ -360,22 +408,26 @@ export interface HealthResponse {
     release?: ReleaseInfo;
 }
 
-/** Missing key means `false`. */
+/**
+ * The six keys `GET /api/mobile/bootstrap` actually sends. Missing means
+ * `false`, so one app build can talk to an older farm.
+ */
 export interface Capabilities {
-    events?: boolean;
-    sse?: boolean;
     push?: boolean;
-    drip?: boolean;
-    screenshotThumbnails?: boolean;
     eventAck?: boolean;
+    thumbnails?: boolean;
+    contentQueue?: boolean;
+    tokens?: boolean;
+    rateLimits?: boolean;
 }
 
 /** `GET /api/mobile/bootstrap` */
 export interface Bootstrap {
     serverTime: string;
-    release?: ReleaseInfo;
+    release: BuildInfo;
     plugins: PluginDescriptor[];
-    fleet: { counts: FleetCounts; devices: FleetDevice[] };
+    fleet: FleetView;
+    /** The newest 20, in `/api/events` shape. */
     recentEvents: FarmEvent[];
     unacknowledgedCount: number;
     capabilities: Capabilities;

@@ -42,7 +42,7 @@ export default function TabsLayout() {
                     title: 'Content',
                     // An older farm without the drip queue hides the tab rather
                     // than 404-ing on it (`capabilities`, gap 4).
-                    href: capabilities.drip === false ? null : undefined,
+                    href: capabilities.contentQueue === false ? null : undefined,
                     tabBarIcon: ({ color }) => <Glyph character="▶" color={color} />,
                 }}
             />

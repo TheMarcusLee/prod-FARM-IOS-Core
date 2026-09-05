@@ -26,14 +26,17 @@ import {
     type Bootstrap,
     type Capabilities,
     type FarmClient,
-    type FleetSummary,
+    type FleetView,
     type MockFarm,
 } from '@farm/client';
 import { StorageKeys, readJson, writeJson } from '../lib/storage';
 import { useSettings } from './SettingsContext';
 
 export interface Snapshot {
-    fleet: FleetSummary;
+    /** `bootstrap().fleet` — counts plus the derived per-device badges. */
+    fleet: FleetView;
+    /** When the farm generated it, so the stale banner does not lie. */
+    generatedAt: string;
     capabilities: Capabilities;
     unacknowledgedCount: number;
     releaseSha?: string;
@@ -62,6 +65,12 @@ interface FarmValue {
 }
 
 const FarmContext = createContext<FarmValue | null>(null);
+
+/**
+ * A hard ceiling on what goes to AsyncStorage. A farm is a dozen phones, but the
+ * snapshot must not be able to grow without bound on disk if one day it is not.
+ */
+const MAX_SNAPSHOT_DEVICES = 100;
 
 export function FarmProvider({ children }: { children: ReactNode }) {
     const { settings, token, loaded } = useSettings();
@@ -101,38 +110,26 @@ export function FarmProvider({ children }: { children: ReactNode }) {
         })();
     }, []);
 
-    const bootstrapped = useRef(false);
-
     const refresh = useCallback(async () => {
         if (needsSetup) {
             setInitialising(false);
             return;
         }
         try {
-            let next: Snapshot;
-            if (!bootstrapped.current) {
-                // Cold start is one round trip (gap 4).
-                const boot: Bootstrap = await client.bootstrap();
-                bootstrapped.current = true;
-                next = {
-                    fleet: { generatedAt: boot.serverTime, counts: boot.fleet.counts, devices: boot.fleet.devices },
-                    capabilities: boot.capabilities ?? {},
-                    unacknowledgedCount: boot.unacknowledgedCount ?? 0,
-                    releaseSha: boot.release?.sha,
-                    fetchedAt: Date.now(),
-                    fromMock: client.isMock,
-                };
-            } else {
-                const fleet = await client.getFleetSummary();
-                next = {
-                    fleet,
-                    capabilities: snapshot?.capabilities ?? {},
-                    unacknowledgedCount: snapshot?.unacknowledgedCount ?? 0,
-                    releaseSha: snapshot?.releaseSha,
-                    fetchedAt: Date.now(),
-                    fromMock: client.isMock,
-                };
-            }
+            // Every refresh is the same one round trip. `/api/fleet/summary`
+            // deliberately is *not* used here: it answers with counters only —
+            // no device list and no derived badge — so it cannot back this
+            // screen. See `summarizeFleet()` in `src/fleet/summary.ts`.
+            const boot: Bootstrap = await client.bootstrap();
+            const next: Snapshot = {
+                fleet: { counts: boot.fleet.counts, devices: boot.fleet.devices.slice(0, MAX_SNAPSHOT_DEVICES) },
+                generatedAt: boot.serverTime,
+                capabilities: boot.capabilities ?? {},
+                unacknowledgedCount: boot.unacknowledgedCount ?? 0,
+                releaseSha: boot.release?.sha ?? undefined,
+                fetchedAt: Date.now(),
+                fromMock: client.isMock,
+            };
             setSnapshot(next);
             setUnacknowledgedCount(next.unacknowledgedCount);
             setLastError(null);
@@ -143,11 +140,10 @@ export function FarmProvider({ children }: { children: ReactNode }) {
         } finally {
             setInitialising(false);
         }
-    }, [client, needsSetup, snapshot?.capabilities, snapshot?.releaseSha, snapshot?.unacknowledgedCount]);
+    }, [client, needsSetup]);
 
     // A client swap (demo toggle, new URL, replaced token) restarts the cycle.
     useEffect(() => {
-        bootstrapped.current = false;
         setLastError(null);
         setInitialising(true);
         if (loaded) void refresh();

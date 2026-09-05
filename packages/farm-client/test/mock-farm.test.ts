@@ -47,24 +47,23 @@ describe('createMockFarm — fleet invariants', () => {
 
     it('reports connected: null for both offline and disabled devices', async () => {
         const devices = await mock.listDevices();
-        const summary = await mock.getFleetSummary();
+        const boot = await mock.bootstrap();
         for (const device of devices) {
-            const state = summary.devices.find((row) => row.udid === device.udid)!.state;
+            const state = boot.fleet.devices.find((row) => row.udid === device.udid)!.state;
             if (state === 'offline' || state === 'disabled') expect(device.connected).toBeNull();
             else expect(device.connected).not.toBeNull();
         }
     });
 
     it('produces counts that sum to the total and match the device list', async () => {
-        const summary = await mock.getFleetSummary();
-        const { counts, devices } = summary;
+        const { counts, devices } = (await mock.bootstrap()).fleet;
         expect(counts.total).toBe(devices.length);
         expect(counts.online + counts.busy + counts.offline + counts.disabled + counts.error).toBe(counts.total);
         expect(countStates(devices)).toEqual(counts);
     });
 
     it('covers every device state, including one disabled and one offline', async () => {
-        const { counts } = await mock.getFleetSummary();
+        const { counts } = (await mock.bootstrap()).fleet;
         expect(counts.disabled).toBeGreaterThanOrEqual(1);
         expect(counts.offline).toBeGreaterThanOrEqual(1);
         expect(counts.busy).toBeGreaterThanOrEqual(3);
@@ -72,7 +71,7 @@ describe('createMockFarm — fleet invariants', () => {
     });
 
     it('gives every busy device a current execution and nobody else one', async () => {
-        const { devices } = await mock.getFleetSummary();
+        const { devices } = (await mock.bootstrap()).fleet;
         for (const device of devices) {
             if (device.state === 'busy') expect(device.currentExecution).not.toBeNull();
             else expect(device.currentExecution).toBeNull();
@@ -104,7 +103,7 @@ describe('createMockFarm — conflicts the UI has to render', () => {
     afterEach(() => mock.dispose());
 
     it('refuses remote input while automation is running, with the farm\'s exact text', async () => {
-        const { devices } = await mock.getFleetSummary();
+        const { devices } = (await mock.bootstrap()).fleet;
         const busy = devices.find((device) => device.state === 'busy')!;
         await expect(mock.remoteAction(busy.udid, { type: 'tap', x: 10, y: 10 })).rejects.toMatchObject({
             kind: 'conflict',
@@ -114,14 +113,14 @@ describe('createMockFarm — conflicts the UI has to render', () => {
     });
 
     it('refuses `back` on iOS with a 400, not a 409', async () => {
-        const idle = (await mock.getFleetSummary()).devices.find(
+        const idle = (await mock.bootstrap()).fleet.devices.find(
             (device) => device.platform === 'ios' && device.state !== 'busy',
         )!;
         await expect(mock.remoteAction(idle.udid, { type: 'back' })).rejects.toMatchObject({ kind: 'validation' });
     });
 
     it('refuses to disable a busy device', async () => {
-        const busy = (await mock.getFleetSummary()).devices.find((device) => device.state === 'busy')!;
+        const busy = (await mock.bootstrap()).fleet.devices.find((device) => device.state === 'busy')!;
         await expect(mock.patchDevice(busy.udid, { disabled: true })).rejects.toMatchObject({ kind: 'conflict' });
     });
 
@@ -151,18 +150,18 @@ describe('createMockFarm — conflicts the UI has to render', () => {
     });
 
     it('stays busy while a queued run is still behind the stopped one', async () => {
-        const busy = (await mock.getFleetSummary()).devices.find((device) => device.state === 'busy')!;
+        const busy = (await mock.bootstrap()).fleet.devices.find((device) => device.state === 'busy')!;
         expect(await mock.stopExecution(busy.currentExecution!.id)).toEqual({ result: 'running' });
 
         // A queued run is still an active run: the device is not free yet, and
         // the farm's remote-input guard is still the thing saying no.
-        const mid = (await mock.getFleetSummary()).devices.find((device) => device.udid === busy.udid)!;
+        const mid = (await mock.bootstrap()).fleet.devices.find((device) => device.udid === busy.udid)!;
         expect(mid.state).toBe('busy');
         expect(mid.currentExecution!.status).toBe('queued');
         await expect(mock.remoteAction(busy.udid, { type: 'tap', x: 1, y: 1 })).rejects.toMatchObject({ kind: 'conflict' });
 
         expect(await mock.stopExecution(mid.currentExecution!.id)).toEqual({ result: 'queued' });
-        const after = (await mock.getFleetSummary()).devices.find((device) => device.udid === busy.udid)!;
+        const after = (await mock.bootstrap()).fleet.devices.find((device) => device.udid === busy.udid)!;
         expect(after.state).not.toBe('busy');
         await expect(mock.remoteAction(busy.udid, { type: 'tap', x: 1, y: 1 })).resolves.toEqual({ ok: true });
     });
@@ -174,7 +173,7 @@ describe('createMockFarm — conflicts the UI has to render', () => {
     });
 
     it('rejects a task envelope the farm never advertised', async () => {
-        const idle = (await mock.getFleetSummary()).devices.find((device) => device.state === 'online')!;
+        const idle = (await mock.bootstrap()).fleet.devices.find((device) => device.state === 'online')!;
         await expect(
             mock.createSchedule({
                 deviceUdid: idle.udid,
@@ -185,7 +184,7 @@ describe('createMockFarm — conflicts the UI has to render', () => {
     });
 
     it('doomscroll-now makes the device busy', async () => {
-        const idle = (await mock.getFleetSummary()).devices.find((device) => device.state === 'online')!;
+        const idle = (await mock.bootstrap()).fleet.devices.find((device) => device.state === 'online')!;
         const plugins = await mock.listPlugins();
         const task = plugins[0]!.tasks[0]!;
         await mock.createSchedule({
@@ -193,7 +192,7 @@ describe('createMockFarm — conflicts the UI has to render', () => {
             task: { pluginId: plugins[0]!.id, taskType: task.type, taskVersion: task.version, payload: { minutes: 12 } },
             timing: { kind: 'now' },
         });
-        const after = (await mock.getFleetSummary()).devices.find((device) => device.udid === idle.udid)!;
+        const after = (await mock.bootstrap()).fleet.devices.find((device) => device.udid === idle.udid)!;
         expect(after.state).toBe('busy');
         expect(after.currentExecution).not.toBeNull();
     });
@@ -273,14 +272,17 @@ describe('createMockFarm — schedules, executions, content', () => {
         expect(detail.logs[detail.logs.length - 1]).toContain('attempt 3 of 3');
     });
 
-    it('approves and skips content once, then conflicts', async () => {
+    // The farm's approve is deliberately a no-op success the second time — the
+    // operator's thumb lands twice on a train.
+    it('approves idempotently and skips content', async () => {
         const { items } = await mock.listContentQueue();
         const planned = items.filter((item) => item.status === 'planned');
         expect(planned.length).toBeGreaterThanOrEqual(2);
-        const approved = await mock.approveContentItem(planned[0]!.id, { plannedFor: '2026-09-09T18:00:00.000Z' });
+        const approved = await mock.approveContentItem(planned[0]!.id);
         expect(approved.status).toBe('approved');
-        expect(approved.plannedFor).toBe('2026-09-09T18:00:00.000Z');
-        await expect(mock.approveContentItem(planned[0]!.id)).rejects.toMatchObject({ kind: 'conflict' });
+        expect(approved.scheduleId).toBeTruthy();
+        const again = await mock.approveContentItem(planned[0]!.id);
+        expect(again).toEqual(approved);
         expect((await mock.skipContentItem(planned[1]!.id)).status).toBe('skipped');
     });
 
@@ -293,9 +295,11 @@ describe('createMockFarm — schedules, executions, content', () => {
             task: { pluginId: 'com.git-agni.tiktok', taskType: 'doomscroll', taskVersion: 1, payload: {} },
             timing: { kind: 'now' },
         });
-        expect(result.created).toHaveLength(1);
-        expect(result.failed).toHaveLength(1);
-        expect(result.failed[0]!.deviceUdid).toBe(disabled.udid);
+        // `{ created, failed, results }` — counts, plus one row per device.
+        expect(result.created).toBe(1);
+        expect(result.failed).toBe(1);
+        expect(result.results.find((row) => row.deviceUdid === disabled.udid)!.ok).toBe(false);
+        expect(result.results.find((row) => row.deviceUdid === ok.udid)!.scheduleId).toBeTruthy();
     });
 });
 
@@ -327,7 +331,7 @@ describe('createMockFarm — events, ack, bootstrap, SSE', () => {
         expect(errors.events.length).toBeGreaterThan(0);
         expect(errors.events.every((event) => event.severity === 'error')).toBe(true);
 
-        const failures = await mock.listEvents({ kind: ['execution.failed'] });
+        const failures = await mock.listEvents({ kind: 'execution.failed' });
         expect(failures.events.every((event) => event.kind === 'execution.failed')).toBe(true);
 
         const udid = failures.events[0]!.deviceUdid!;
@@ -359,8 +363,12 @@ describe('createMockFarm — events, ack, bootstrap, SSE', () => {
         expect(boot.fleet.counts.total).toBe(12);
         expect(boot.plugins.length).toBeGreaterThan(0);
         expect(boot.recentEvents.length).toBeGreaterThan(0);
-        expect(boot.capabilities).toMatchObject({ events: true, sse: true, push: true, eventAck: true });
-        expect(boot.release?.sha).toBeTruthy();
+        expect(boot.recentEvents.length).toBeLessThanOrEqual(20);
+        // The six keys the farm really sends (`registerMobileRoutes`).
+        expect(boot.capabilities).toMatchObject({
+            push: true, eventAck: true, thumbnails: true, contentQueue: true, tokens: true, rateLimits: true,
+        });
+        expect(boot.release.version).toBeTruthy();
     });
 
     it('ticks new events to a subscriber and stops on unsubscribe', () => {
@@ -437,22 +445,28 @@ describe('derivations and event text', () => {
         expect(gestureToAction({ x: 10, y: 500 }, { x: 10, y: 100 }, 99_000)).toMatchObject({ durationMs: 3_000 });
     });
 
-    it('prefers the farm\'s operator-facing text and falls back when it is missing', () => {
+    it('renders the farm\'s title verbatim and composes the body from `detail`', () => {
         const base: FarmEvent = {
-            id: '1',
+            id: 1,
             kind: 'execution.failed',
             severity: 'error',
             deviceUdid: '00008030-001A2B3C0E88802E',
+            executionId: null,
+            scheduleId: null,
             title: 'Doomscroll failed on iPhone 8 · slot 1',
-            message: 'TikTok did not reach the feed after 3 attempts',
+            detail: { task: 'com.git-agni.tiktok/doomscroll@1', exitCode: 1, error: 'TikTok did not reach the feed' },
             createdAt: new Date(NOW).toISOString(),
         };
-        expect(eventText(base)).toEqual({ title: base.title, body: base.message });
+        expect(eventText(base)).toEqual({
+            title: base.title,
+            body: 'TikTok did not reach the feed (exit 1)',
+        });
 
-        const bare = { ...base, title: '', message: '', data: { attempt: 3, exitCode: 1 } };
+        // No title and no detail: the kind and the device name are all there is.
+        const bare = { ...base, title: '', detail: null };
         const text = eventText(bare, 'iPhone 8 · slot 1');
         expect(text.title).toBe('Run failed on iPhone 8 · slot 1');
-        expect(text.body).toContain('3 attempts');
+        expect(text.body).toBe('The run failed.');
     });
 
     it('keeps a push body free of identifiers that leave the tailnet', () => {
