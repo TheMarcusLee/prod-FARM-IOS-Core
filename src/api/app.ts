@@ -26,6 +26,7 @@ import type { AuthProvider, PluginNavLink } from '../plugin.js';
 import type { PluginRegistry } from '../registry.js';
 import type { CreateTaskInput, JsonObject, ScheduleTiming } from '../types.js';
 import { ScheduleTransitionError, type SchedulerRepository } from '../scheduler/repository.js';
+import { registerMcpRoutes } from './routes/mcp.js';
 
 export interface CreateAppOptions {
     plugins: PluginRegistry;
@@ -620,6 +621,10 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     app.delete<{ Body: { assetIds: string[] } }>('/api/assets', async (request, reply) => {
         await options.scheduler.deleteAssets(request.body.assetIds ?? []);
         return reply.code(204).send();
+    });
+
+    await registerMcpRoutes(app, {
+        scheduler: options.scheduler, plugins: options.plugins, screenshot: (udid) => remote.getScreenshot(udid),
     });
 
     for (const plugin of options.plugins.list()) {

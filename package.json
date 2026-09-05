@@ -35,6 +35,10 @@
     "db:setup": "node --env-file-if-exists=.env --import tsx src/database/setup.ts",
     "worker": "node --env-file-if-exists=.env --env-file-if-exists=.env.devices --import tsx src/scheduler/worker.ts",
     "web": "node --env-file-if-exists=.env --env-file-if-exists=.env.devices --import tsx src/api/server.ts",
+    "mcp": "node --env-file-if-exists=.env --env-file-if-exists=.env.devices --import tsx src/mcp/stdio.ts",
+    "auth:set-password": "node --env-file-if-exists=.env --import tsx src/auth/cli.ts set-password",
+    "token:create": "node --env-file-if-exists=.env --import tsx src/auth/cli.ts token-create",
+    "token:revoke": "node --env-file-if-exists=.env --import tsx src/auth/cli.ts token-revoke",
     "build:web": "tsc -p tsconfig.web.json",
     "preweb": "npm run build:web",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.web.json --noEmit",
@@ -52,6 +56,7 @@
     "@fastify/cookie": "^11.1.2",
     "@fastify/formbody": "^8.0.2",
     "@fastify/multipart": "^9.4.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "appium-ios-device": "^3.1.21",
     "cron-parser": "^5.10.0",
     "drizzle-orm": "^0.45.2",
@@ -61,7 +66,8 @@
     "pg": "^8.23.0",
     "pg-boss": "^12.27.0",
     "sharp": "^0.35.3",
-    "webdriverio": "9.31.3"
+    "webdriverio": "9.31.3",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
