@@ -1,0 +1,16 @@
+<!-- Runbook recorder panel, used by the plain (unthemed) device page. The themed dashboard
+     template loads the same fragment directly. Panel HTML is trusted code: it only reads the
+     device UDID out of its own URL and asks the plugin for the panel. -->
+<div id="runbook-panel-mount"><p class="muted">Loading runbooks…</p></div>
+<script>
+(function () {
+    var mount = document.getElementById('runbook-panel-mount');
+    if (!mount) return;
+    var udid = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '');
+    mount.setAttribute('hx-get', '/plugins/com.farm.runbook/devices/' + encodeURIComponent(udid) + '/panel');
+    mount.setAttribute('hx-trigger', 'load');
+    mount.setAttribute('hx-swap', 'outerHTML');
+    var process = function () { if (window.htmx) window.htmx.process(mount); };
+    if (window.htmx) process(); else document.addEventListener('DOMContentLoaded', process);
+})();
+</script>

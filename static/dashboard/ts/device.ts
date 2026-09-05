@@ -321,6 +321,21 @@ function pointFromEvent(event: PointerEvent): Point {
     };
 }
 
+/**
+ * Runbook recorder hook. The Runbooks panel sets `data-runbook-recording` to the runbook it is
+ * recording into; while it is set, every remote action this page performs is also appended to that
+ * runbook as a step. Fire-and-forget: a recorder problem must never break remote control.
+ */
+function recordRunbookStep(action: RemoteAction): void {
+    const runbookId = document.documentElement.dataset.runbookRecording;
+    if (!runbookId) return;
+    void fetch(`/api/runbooks/${encodeURIComponent(runbookId)}/steps`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action }),
+    }).catch(() => undefined);
+}
+
 async function sendAction(action: RemoteAction): Promise<void> {
     setStatus('Sending input…');
     elements.remoteButtons.forEach((button) => { button.disabled = true; });
@@ -331,6 +346,7 @@ async function sendAction(action: RemoteAction): Promise<void> {
             body: JSON.stringify(action),
         });
         setStatus(action.type === 'tap' ? `Tapped (${action.x}, ${action.y})` : 'Remote connected', 'ready');
+        recordRunbookStep(action);
     } catch (error) {
         setStatus(errorMessage(error), 'error');
     } finally {

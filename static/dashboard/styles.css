@@ -259,3 +259,14 @@ dialog#calibrate-dialog { width: min(760px, calc(100% - 28px)); }
     .swipe-pad { margin: auto; }
     .schedule-fields { grid-template-columns: 1fr; }
 }
+
+/* Runbooks (com.farm.runbook): the /runbooks pages and the device panel. */
+.runbook-shell .app-nav { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.runbook-shell .panel { margin-bottom: 18px; }
+.runbook-shell .muted, #runbook-panel .muted { color: var(--muted); font-size: 12px; }
+.runbook-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.runbook-table th, .runbook-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.runbook-table input, .runbook-table select { max-width: 140px; }
+.runbook-steps { display: block; overflow-x: auto; }
+.runbook-steps-live { margin: 8px 0; padding-left: 18px; font-size: 12px; }
+.inline-form { display: inline-flex; align-items: center; gap: 6px; }

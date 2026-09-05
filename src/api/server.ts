@@ -5,6 +5,7 @@ import { configuredPluginModules, loadAuthProvider, loadPlugins } from '../loade
 import { PluginRegistry } from '../registry.js';
 import { createSchedulerRuntime } from '../scheduler/runtime.js';
 import { assertSafeBind } from '../security.js';
+import { createRunbookPlugin } from '../runbook-plugin.js';
 import { createTikTokPlugin } from '../tiktok-plugin.js';
 import { defaultDashboardTheme } from '../dashboard-theme.js';
 import { DeviceRegistrationService } from '../devices/registration.js';
@@ -19,7 +20,7 @@ export interface StartServerOptions {
 }
 
 export async function defaultPlugins(): Promise<PhoneFarmPlugin[]> {
-    return [createTikTokPlugin({ bundleId: process.env.TIKTOK_BUNDLE_ID }),
+    return [createTikTokPlugin({ bundleId: process.env.TIKTOK_BUNDLE_ID }), createRunbookPlugin(),
         ...await loadPlugins(configuredPluginModules())];
 }
 
