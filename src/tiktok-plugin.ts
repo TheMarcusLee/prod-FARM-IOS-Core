@@ -6,11 +6,15 @@ import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 
 import type { PhoneFarmPlugin, TaskDefinition, TaskExecutionContext } from './plugin.js';
-import type { JsonObject, JsonValue, ScheduleTiming, TaskExecutionResult } from './types.js';
+import type { JsonObject, JsonValue, ScheduleTiming } from './types.js';
 
 export interface TikTokPluginConfiguration {
     doomscrollEntrypoint?: string;
     postEntrypoint?: string;
+    /** Android routines; picked when the device's platform is 'android'. See docs/android-tiktok.md. */
+    androidDoomscrollEntrypoint?: string;
+    androidPostEntrypoint?: string;
+    /** iOS bundle id / Android package name. Both platforms use com.zhiliaoapp.musically. */
     bundleId?: string;
 }
 
@@ -43,16 +47,24 @@ function objectPayload(value: JsonValue): Record<string, JsonValue> {
 }
 
 /**
- * The shipped routines drive TikTok through WebDriverAgent and XCUITest. Until the Android
- * routine lands, fail an Android execution up front with a message that says so, instead of
- * letting webdriverio time out against a WDA port that does not exist.
+ * One routine per platform behind the same task. iOS drives TikTok through WebDriverAgent and
+ * XCUITest; Android drives it through the DeviceDriver interface (adb or the a11y bridge).
  */
-function unsupportedPlatform(context: TaskExecutionContext, taskName: string): TaskExecutionResult | undefined {
-    if (context.device.platform !== 'android') return;
-    return {
-        exitCode: null, stopped: false,
-        error: `TikTok ${taskName} is not implemented for Android yet (device ${context.device.udid} uses the ${context.driver.kind} driver); see docs/adr/0001`,
-    };
+function isAndroid(context: TaskExecutionContext): boolean {
+    return context.device.platform === 'android';
+}
+
+function entrypointFor(
+    context: TaskExecutionContext,
+    configuration: TikTokPluginConfiguration,
+    routine: 'doomscroll' | 'post',
+): string {
+    if (isAndroid(context)) {
+        const configured = routine === 'post' ? configuration.androidPostEntrypoint : configuration.androidDoomscrollEntrypoint;
+        return configured ?? fileURLToPath(new URL(`./tiktok/android/${routine}.ts`, import.meta.url));
+    }
+    const configured = routine === 'post' ? configuration.postEntrypoint : configuration.doomscrollEntrypoint;
+    return configured ?? fileURLToPath(new URL(`./tiktok/${routine}.ts`, import.meta.url));
 }
 
 function optionalString(value: JsonValue | undefined, name: string): string | undefined {
@@ -87,11 +99,12 @@ function createDoomscrollTask(configuration: TikTokPluginConfiguration): TaskDef
         estimateDurationMs: (payload) => payload.durationMinutes * 60_000,
         retryPolicy: () => ({ retryLimit: 2, retryDelaySeconds: 60, retryBackoff: true }),
         supportsStop: () => true,
-        execute: async (context, payload) => unsupportedPlatform(context, 'doomscroll') ?? context.runProcess({
-            entrypoint: configuration.doomscrollEntrypoint ?? fileURLToPath(new URL('./tiktok/doomscroll.ts', import.meta.url)),
+        execute: async (context, payload) => context.runProcess({
+            entrypoint: entrypointFor(context, configuration, 'doomscroll'),
             env: {
-                IOS_UDID: context.device.udid,
-                TIKTOK_BUNDLE_ID: configuration.bundleId ?? 'com.zhiliaoapp.musically',
+                ...(isAndroid(context)
+                    ? { TIKTOK_PACKAGE: configuration.bundleId ?? 'com.zhiliaoapp.musically' }
+                    : { IOS_UDID: context.device.udid, TIKTOK_BUNDLE_ID: configuration.bundleId ?? 'com.zhiliaoapp.musically' }),
                 DOOMSCROLL_DURATION_MINUTES: String(payload.durationMinutes),
                 DOOMSCROLL_PERSONALITY: payload.personality,
                 DOOMSCROLL_LIKE_ENABLED: String(payload.likeEnabled),
@@ -143,8 +156,6 @@ function createPostTask(configuration: TikTokPluginConfiguration): TaskDefinitio
         retryPolicy: () => ({ retryLimit: 0, retryDelaySeconds: 0, retryBackoff: false }),
         supportsStop: () => false,
         async execute(context: TaskExecutionContext, payload) {
-            const unsupported = unsupportedPlatform(context, 'post');
-            if (unsupported) return unsupported;
             const byId = new Map(context.assets.map((asset) => [asset.id, asset]));
             const files = payload.media.map((media) => {
                 const asset = byId.get(media.assetId);
@@ -158,8 +169,9 @@ function createPostTask(configuration: TikTokPluginConfiguration): TaskDefinitio
                 ...(payload.musicUrl ? { musicUrl: payload.musicUrl } : {}),
             }));
             return context.runProcess({
-                entrypoint: configuration.postEntrypoint ?? fileURLToPath(new URL('./tiktok/post.ts', import.meta.url)),
+                entrypoint: entrypointFor(context, configuration, 'post'),
                 args: [manifestPath],
+                ...(isAndroid(context) ? { env: { TIKTOK_PACKAGE: configuration.bundleId ?? 'com.zhiliaoapp.musically' } } : {}),
             });
         },
     };

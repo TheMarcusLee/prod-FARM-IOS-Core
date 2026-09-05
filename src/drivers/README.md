@@ -84,5 +84,7 @@ await waitForText(driver, { text: 'Posted' }, { timeoutMs: 60_000, signal });
 - `POST /api/devices` accepts `platform`, `driver` and `android` so an Android phone can be
   registered without the iOS registration wizard.
 
-Still open: a platform-aware registration wizard and device page in the dashboard, and the
-Android TikTok routine (the plugin currently fails Android executions with a clear message).
+The Android TikTok routines live in `src/tiktok/android/` and drive this interface directly;
+see `docs/android-tiktok.md` for the phone-side prerequisites and the selector table.
+
+Still open: a platform-aware registration wizard and device page in the dashboard.
