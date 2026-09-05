@@ -11,6 +11,17 @@ import {
 } from './model.js';
 import type { RecordingSession } from './recorder.js';
 
+/**
+ * HTML escaping is the wrong escape inside a `<script>` block: `&#39;` is not a
+ * quote to the JS parser, and `</script>` in a string still closes the element.
+ * A JSON literal with the three markup characters escaped is safe in both.
+ */
+export function scriptLiteral(value: unknown): string {
+    return JSON.stringify(String(value ?? ''))
+        .replaceAll('<', '\\u003c').replaceAll('>', '\\u003e').replaceAll('&', '\\u0026')
+        .replaceAll('\u2028', '\\u2028').replaceAll('\u2029', '\\u2029');
+}
+
 export function escapeHtml(value: unknown): string {
     return String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
@@ -164,7 +175,7 @@ export function devicePanelFragment(
             + `<button class="button secondary" type="submit"${runbooks.length ? '' : ' disabled'}>Start recording</button></form>`
             + (runbooks.length ? '' : '<p class="muted">Create a runbook on the <a href="/runbooks">Runbooks</a> page first.</p>');
     // The recorder hook in the device page reads this flag; the panel is what keeps it current.
-    const flag = `<script>document.documentElement.dataset.runbookRecording = ${session ? `'${escapeHtml(session.runbookId)}'` : "''"};</script>`;
+    const flag = `<script>document.documentElement.dataset.runbookRecording = ${scriptLiteral(session?.runbookId ?? '')};</script>`;
     return `<section id="runbook-panel" class="panel"${poll}><h2>Runbooks</h2>${notice(message)}${body}${flag}</section>`;
 }
 

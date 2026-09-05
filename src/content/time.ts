@@ -57,17 +57,33 @@ export function addDays(localDateString: string, days: number): string {
     return shifted.toISOString().slice(0, 10);
 }
 
+/** Minutes past midnight that `instant` reads in `timeZone`, or null on another local date. */
+function localMinutesOn(instant: number, localDateString: string, timeZone: string): number | null {
+    const [year, month, day, hour, minute] = zonedParts(new Date(instant), timeZone);
+    const pad = (value: number) => String(value).padStart(2, '0');
+    const date = `${String(year).padStart(4, '0')}-${pad(month as number)}-${pad(day as number)}`;
+    return date === localDateString ? (hour as number) * 60 + (minute as number) : null;
+}
+
 /**
  * The instant at which the wall clock in `timeZone` reads `localDateString`
- * plus `minutes`. Two passes settle the offset around a DST transition; a
- * skipped local time lands on the instant the clock jumped to.
+ * plus `minutes`.
+ *
+ * Two passes over the offset produce the two candidate instants a DST
+ * transition can yield, and each is checked against the clock it actually
+ * reads. That check matters twice a year: on the spring-forward the naive
+ * two-pass converges on a time an hour *before* the one asked for (02:30
+ * becomes 01:30), which would open a window early; the later candidate — the
+ * instant the clock jumped to — is used instead. In the autumn's repeated
+ * hour both candidates are legal and the first occurrence wins.
  */
 export function zonedTimeToUtc(localDateString: string, minutes: number, timeZone: string): Date {
     const [year, month, day] = localDateString.split('-').map(Number);
     const naive = Date.UTC(year as number, (month as number) - 1, day as number) + minutes * 60_000;
-    let instant = new Date(naive - zoneOffsetMinutes(new Date(naive), timeZone) * 60_000);
-    instant = new Date(naive - zoneOffsetMinutes(instant, timeZone) * 60_000);
-    return instant;
+    const first = naive - zoneOffsetMinutes(new Date(naive), timeZone) * 60_000;
+    const second = naive - zoneOffsetMinutes(new Date(first), timeZone) * 60_000;
+    const legal = [first, second].filter((candidate) => localMinutesOn(candidate, localDateString, timeZone) === minutes);
+    return new Date(legal.length ? Math.min(...legal) : Math.max(first, second));
 }
 
 export interface PostingWindow { start: Date; end: Date }

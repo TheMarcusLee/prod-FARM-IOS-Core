@@ -4,7 +4,9 @@ interface ContentSet { id: string; name: string }
 interface CaptionTemplate { id: string; name: string }
 interface DeviceSummary { udid: string; name: string }
 
-declare const htmx: { ajax(method: string, url: string, target: string | Element): Promise<void> } | undefined;
+declare const htmx: {
+    ajax(method: string, url: string, context: string | Element | { target: string | Element; swap: string }): Promise<void>;
+} | undefined;
 
 const byId = <T extends HTMLElement>(id: string): T => document.querySelector<T>(`#${id}`)!;
 
@@ -41,7 +43,11 @@ function refresh(section: 'library' | 'sets' | 'templates' | 'rules'): void {
         rules: ['/api/drip/rules', '#drip-rules'],
     }[section];
     if (typeof htmx === 'undefined') { location.reload(); return; }
-    void htmx.ajax('GET', targets[0] as string, targets[1] as string);
+    // The fragments each render their own wrapper element, so the swap has to
+    // be outerHTML. htmx.ajax defaults to innerHTML, which nested a second
+    // #content-library inside the first on every refresh — duplicate ids, and
+    // one more level of nesting each time the operator pressed Refresh.
+    void htmx.ajax('GET', targets[0] as string, { target: targets[1] as string, swap: 'outerHTML' });
 }
 
 // ---- ingest ---------------------------------------------------------------

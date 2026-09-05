@@ -14,6 +14,7 @@ import type { SchedulerRepository } from '../src/scheduler/repository.js';
 import { applyVariables, validateRunbook, validateStep, type Runbook, type Step } from '../src/runbook/model.js';
 import { stepFromAction, targetAtPoint, validateRemoteAction } from '../src/runbook/recorder.js';
 import { RunbookStepError, replayRunbook, resolveTapPoint } from '../src/runbook/replay.js';
+import { devicePanelFragment, scriptLiteral } from '../src/runbook/html.js';
 import { stepsFromForm } from '../src/runbook/routes.js';
 import { readRunbook, writeRunbook } from '../src/runbook/store.js';
 import { createRunbookPlugin } from '../src/runbook-plugin.js';
@@ -400,4 +401,74 @@ test('the step editor form maps rows to steps, dropping blank and deleted ones',
         { type: 'waitForText', text: 'Done', timeoutMs: 5_000 },
     ]);
     assert.throws(() => stepsFromForm({ 'step.0.type': 'assert', 'step.0.text': 'Done' }), /expect must be/);
+});
+
+test('the recording flag is escaped for the script it lands in, not for HTML', () => {
+    // The id is pattern-checked on the way in, so this is defence in depth —
+    // but HTML escaping inside a <script> is simply the wrong escape: `&#39;`
+    // is not a quote to the JS parser and `</script>` still ends the element.
+    const hostile = "x'; document.body.remove(); //</script><img src=x onerror=alert(1)>";
+    const panel = devicePanelFragment(
+        'udid-1', [],
+        { runbookId: hostile, udid: 'udid-1', screen: { width: 1, height: 1, scale: 1 }, startedAt: '', steps: 0 },
+        undefined,
+    );
+    assert.ok(!panel.includes('</script><img'), 'the element must not be closed early');
+    assert.ok(panel.includes('\\u003c/script\\u003e'));
+    // The value is still delivered, as one JS string literal — and nothing the
+    // browser's HTML parser could read as markup survives inside it.
+    const flag = /dataset\.runbookRecording = (.*);<\/script>/.exec(panel)?.[1] as string;
+    assert.ok(!/[<>&]/.test(flag), flag);
+    assert.equal(JSON.parse(flag), hostile);
+
+    assert.equal(scriptLiteral(''), '""');
+    assert.equal(scriptLiteral('rb-abc12345'), '"rb-abc12345"');
+    assert.equal(scriptLiteral('a&b'), '"a\\u0026b"');
+});
+
+test('saving the step editor cannot drop a step an open recording just appended', async (context) => {
+    const directory = path.join(workspace, 'concurrent-edit');
+    const app = await appWithRunbooks(directory);
+    context.after(() => app.close());
+
+    const create = await inject(app, {
+        method: 'POST', url: '/api/runbooks', payload: { name: 'Race', platform: 'any', udid: SERIAL },
+    });
+    const id = (create.json() as Runbook).id;
+    await inject(app, { method: 'POST', url: `/api/runbooks/${id}/record/start`, payload: { udid: SERIAL } });
+
+    // The editor form save and a recorded step overlap. Both read-modify-write
+    // the same file; the editor used to bypass the mutation queue and clobber.
+    const [, recorded] = await Promise.all([
+        inject(app, {
+            method: 'POST', url: `/plugins/com.farm.runbook/runbooks/${id}/steps-form`,
+            payload: 'step.0.type=wait&step.0.ms=500',
+            headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        }),
+        inject(app, {
+            method: 'POST', url: `/api/runbooks/${id}/steps`, payload: { action: { type: 'home' } },
+        }),
+    ]);
+    assert.equal(recorded.statusCode, 201);
+
+    const saved = await readRunbook(id, directory);
+    const types = saved!.steps.map((step) => step.type);
+    assert.ok(types.includes('key'), `the recorded step survived: ${types.join(', ')}`);
+    assert.equal(saved!.steps.length, types.includes('wait') ? 2 : 1);
+});
+
+test('a rejected runbook body is a 400 that names the field', async (context) => {
+    const directory = path.join(workspace, 'bad-body');
+    const app = await appWithRunbooks(directory);
+    context.after(() => app.close());
+
+    const noName = await inject(app, { method: 'POST', url: '/api/runbooks', payload: { platform: 'any' } });
+    assert.equal(noName.statusCode, 400);
+    assert.match((noName.json() as { error: string }).error, /name/);
+
+    const badPlatform = await inject(app, {
+        method: 'POST', url: '/api/runbooks', payload: { name: 'x', platform: 'symbian' },
+    });
+    assert.equal(badPlatform.statusCode, 400);
+    assert.match((badPlatform.json() as { error: string }).error, /platform/);
 });

@@ -163,9 +163,15 @@ export async function registerRunbookRoutes(context: PluginRouteContext, options
 
     app.post<{ Body: JsonObject }>('/api/runbooks', async (request, reply) => {
         const body = request.body ?? {};
-        return reply.code(201).send(await createRunbook({
-            name: body.name!, description: body.description, platform: body.platform, appId: body.appId, udid: body.udid,
-        }));
+        try {
+            return reply.code(201).send(await createRunbook({
+                name: body.name!, description: body.description, platform: body.platform, appId: body.appId, udid: body.udid,
+            }));
+        } catch (error) {
+            // Every field is validated by `validateRunbook`; a rejected body is
+            // the caller's mistake, not a server fault.
+            return reply.code(400).send({ error: errorMessage(error) });
+        }
     });
 
     app.get<{ Params: { id: string } }>('/api/runbooks/:id', async (request, reply) => {
@@ -178,11 +184,21 @@ export async function registerRunbookRoutes(context: PluginRouteContext, options
         const existing = await readRunbook(request.params.id, directory);
         if (!existing) return reply.code(404).send({ error: 'Runbook not found' });
         const body = request.body ?? {};
-        const replacement = validateRunbook({
-            ...body, id: existing.id, version: 1, createdAt: existing.createdAt,
-            createdFor: body.createdFor ?? existing.createdFor,
-        } as JsonValue);
-        return writeRunbook(replacement, directory);
+        let replacement: Runbook;
+        try {
+            replacement = validateRunbook({
+                ...body, id: existing.id, version: 1, createdAt: existing.createdAt,
+                createdFor: body.createdFor ?? existing.createdFor,
+            } as JsonValue);
+        } catch (error) {
+            return reply.code(400).send({ error: errorMessage(error) });
+        }
+        // Through `mutateRunbook`, so a step arriving from an open recording is
+        // not silently dropped by a read-modify-write that started earlier.
+        const saved = await mutateRunbook(existing.id, (stored) => {
+            Object.assign(stored, replacement);
+        }, directory);
+        return saved ?? reply.code(404).send({ error: 'Runbook not found' });
     });
 
     app.delete<{ Params: { id: string } }>('/api/runbooks/:id', async (request, reply) => {
@@ -234,10 +250,15 @@ export async function registerRunbookRoutes(context: PluginRouteContext, options
         if (!found) return reply.code(404).send({ error: 'Device is not registered' });
         const action = validateRemoteAction(request.body?.action);
         const step = await recorder.record(session, action, createDriver(found));
-        const updated = await mutateRunbook(request.params.id, (stored) => {
-            if (stored.steps.length >= MAX_STEPS) throw new Error(`A runbook holds at most ${MAX_STEPS} steps`);
-            stored.steps.push(step);
-        }, directory);
+        let updated: Runbook | undefined;
+        try {
+            updated = await mutateRunbook(request.params.id, (stored) => {
+                if (stored.steps.length >= MAX_STEPS) throw new Error(`A runbook holds at most ${MAX_STEPS} steps`);
+                stored.steps.push(step);
+            }, directory);
+        } catch (error) {
+            return reply.code(409).send({ error: errorMessage(error) });
+        }
         if (!updated) return reply.code(404).send({ error: 'Runbook not found' });
         return reply.code(201).send({ step, steps: updated.steps.length });
     });
@@ -303,8 +324,10 @@ export async function registerRunbookRoutes(context: PluginRouteContext, options
         if (!runbook) return reply.code(404).type('text/html').send(await listFragment('Runbook not found'));
         try {
             const steps = stepsFromForm(request.body ?? {});
-            const updated = await writeRunbook({ ...runbook, steps }, directory);
-            return html(reply, await editorFragment(updated, `Saved ${steps.length} steps.`));
+            // Same serialisation as recording: the editor and an open recording
+            // both read-modify-write the same file.
+            const updated = await mutateRunbook(runbook.id, (stored) => { stored.steps = steps; }, directory);
+            return html(reply, await editorFragment(updated ?? runbook, `Saved ${steps.length} steps.`));
         } catch (error) {
             return html(reply, await editorFragment(runbook, errorMessage(error)));
         }

@@ -1,16 +1,17 @@
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createReadStream } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import type { DripRuleRow } from '../../database/schema.js';
 import type { SchedulerRepository } from '../../scheduler/repository.js';
 import { downloadWithYtDlp, ytDlpPath } from '../../content/ffmpeg.js';
 import { ingestDirectory, ingestMedia, listMediaFiles, mimeTypeFor, removeItemFiles } from '../../content/ingest.js';
-import { renderLibrary, renderRules, renderSets, renderTemplates } from '../../content/page.js';
+import { escapeHtml, renderLibrary, renderRules, renderSets, renderTemplates } from '../../content/page.js';
 import { contentRoot } from '../../content/paths.js';
 import { renderCaptionTemplate } from '../../content/templates.js';
-import { runDripPlanner } from '../../content/runner.js';
+import { replanRule, runDripPlanner } from '../../content/runner.js';
 import { createContentStore, type ContentStore } from '../../content/store.js';
 import {
     asObject, parseIngestRequest, parseIngestUrl, parseItemPatch, parseRuleInput, parseRulePatch,
@@ -29,12 +30,34 @@ export interface ContentRouteOptions {
 
 const STATIC_ROOT = fileURLToPath(new URL('../../../static/dashboard/', import.meta.url));
 
+const NO_DATABASE = 'The content library needs a database connection';
+
 function notConfigured(reply: FastifyReply): FastifyReply {
-    return reply.code(503).send({ error: 'The content library needs a database connection' });
+    return reply.code(503).send({ error: NO_DATABASE });
+}
+
+/**
+ * htmx does not swap a non-2xx response, so a fragment that answered 503 left
+ * the operator staring at a spinner with no explanation. Fragment routes send
+ * the message in the element the page is waiting for instead.
+ */
+function unavailableFragment(request: FastifyRequest, reply: FastifyReply, targetId: string): FastifyReply {
+    if (!request.headers['hx-request']) return notConfigured(reply);
+    return reply.type('text/html').send(`<div id="${targetId}" class="empty-state">${escapeHtml(NO_DATABASE)}</div>`);
 }
 
 function badRequest(reply: FastifyReply, error: unknown): FastifyReply {
     return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+}
+
+/** Fields that decide *when* and *what* a rule posts; changing one invalidates the planned queue. */
+const PLANNING_FIELDS = [
+    'deviceUdid', 'account', 'postsPerDay', 'windowStart', 'windowEnd', 'timezone', 'minGapMinutes',
+    'destination', 'source', 'setId', 'tag', 'captionTemplateId', 'pickOrder', 'avoidReuseDays',
+] as const satisfies ReadonlyArray<keyof DripRuleRow>;
+
+export function affectsPlanning(before: DripRuleRow, after: DripRuleRow): boolean {
+    return PLANNING_FIELDS.some((field) => before[field] !== after[field]);
 }
 
 /**
@@ -69,7 +92,7 @@ export async function registerContentRoutes(app: FastifyInstance, options: Conte
 
     app.get<{ Querystring: { status?: string; tag?: string } }>('/api/content/items', async (request, reply) => {
         const active = store();
-        if (!active) return notConfigured(reply);
+        if (!active) return unavailableFragment(request, reply, 'content-library');
         const items = await active.listItems({
             ...(request.query.status ? { status: request.query.status } : {}),
             ...(request.query.tag ? { tag: request.query.tag } : {}),
@@ -195,7 +218,7 @@ export async function registerContentRoutes(app: FastifyInstance, options: Conte
 
     app.get('/api/content/sets', async (request, reply) => {
         const active = store();
-        if (!active) return notConfigured(reply);
+        if (!active) return unavailableFragment(request, reply, 'content-sets');
         const sets = await active.listSets();
         if (request.headers['hx-request']) return reply.type('text/html').send(renderSets(sets));
         return { sets };
@@ -234,7 +257,7 @@ export async function registerContentRoutes(app: FastifyInstance, options: Conte
 
     app.get('/api/content/templates', async (request, reply) => {
         const active = store();
-        if (!active) return notConfigured(reply);
+        if (!active) return unavailableFragment(request, reply, 'caption-templates');
         const templates = await active.listTemplates();
         if (request.headers['hx-request']) return reply.type('text/html').send(renderTemplates(templates));
         return { templates };
@@ -278,7 +301,7 @@ export async function registerContentRoutes(app: FastifyInstance, options: Conte
 
     app.get('/api/drip/rules', async (request, reply) => {
         const active = store();
-        if (!active) return notConfigured(reply);
+        if (!active) return unavailableFragment(request, reply, 'drip-rules');
         const rules = await active.listRules();
         const views = await Promise.all(rules.map(async (rule) => ({
             rule, plans: await active.upcomingPlans(rule.id, 20),
@@ -303,8 +326,16 @@ export async function registerContentRoutes(app: FastifyInstance, options: Conte
         const current = await active.rule(request.params.id);
         if (!current) return reply.code(404).send({ error: 'Drip rule not found' });
         try {
-            const updated = await active.updateRule(request.params.id, parseRulePatch(request.body, current));
-            return updated ?? reply.code(404).send({ error: 'Drip rule not found' });
+            const patch = parseRulePatch(request.body, current);
+            const updated = await active.updateRule(request.params.id, patch);
+            if (!updated) return reply.code(404).send({ error: 'Drip rule not found' });
+            // An edited window or source has to reach today's queue: drop the
+            // posts this rule planned but has not yet run, and let the next
+            // planning pass rebuild them from the new settings.
+            const released = affectsPlanning(current, updated)
+                ? await replanRule({ store: active, scheduler: options.scheduler, ruleId: updated.id })
+                : { cancelled: 0, released: 0 };
+            return { ...updated, replanned: released };
         } catch (error) {
             return badRequest(reply, error);
         }

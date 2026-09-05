@@ -39,6 +39,10 @@ export function buildNormalizeArgs(options: NormalizeOptions): string[] {
     return [
         '-hide_banner', '-nostdin', '-loglevel', 'error', '-y',
         '-i', options.input,
+        // A cover-art still, a second angle or a data stream would otherwise be
+        // picked up by the implicit stream selection and confuse -vf; take the
+        // first video stream and, when there is one, the first audio stream.
+        '-map', '0:v:0', '-map', '0:a:0?',
         '-t', String(seconds),
         '-vf', `${buildScaleFilter(width, height, options.crop === true)},setsar=1`,
         '-c:v', 'libx264', '-profile:v', 'high', '-level', '4.0', '-pix_fmt', 'yuv420p',
@@ -56,12 +60,23 @@ export function buildProbeArgs(input: string): string[] {
 
 export interface PosterOptions { input: string; output: string; atSeconds?: number; width?: number; height?: number }
 
+/**
+ * Where to grab the poster frame. A fixed one second seeks past the end of a
+ * short clip and ffmpeg then writes no frame at all, so anything under two
+ * seconds is sampled at its midpoint and a still is sampled at zero.
+ */
+export function posterSecondsFor(durationMs?: number): number {
+    if (!durationMs || !Number.isFinite(durationMs) || durationMs <= 0) return 0;
+    return Math.max(0, Math.min(1, Math.round(durationMs / 2) / 1000));
+}
+
 export function buildPosterArgs(options: PosterOptions): string[] {
     const width = options.width ?? 360;
     const height = options.height ?? 640;
+    const at = Number.isFinite(options.atSeconds) ? Math.max(0, options.atSeconds as number) : 1;
     return [
         '-hide_banner', '-nostdin', '-loglevel', 'error', '-y',
-        '-ss', String(options.atSeconds ?? 1),
+        '-ss', String(at),
         '-i', options.input,
         '-frames:v', '1',
         '-vf', buildScaleFilter(width, height, false),
@@ -77,22 +92,50 @@ export interface MediaProbe {
     hasAudio: boolean;
 }
 
-interface ProbeStream { codec_type?: string; width?: number; height?: number; duration?: string; codec_name?: string }
+interface ProbeSideData { rotation?: number | string }
+interface ProbeStream {
+    codec_type?: string; width?: number; height?: number; duration?: string; codec_name?: string;
+    tags?: Record<string, string>; side_data_list?: ProbeSideData[];
+}
 interface ProbeOutput { streams?: ProbeStream[]; format?: { duration?: string } }
+
+/** ffprobe reports an absent duration as the literal string "N/A", which `Number` turns into NaN. */
+function seconds(value: string | undefined): number | undefined {
+    if (value === undefined) return undefined;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+/**
+ * A rotated recording (an iPhone held sideways, EXIF orientation on a still)
+ * carries its display matrix beside the stream; ffmpeg auto-rotates on decode,
+ * so the presented frame is the transposed one. Report what the player will
+ * show, not what the coded frame measures.
+ */
+export function rotationOf(stream: ProbeStream | undefined): 0 | 90 | 180 | 270 {
+    const raw = stream?.side_data_list?.find((entry) => entry.rotation !== undefined)?.rotation
+        ?? stream?.tags?.rotate;
+    const degrees = Number(raw ?? 0);
+    if (!Number.isFinite(degrees)) return 0;
+    const normalized = ((Math.round(degrees) % 360) + 360) % 360;
+    return normalized === 90 || normalized === 180 || normalized === 270 ? normalized : 0;
+}
 
 /** A single frame with no duration is a still, however ffprobe labels the stream. */
 export function interpretProbe(output: ProbeOutput): MediaProbe {
     const streams = output.streams ?? [];
     const video = streams.find((stream) => stream.codec_type === 'video');
     const hasAudio = streams.some((stream) => stream.codec_type === 'audio');
-    const seconds = Number(output.format?.duration ?? video?.duration ?? '');
+    const duration = seconds(output.format?.duration) ?? seconds(video?.duration) ?? 0;
     const stillCodec = ['mjpeg', 'png', 'bmp', 'gif', 'webp', 'tiff'].includes(video?.codec_name ?? '');
-    const isVideo = Number.isFinite(seconds) && seconds > 0 && !(stillCodec && seconds < 0.2);
+    const isVideo = duration > 0 && !(stillCodec && duration < 0.2);
+    const sideways = rotationOf(video) === 90 || rotationOf(video) === 270;
+    const coded = { width: video?.width ?? 0, height: video?.height ?? 0 };
     return {
         kind: isVideo ? 'video' : 'image',
-        width: video?.width ?? 0,
-        height: video?.height ?? 0,
-        ...(isVideo ? { durationMs: Math.round(seconds * 1000) } : {}),
+        width: sideways ? coded.height : coded.width,
+        height: sideways ? coded.width : coded.height,
+        ...(isVideo ? { durationMs: Math.round(duration * 1000) } : {}),
         hasAudio,
     };
 }
@@ -178,7 +221,13 @@ export function setMediaTools(tools: MediaTools | null): void {
 export async function probeMedia(input: string): Promise<MediaProbe> {
     const { ffprobe } = await resolveMediaTools();
     const { stdout } = await run(ffprobe, buildProbeArgs(input), { timeout: 120_000, maxBuffer: 8 * 1024 * 1024 });
-    return interpretProbe(JSON.parse(stdout) as ProbeOutput);
+    let parsed: ProbeOutput;
+    try {
+        parsed = JSON.parse(stdout) as ProbeOutput;
+    } catch {
+        throw new Error(`ffprobe did not return JSON for ${input}; the file is probably not media`);
+    }
+    return interpretProbe(parsed);
 }
 
 export async function normalizeVideo(options: NormalizeOptions): Promise<void> {
