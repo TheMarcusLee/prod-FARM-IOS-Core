@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import nodePath from 'node:path';
 
 import { runCommand } from '../health.ts';
 import type { JobDefinition } from '../jobs.ts';
@@ -107,6 +108,22 @@ export async function wdaPrepareChecks(
         label: 'WDA_BUNDLE_ID',
         ok: bundleId.length > 0,
         detail: bundleId ? bundleId : 'Empty. Settings → Devices → WDA_BUNDLE_ID.',
+    });
+
+    // prepare.ts patches and builds WebDriverAgent out of the Appium XCUITest
+    // driver's own checkout, which `npm run appium:install-driver` puts under
+    // .appium2. Without it the build fails on an unresolved path, so say so here.
+    const driverPath = nodePath.resolve(
+        context.env.XCUITEST_DRIVER_PATH
+        ?? nodePath.join(context.paths.repoRoot, '.appium2/node_modules/appium-xcuitest-driver'),
+    );
+    const driverPresent = existsSync(nodePath.join(driverPath, 'node_modules/appium-webdriveragent'));
+    checks.push({
+        label: 'XCUITest driver',
+        ok: driverPresent,
+        detail: driverPresent
+            ? driverPath
+            : `Not at ${driverPath}. Run "npm run appium:install-driver" in the farm checkout, or set XCUITEST_DRIVER_PATH.`,
     });
 
     if (target.kind === 'all') {

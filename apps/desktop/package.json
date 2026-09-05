@@ -9,11 +9,12 @@
     "build": "node scripts/build.mjs",
     "dev": "npm run build && electron .",
     "smoke": "npm run build && electron . --smoke",
-    "dist": "npm run build && electron-builder --mac --config electron-builder.yml",
-    "pack": "npm run build && electron-builder --dir --config electron-builder.yml",
+    "dist": "npm run build && npm run build:farm && electron-builder --mac --config electron-builder.yml",
+    "pack": "npm run build && npm run build:farm && electron-builder --dir --config electron-builder.yml",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.ts",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test",
+    "build:farm": "node scripts/build-farm.mjs"
   },
   "engines": {
     "node": ">=22"

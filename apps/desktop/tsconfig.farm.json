@@ -1,0 +1,16 @@
+{
+    // Compiles the farm's TypeScript into apps/desktop/farm-dist, so the packaged
+    // app can run it with plain `node` and ship neither tsx nor the sources.
+    // The repository's own tsconfig.json stays `noEmit` — it is the type check.
+    "extends": "../../tsconfig.json",
+    "compilerOptions": {
+        "noEmit": false,
+        "rootDir": "../..",
+        "outDir": "farm-dist",
+        "declaration": false,
+        "sourceMap": true,
+        "inlineSources": false,
+        "removeComments": true
+    },
+    "include": ["../../src/**/*.ts"]
+}
