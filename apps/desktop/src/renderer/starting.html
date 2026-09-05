@@ -4,11 +4,15 @@
      frame or execute anything remote. `file:` sits beside 'self' because a
      file:// document has an opaque origin, for which 'self' matches nothing. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data:; font-src 'self' file:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'; object-src 'none'">
-<title>Phone Farm</title>
+<title>Backline</title>
 <link rel="stylesheet" href="app.css">
-<div class="center">
-    <h1>Starting the Phone Farm services…</h1>
-    <p class="summary" id="summary">Waiting for the dashboard to answer /health.</p>
-    <p><button id="services">Open the Services panel</button></p>
+<div class="bl-starting">
+    <span class="bl-mark bl-mark-lg" id="mark"></span>
+    <h1>Starting the rig…</h1>
+    <p class="bl-hint" id="summary">Waiting for the dashboard to answer.</p>
+    <div class="bl-panel">
+        <div class="bl-panel-body"><ul id="checklist"></ul></div>
+    </div>
+    <button class="bl-btn" id="services">Open the Rig window</button>
 </div>
 <script type="module" src="starting.js"></script>

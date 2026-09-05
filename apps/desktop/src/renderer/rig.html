@@ -1,0 +1,44 @@
+<meta charset="utf-8">
+<!-- The renderer only ever loads its own bundled files. A `default-src 'none'`
+     policy means a stray URL in a log line or a service detail can never fetch,
+     frame or execute anything remote. `file:` sits beside 'self' because a
+     file:// document has an opaque origin, for which 'self' matches nothing. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data:; font-src 'self' file:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'; object-src 'none'">
+<title>Rig</title>
+<link rel="stylesheet" href="app.css">
+<div class="bl-window">
+    <header class="bl-head">
+        <span class="bl-mark" id="mark"></span>
+        <h1>Rig</h1>
+        <span class="bl-state" id="header-state">
+            <span class="bl-dot" id="header-dot"></span>
+            <span id="header-text">Looking at the rig…</span>
+        </span>
+        <span class="bl-spacer"></span>
+        <button class="bl-btn bl-btn-icon" id="settings" title="Settings" aria-label="Settings"></button>
+        <button class="bl-btn" id="open-dashboard">Open dashboard</button>
+    </header>
+    <div class="bl-rig">
+        <div class="bl-col bl-col-scroll">
+            <div id="jobs" class="bl-col"></div>
+            <div id="list" class="bl-col"></div>
+        </div>
+        <div class="bl-col">
+            <div id="live"></div>
+            <div class="bl-actions-main">
+                <button class="bl-btn" id="restart-all">Restart all</button>
+                <button class="bl-btn" id="prepare-iphones">Prepare iPhones</button>
+                <button class="bl-btn" id="diagnostics">Diagnostics</button>
+            </div>
+            <div class="bl-actions-more">
+                <button class="bl-btn bl-btn-sm" id="start-all">Start all</button>
+                <button class="bl-btn bl-btn-sm" id="stop-all">Stop all</button>
+                <button class="bl-btn bl-btn-sm" id="copy-dashboard">Copy dashboard link</button>
+                <button class="bl-btn bl-btn-sm" id="copy-mcp">Copy MCP config</button>
+                <button class="bl-btn bl-btn-sm" id="data-folder">Data folder</button>
+            </div>
+            <span class="bl-status" id="action-status"></span>
+        </div>
+    </div>
+</div>
+<script type="module" src="rig.js"></script>

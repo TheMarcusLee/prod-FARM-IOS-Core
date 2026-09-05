@@ -1,4 +1,4 @@
-import type { FleetSnapshot, JobSnapshot, ServiceSnapshot } from '../main/types.ts';
+import type { FleetSnapshot, JobSnapshot, LogLine, ServiceSnapshot } from '../main/types.ts';
 import type { Settings } from '../main/settings.ts';
 
 export interface FarmBridge {
@@ -32,4 +32,4 @@ declare global {
     interface Window { farm: FarmBridge }
 }
 
-export type { FleetSnapshot, JobSnapshot, ServiceSnapshot, Settings };
+export type { FleetSnapshot, JobSnapshot, LogLine, ServiceSnapshot, Settings };
