@@ -169,6 +169,13 @@ Execution and schedule events come from the optional `onEvent` hook on
 `/devices`; stuck executions are swept on the same timer, every 30 s, and each
 one is reported once for as long as it stays stuck.
 
+`execution.stuck` is only the warning. The **worker** sweeps the same threshold
+once a minute and gives up on what it finds: the execution is marked `failed`
+with `Timed out past its execution window` (which raises `execution.failed`),
+and if this worker is the one running it, its plugin process is killed so the
+device queue is released. The pair therefore arrives warning-then-failure, and
+nothing is left at `running` for ever when the worker that owned it died.
+
 The hook never throws and never blocks: a failed insert or a malformed
 lifecycle signal costs the timeline row, not the scheduled task. pg-boss retries
 a job by running it again, so the worker starts an attempt per try;
