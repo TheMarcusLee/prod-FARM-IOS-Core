@@ -1,4 +1,4 @@
-import type { JsonObject, RegisteredDevice } from '@git-agni/phone-farm-core';
+import type { JsonObject, RegisteredDevice } from '@git-agni/backline';
 
 export const TIKTOK_PLUGIN_ID = 'com.git-agni.tiktok';
 

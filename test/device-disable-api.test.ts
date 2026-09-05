@@ -37,9 +37,14 @@ test('PATCH toggles disabled, scheduling is blocked, and the fragment lists it s
     });
     assert.equal(blocked.statusCode, 409);
 
-    const fragment = await inject(app, { method: 'GET', url: '/api/fragments/devices' });
-    assert.match(fragment.body, /Disconnected devices \(1\)/);
-    assert.match(fragment.body, /data-toggle-device="udid-a" data-disabled="false"/);
+    // A disabled phone stays in the registry, marked disabled, with the button that brings it back.
+    const registry = await inject(app, { method: 'GET', url: '/devices' });
+    assert.match(registry.body, /data-device-row data-udid="udid-a"/);
+    assert.match(registry.body, /bl-state disabled/);
+    assert.match(registry.body, /data-device-disable="false">Enable</);
+    // And it is not on the wall as a live phone.
+    const wall = await inject(app, { method: 'GET', url: '/' });
+    assert.match(wall.body, /data-udid="udid-a" data-slot="01" data-state="disabled"/);
 
     const reenabled = await inject(app, { method: 'PATCH', url: '/api/devices/udid-a', payload: { disabled: false } });
     assert.equal(reenabled.statusCode, 200);

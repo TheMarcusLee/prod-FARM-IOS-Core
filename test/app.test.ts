@@ -60,15 +60,26 @@ test('a configured auth provider adds a Log out link to the nav', async (context
     for (const url of ['/', '/devices/register']) {
         const res = await inject(app, { method: 'GET', url });
         assert.equal(res.statusCode, 200, url);
-        assert.match(res.body, /href="\/auth\/logout"[^>]*>Log out</, url);
+        assert.match(res.body, /href="\/auth\/logout"[^>]*>(?:<svg[\s\S]*?<\/svg>)?Log out</, url);
         assert.doesNotMatch(res.body, /__AUTH_NAV__/, url);
-        assert.match(res.body, /\/assets\/styles\.css\?v=[\w-]+/, url);
+    }
+    // Every shell-rendered page loads the token stylesheet and the shared page script.
+    for (const url of ['/', '/devices', '/devices/register', '/rig', '/alerts', '/accounts', '/settings']) {
+        const res = await inject(app, { method: 'GET', url });
+        assert.equal(res.statusCode, 200, url);
+        assert.match(res.body, /\/assets\/backline\.css/, url);
+        assert.match(res.body, /\/assets\/shell\.js\?v=[\w-]+/, url);
     }
 
-    const css = await inject(app, { method: 'GET', url: '/assets/styles.css?v=x' });
+    const css = await inject(app, { method: 'GET', url: '/assets/backline.css?v=x' });
     assert.match(String(css.headers['cache-control']), /immutable/);
-    const cssBare = await inject(app, { method: 'GET', url: '/assets/styles.css' });
+    const cssBare = await inject(app, { method: 'GET', url: '/assets/backline.css' });
     assert.match(String(cssBare.headers['cache-control']), /no-cache/);
+    // One route serves every compiled page script, so a new page needs no new route.
+    const wall = await inject(app, { method: 'GET', url: '/assets/wall.js' });
+    assert.equal(wall.statusCode, 200);
+    assert.match(String(wall.headers['content-type']), /javascript/);
+    assert.equal((await inject(app, { method: 'GET', url: '/assets/nope.js' })).statusCode, 404);
 });
 
 test('a plugin can contribute nav links and register its own routes', async (context) => {
@@ -89,7 +100,7 @@ test('a plugin can contribute nav links and register its own routes', async (con
     for (const url of ['/', '/devices/register']) {
         const res = await inject(app, { method: 'GET', url });
         assert.equal(res.statusCode, 200, url);
-        assert.match(res.body, /href="\/stats"[^>]*>Stats</, url);
+        assert.match(res.body, /href="\/stats"[^>]*>(?:<svg[\s\S]*?<\/svg>)?Stats</, url);
         assert.doesNotMatch(res.body, /__PLUGIN_NAV__/, url);
     }
 
@@ -144,7 +155,7 @@ test('serves and drives the public registration wizard', async (context) => {
 
     const page = await inject(app, { method: 'GET', url: '/devices/register' });
     assert.equal(page.statusCode, 200);
-    assert.match(page.body, /Register an? (?:iOS )?device/i);
+    assert.match(page.body, /Register a device/i);
 
     const candidates = await inject(app, { method: 'GET', url: '/api/device-registrations/candidates' });
     assert.equal(candidates.statusCode, 200);

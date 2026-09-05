@@ -73,7 +73,7 @@ export function slackPayload(event: FarmEvent, publicBaseUrl = ''): JsonObject {
     if (link) {
         blocks.push({
             type: 'actions',
-            elements: [{ type: 'button', text: { type: 'plain_text', text: 'Open in Phone Farm' }, url: link }],
+            elements: [{ type: 'button', text: { type: 'plain_text', text: 'Open in Backline' }, url: link }],
         });
     }
     return { text: truncate(`${event.severity.toUpperCase()}: ${event.title}`, SLACK_LIMITS.text), blocks };

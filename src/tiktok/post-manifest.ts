@@ -1,4 +1,4 @@
-import type { DeviceIdentity } from '@git-agni/phone-farm-core';
+import type { DeviceIdentity } from '@git-agni/backline';
 
 export interface PostManifest {
     device: DeviceIdentity;

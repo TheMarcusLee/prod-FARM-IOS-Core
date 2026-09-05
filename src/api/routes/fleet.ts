@@ -1,10 +1,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
-import type { ExecutionRow } from '../../database/schema.js';
 import { connectedFleetUdids, wdaServiceStatuses } from '../../fleet/connectivity.js';
 import { loadRegisteredDevices, type RegisteredDevice } from '../../devices/registry.js';
 import type { DeviceConnectionStatus } from '../../devices/connection-manager.js';
-import { driverKindOf, platformOf } from '../../drivers/select.js';
 import { createBulkSchedules, parseBulkRequest } from '../../fleet/bulk.js';
 import {
     clampLimit, createEventStore, isEventKind, isEventSeverity, serializeEvent,
@@ -13,7 +11,6 @@ import {
 import {
     createDeviceMonitorState, diffDeviceStatuses, longOfflineDevices, type DeviceMonitorState,
 } from '../../fleet/device-monitor.js';
-import { renderFleetPage, type FleetCard } from '../../fleet/page.js';
 import { createEventStreamHub, type EventStreamHub } from '../../fleet/sse-hub.js';
 import { createEventRecorder, type EventRecorder } from '../../fleet/recorder.js';
 import { deviceState, stuckExecutions, summarizeFleet } from '../../fleet/summary.js';
@@ -79,16 +76,7 @@ function throttled<T>(ttlMs: number, now: () => number, load: () => Promise<T>):
     };
 }
 
-function fleetTags(devices: readonly RegisteredDevice[]): string[] {
-    return [...new Set(devices.flatMap((device) => device.tags ?? []))].sort();
-}
 
-function accountsOf(device: RegisteredDevice): string[] {
-    return Object.values(device.pluginData).flatMap((value) => {
-        const candidate = value?.accounts;
-        return Array.isArray(candidate) ? candidate.filter((entry): entry is string => typeof entry === 'string') : [];
-    });
-}
 
 
 function parseEventQuery(query: Record<string, string | undefined>): EventQuery {
@@ -239,7 +227,7 @@ export async function registerFleetRoutes(app: FastifyInstance, options: FleetRo
         }
         const probe: FarmEvent = {
             id: 0, kind: 'digest.daily', severity: 'info', deviceUdid: null, executionId: null, scheduleId: null,
-            title: 'Phone Farm notification test',
+            title: 'Backline notification test',
             detail: { test: true, sentAt: clock().toISOString() },
             createdAt: clock(),
         };
@@ -285,39 +273,8 @@ export async function registerFleetRoutes(app: FastifyInstance, options: FleetRo
         return summarizeFleet({ devices, executions, schedules, now: clock() });
     });
 
-    app.get('/fleet', async (_request, reply) => {
-        const now = clock();
-        const [devices, { executions, schedules }] = await Promise.all([fleetState(), schedulerState()]);
-        const recent = await (eventStore()?.list({ limit: 300 }) ?? Promise.resolve([] as FarmEvent[]));
-        const latestEvent = new Map<string, FarmEvent>();
-        for (const event of recent) {
-            if (event.deviceUdid && !latestEvent.has(event.deviceUdid)) latestEvent.set(event.deviceUdid, event);
-        }
-        const activeByDevice = new Map<string, ExecutionRow>();
-        for (const execution of executions) {
-            if (!['queued', 'running'].includes(execution.status)) continue;
-            const held = activeByDevice.get(execution.deviceUdid);
-            if (!held || held.status !== 'running') activeByDevice.set(execution.deviceUdid, execution);
-        }
-        const nextByDevice = new Map<string, Date>();
-        for (const schedule of schedules) {
-            if (schedule.status !== 'active' || !schedule.nextRunAt) continue;
-            const held = nextByDevice.get(schedule.deviceUdid);
-            if (!held || schedule.nextRunAt < held) nextByDevice.set(schedule.deviceUdid, schedule.nextRunAt);
-        }
-        const cards: FleetCard[] = devices.map(({ device, state }) => ({
-            device, state, platform: platformOf(device), driver: driverKindOf(device),
-            tags: device.tags ?? [], accounts: accountsOf(device),
-            ...(activeByDevice.get(device.udid) ? { current: activeByDevice.get(device.udid)! } : {}),
-            ...(nextByDevice.get(device.udid) ? { nextRunAt: nextByDevice.get(device.udid)! } : {}),
-            ...(latestEvent.get(device.udid) ? { lastEvent: latestEvent.get(device.udid)! } : {}),
-        }));
-        return reply.type('text/html').send(renderFleetPage({
-            cards,
-            summary: summarizeFleet({ devices, executions, schedules, now }),
-            tags: fleetTags(devices.map(({ device }) => device)),
-        }));
-    });
+    // The wall at / replaced the old /fleet grid; the bookmark still works.
+    app.get('/fleet', async (_request, reply) => reply.redirect('/', 302));
 
     // Background observers. They only run in a process with a real scheduler
     // database; a unit test that injects a fake repository gets none of them.

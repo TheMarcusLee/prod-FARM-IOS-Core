@@ -196,8 +196,8 @@ test('no surface that serialises a device carries the bridge token', async (cont
     const app = await plainApp(context);
 
     // Everything that turns a RegisteredDevice into a response: the device API, the mobile
-    // bootstrap, the fleet page and the MCP tools.
-    for (const url of ['/api/devices', '/api/devices/discovered', '/api/mobile/bootstrap', '/fleet']) {
+    // bootstrap, the Control Center, the device registry and the MCP tools.
+    for (const url of ['/api/devices', '/api/devices/discovered', '/api/mobile/bootstrap', '/', '/devices']) {
         const response = await inject(app, { method: 'GET', url });
         assert.equal(response.statusCode, 200, url);
         assert.doesNotMatch(response.body, /super-secret-bridge/, url);

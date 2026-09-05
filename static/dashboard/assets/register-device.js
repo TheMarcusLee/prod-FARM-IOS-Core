@@ -37,6 +37,15 @@ const logs = document.querySelector('#registration-logs');
 const authorize = document.querySelector('#authorize-registration');
 const driverField = document.querySelector('#registration-driver-field');
 const driverInput = document.querySelector('#registration-driver');
+const driverSegment = document.querySelector('#registration-driver-seg');
+/** The driver picker is a segmented control over a hidden input, so the form still posts a value. */
+function setDriver(value) {
+    driverInput.value = value;
+    for (const button of driverSegment.querySelectorAll('[data-driver]')) {
+        button.setAttribute('aria-pressed', String(button.dataset.driver === value));
+    }
+    bridgeField.hidden = value !== 'a11y-bridge';
+}
 const bridgeField = document.querySelector('#registration-bridge-field');
 const bridgeInput = document.querySelector('#registration-bridge-url');
 const profileField = document.querySelector('#registration-profile-field');
@@ -64,29 +73,29 @@ function showError(error) {
 }
 async function candidates() {
     showError();
-    candidateList.textContent = 'Checking connected devices…';
+    candidateList.textContent = 'Looking for phones…';
     try {
         const data = await request('/api/device-registrations/candidates');
         if (!data.devices.length) {
-            candidateList.innerHTML = '<div class="empty-state"><h3>No unregistered device is readable</h3><p>Connect by USB, unlock the device, accept Trust, and click Recheck.</p></div>';
+            candidateList.innerHTML = '<div class="bl-empty"><span>No unregistered phone is readable. Connect it by USB, unlock it, accept the trust prompt, then check again.</span></div>';
             return;
         }
         candidateList.replaceChildren(...data.devices.map((device) => {
             const card = document.createElement('article');
-            card.className = 'candidate-card';
+            card.className = 'bl-candidate';
             const copy = document.createElement('div');
             const heading = document.createElement('h3');
             heading.textContent = device.name;
             const badge = document.createElement('span');
-            badge.className = `badge platform-${platformOf(device)}`;
+            badge.className = 'bl-chip bl-chip-sm';
             badge.textContent = platformOf(device) === 'android' ? 'Android' : 'iOS';
             const meta = document.createElement('p');
             meta.textContent = `${osLabel(device)} · ${device.udid}`;
             copy.append(heading, badge, meta);
             const button = document.createElement('button');
-            button.className = 'button primary';
+            button.className = 'bl-btn bl-btn-primary';
             button.type = 'button';
-            button.textContent = 'Set up this device';
+            button.textContent = 'Set this one up';
             button.addEventListener('click', () => void create(device.udid));
             card.append(copy, button);
             return card;
@@ -121,9 +130,9 @@ function render(snapshot) {
     bridgeField.hidden = !android || snapshot.driver !== 'a11y-bridge';
     profileInput.required = !android;
     prepareButton.textContent = android ? 'Set up the driver' : 'Register and prepare WDA';
-    verifyButton.textContent = android ? 'Verify capture, input, and TikTok' : 'Verify Appium, video, touch, and accounts';
-    if (android && document.activeElement !== driverInput)
-        driverInput.value = snapshot.driver ?? 'adb';
+    verifyButton.textContent = android ? 'Verify capture, input and TikTok' : 'Verify Appium, video, touch and accounts';
+    if (android)
+        setDriver(snapshot.driver ?? 'adb');
     if (android && document.activeElement !== bridgeInput)
         bridgeInput.value = snapshot.bridgeUrl ?? '';
     if (document.activeElement !== nameInput)
@@ -146,9 +155,9 @@ function render(snapshot) {
     checks.replaceChildren(...snapshot.checkNames.map((key) => {
         const value = snapshot.checks[key] ?? { state: 'pending', message: 'Not checked yet', updatedAt: '' };
         const row = document.createElement('article');
-        row.className = `registration-check ${value.state}`;
+        row.className = `bl-step ${value.state}`;
         const state = document.createElement('span');
-        state.className = `check-mark ${value.state}`;
+        state.className = 'bl-step-mark';
         state.textContent = value.state === 'passed' ? '✓' : value.state === 'checking' ? '…' : '!';
         const copy = document.createElement('div');
         const heading = document.createElement('h3');
@@ -206,8 +215,10 @@ prepareButton.addEventListener('click', () => {
     void action('prepare');
 });
 verifyButton.addEventListener('click', () => void action('verify'));
-driverInput.addEventListener('change', () => {
-    bridgeField.hidden = driverInput.value !== 'a11y-bridge';
+driverSegment.addEventListener('click', (event) => {
+    const button = event.target?.closest('[data-driver]');
+    if (button)
+        setDriver(button.dataset.driver ?? 'adb');
 });
 finalizeButton.addEventListener('click', () => void action('finalize'));
 document.querySelector('#action-cancel').addEventListener('click', async () => {

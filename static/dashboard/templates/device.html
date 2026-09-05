@@ -1,276 +1,298 @@
-<!doctype html>
-<html lang="en">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>iPhone · Handler</title>
-    <link rel="stylesheet" href="/assets/styles.css">
-    <script src="/assets/htmx.min.js" defer></script>
-</head>
-<body>
-    <header class="topbar">
-        <div class="topbar-inner">
-            <div class="brand">
-                <a class="brand-name" href="/">iOS Farm</a>
-                <a class="brand-by" href="https://gethandler.ai" target="_blank" rel="noopener">by Handler</a>
+<div class="bl-page bl-device" data-device-udid="__DEVICE_UDID__">
+    <div class="bl-device-col">
+        <section class="bl-panel">
+            <div class="bl-panel-head">Live screen<span class="bl-spacer"></span>
+                <button id="refresh" class="bl-btn bl-btn-sm" type="button">Reconnect</button>
+                <button id="toggle" class="bl-btn bl-btn-sm" type="button">Pause</button>
             </div>
-            <nav class="topbar-nav">
-                <a class="crumb" href="/">Devices</a>
-                <a class="crumb" href="/tasks">Tasks</a>
-                <button id="open-tasks" class="button secondary" type="button">Tasks &amp; schedules</button>
-                <button id="open-accounts" class="button secondary" type="button">Accounts</button>
-                <button id="open-passcode" class="button secondary" type="button">Passcode</button>
-                <button id="open-calibrate" class="button secondary" type="button">Touch points</button>
-                <button id="open-remove" class="button danger" type="button">Remove device</button>
-                __PLUGIN_NAV____AUTH_NAV__
-            </nav>
-        </div>
-    </header>
-    <main class="shell device-shell" data-device-udid="__DEVICE_UDID__">
-        <section id="device-summary" class="device-summary loading-card"
-            hx-get="/api/devices/__DEVICE_UDID__/fragments/summary" hx-trigger="load" hx-swap="outerHTML">
-            <span class="spinner" aria-hidden="true"></span>Loading device details…
+            <div class="bl-panel-body">
+                <div class="bl-device-screen">
+                    <div class="bl-viewer-screen" data-live="1"><img id="screen" alt="Live screen" draggable="false"></div>
+                    <div class="bl-hw" role="group" aria-label="Hardware buttons">
+                        <button type="button" data-remote-action="home" aria-label="Home" title="Home"><svg class="bl-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5"></circle></svg></button>
+                        <button type="button" data-remote-action="up" aria-label="Swipe up" title="Swipe up"><svg class="bl-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3M4 7l4-4 4 4"></path></svg></button>
+                        <button type="button" data-remote-action="down" aria-label="Swipe down" title="Swipe down"><svg class="bl-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M4 9l4 4 4-4"></path></svg></button>
+                        <button type="button" data-remote-action="left" aria-label="Swipe left" title="Swipe left"><svg class="bl-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13 8H3M7 4L3 8l4 4"></path></svg></button>
+                        <button type="button" data-remote-action="right" aria-label="Swipe right" title="Swipe right"><svg class="bl-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"></path></svg></button>
+                        <button type="button" data-remote-action="volumeUp" aria-label="Volume up" title="Volume up"><svg class="bl-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"></path></svg></button>
+                        <button type="button" data-remote-action="volumeDown" aria-label="Volume down" title="Volume down"><svg class="bl-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10"></path></svg></button>
+                        <button type="button" data-remote-action="lock" aria-label="Power off" title="Power off"><svg class="bl-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v6M4.5 5a5 5 0 1 0 7 0"></path></svg></button>
+                        <button type="button" data-remote-action="wake" aria-label="Power on" title="Power on"><svg class="bl-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5"></circle><path d="M8 5.5v5"></path></svg></button>
+                        <button type="button" data-remote-action="unlock" aria-label="Unlock" title="Unlock"><svg class="bl-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="7" width="8" height="7" rx="1.5"></rect><path d="M6 7V5a2 2 0 0 1 3.6-1.2"></path></svg></button>
+                    </div>
+                </div>
+                <div id="status" class="bl-state"><span class="bl-dot"></span><span>Waiting for this phone</span></div>
+                <p class="bl-hint">Click to tap and drag to swipe. Remote input pauses while a task is running.</p>
+            </div>
         </section>
-        <div class="workspace-grid">
-            <section class="panel remote-panel">
-                <div class="section-heading">
-                    <div><span class="eyebrow">Live control</span><h2>Device screen</h2></div>
-                    <div class="inline-actions">
-                        <button id="refresh" class="icon-button" type="button">Reconnect</button>
-                        <button id="toggle" class="icon-button" type="button">Pause</button>
-                    </div>
-                </div>
-                <div class="stream-workspace">
-                    <div class="phone"><img id="screen" alt="Live screen from the connected iPhone" draggable="false"></div>
-                    <div class="remote-controls" aria-label="Device navigation controls">
-                        <div class="swipe-pad">
-                            <button class="remote-button up" type="button" data-remote-action="up" aria-label="Swipe up">↑</button>
-                            <button class="remote-button left" type="button" data-remote-action="left" aria-label="Swipe left">←</button>
-                            <span class="pad-center" aria-hidden="true"></span>
-                            <button class="remote-button right" type="button" data-remote-action="right" aria-label="Swipe right">→</button>
-                            <button class="remote-button down" type="button" data-remote-action="down" aria-label="Swipe down">↓</button>
-                        </div>
-                        <div class="system-controls">
-                            <button class="remote-button labeled" type="button" data-remote-action="home"><span aria-hidden="true">⌂</span> Home</button>
-                            <button class="remote-button labeled" type="button" data-remote-action="lock"><span aria-hidden="true">◼</span> Power off</button>
-                            <button class="remote-button labeled" type="button" data-remote-action="wake"><span aria-hidden="true">◻</span> Power on</button>
-                            <button class="remote-button labeled" type="button" data-remote-action="unlock"><span aria-hidden="true">🔓</span> Unlock</button>
-                            <button class="remote-button labeled" type="button" data-remote-action="volumeUp"><span aria-hidden="true">＋</span> Volume up</button>
-                            <button class="remote-button labeled" type="button" data-remote-action="volumeDown"><span aria-hidden="true">−</span> Volume down</button>
-                        </div>
-                    </div>
-                </div>
-                <div id="status" class="stream-status"><span class="dot"></span><span>Waiting for device details…</span></div>
-                <p class="hint">Click to tap and drag to swipe. Remote input pauses while a doomscroll session is running.</p>
-            </section>
-            <div class="action-stack">
-                <section class="panel">
-                    <div class="section-heading">
-                        <div><span class="eyebrow">TikTok</span><h2>Doomscroll</h2></div>
-                        <button id="open-doomscroll" class="button secondary" type="button">Configure</button>
-                    </div>
-                    <p>Run a timed, personality-driven doomscrolling session on this device.</p>
+
+        <section class="bl-panel">
+            <div class="bl-panel-head">This phone<span class="bl-spacer"></span>
+                <button id="open-calibrate" class="bl-btn bl-btn-sm" type="button">Touch points</button>
+            </div>
+            <div class="bl-panel-body">
+                <section id="device-summary" hx-get="/api/devices/__DEVICE_UDID__/fragments/summary" hx-trigger="load" hx-swap="outerHTML">
+                    <p class="bl-muted">Reading this phone…</p>
                 </section>
-                <section class="panel post-card">
-                    <div><span class="eyebrow">TikTok</span><h2>Create a post</h2></div>
-                    <p>Upload a video or ordered slideshow, then save it as a draft or publish it.</p>
-                    <button id="open-post" class="button secondary" type="button">Prepare post</button>
+            </div>
+        </section>
+
+        <section class="bl-panel">
+            <div class="bl-panel-head">Accounts<span class="bl-spacer"></span>
+                <button id="open-accounts" class="bl-btn bl-btn-sm" type="button">Edit</button>
+                <button id="open-passcode" class="bl-btn bl-btn-sm" type="button">Passcode</button>
+            </div>
+            <div class="bl-panel-body">
+                <p class="bl-muted">Handles signed in on this phone: <span id="device-account-summary">__TIKTOK_ACCOUNTS_VALUE__</span></p>
+            </div>
+        </section>
+    </div>
+
+    <div class="bl-device-col">
+        <section class="bl-panel">
+            <div class="bl-panel-head">Run something now<span class="bl-spacer"></span>
+                <button id="open-tasks" class="bl-btn bl-btn-sm" type="button">All tasks</button>
+            </div>
+            <div class="bl-panel-body bl-actions">
+                <button id="open-doomscroll" class="bl-btn" type="button">Warm up</button>
+                <button id="open-post" class="bl-btn" type="button">Prepare a post</button>
+            </div>
+        </section>
+
+        <section class="bl-panel">
+            <div class="bl-panel-head">Activity</div>
+            <div class="bl-panel-body">
+                <section id="device-activity" hx-get="/api/devices/__DEVICE_UDID__/fragments/activity" hx-trigger="load" hx-swap="outerHTML">
+                    <p class="bl-muted">Reading recent activity…</p>
                 </section>
-                <!-- Runbook recorder, served by the com.farm.runbook plugin. -->
-                <section id="runbook-panel" class="panel"
-                    hx-get="/plugins/com.farm.runbook/devices/__DEVICE_UDID__/panel" hx-trigger="load" hx-swap="outerHTML">
-                    <h2>Runbooks</h2>
-                    <p class="muted">Loading runbooks…</p>
-                </section>
-                <section class="panel activity-card">
-                    <div><span class="eyebrow">Device activity</span><h2>Automation log</h2></div>
-                    <p>Live output from the latest doomscroll or post automation on this device.</p>
-                    <section id="device-activity" class="run-panel loading-card"
-                        hx-get="/api/devices/__DEVICE_UDID__/fragments/activity" hx-trigger="load" hx-swap="outerHTML">
-                        <span class="spinner" aria-hidden="true"></span>Loading recent activity…
-                    </section>
-                </section>
+            </div>
+        </section>
+
+        <section class="bl-panel">
+            <div class="bl-panel-head">Schedules</div>
+            <table class="bl-table"><thead><tr><th>Task</th><th>Timing</th><th>State</th><th></th></tr></thead>
+                <tbody id="device-schedules"><tr><td colspan="4" class="bl-muted">Reading schedules…</td></tr></tbody></table>
+        </section>
+
+        <section class="bl-panel">
+            <div class="bl-panel-head">Execution history</div>
+            <table class="bl-table"><thead><tr><th>Task</th><th>When</th><th>State</th><th></th></tr></thead>
+                <tbody id="device-executions"><tr><td colspan="4" class="bl-muted">Reading history…</td></tr></tbody></table>
+        </section>
+
+        <!-- Runbook recorder, served by the com.farm.runbook plugin. -->
+        <section id="runbook-panel" class="bl-panel"
+            hx-get="/plugins/com.farm.runbook/devices/__DEVICE_UDID__/panel" hx-trigger="load" hx-swap="outerHTML">
+            <div class="bl-panel-head">Runbooks</div>
+            <div class="bl-panel-body bl-muted">Reading runbooks…</div>
+        </section>
+
+        __PLUGIN_PANELS__
+
+        <section class="bl-panel bl-danger">
+            <div class="bl-panel-head">Danger zone</div>
+            <div class="bl-panel-body">
+                <p class="bl-muted">Removing this phone cancels its schedules and forgets its settings. Whatever is installed on the phone stays installed.</p>
+                <button id="open-remove" class="bl-btn bl-btn-sm" type="button">Remove this phone</button>
+            </div>
+        </section>
+    </div>
+</div>
+
+<dialog id="tasks-dialog" class="bl-dialog bl-dialog-wide">
+    <div class="bl-dialog-head">Tasks and schedules<span class="bl-spacer"></span>
+        <a class="bl-btn bl-btn-sm" href="/tasks">All tasks</a>
+        <button id="close-tasks" class="bl-btn bl-btn-sm" type="button">Close</button></div>
+    <div class="bl-dialog-body">
+        <p class="bl-muted">This phone's schedules and runs are also listed on the page behind this dialog.</p>
+    </div>
+</dialog>
+
+<dialog id="accounts-dialog" class="bl-dialog">
+    <form id="accounts-form">
+        <div class="bl-dialog-head">Accounts<span class="bl-spacer"></span>
+            <button id="close-accounts" class="bl-btn bl-btn-sm" type="button">Close</button></div>
+        <div class="bl-dialog-body">
+            <p class="bl-muted">Handles already signed in on this phone. Leave it empty to use whichever account is active.</p>
+            <label class="bl-field"><span>Account handles</span>
+                <input id="device-accounts" class="bl-input" type="text" value="__TIKTOK_ACCOUNTS_VALUE__" placeholder="@account_one, @account_two"></label>
+            <div class="bl-actions"><span id="accounts-result" class="bl-muted" aria-live="polite"></span><span class="bl-spacer"></span>
+                <button class="bl-btn bl-btn-primary" type="submit">Save accounts</button></div>
+        </div>
+    </form>
+</dialog>
+
+<dialog id="passcode-dialog" class="bl-dialog">
+    <form id="passcode-form" autocomplete="off">
+        <div class="bl-dialog-head">Unlock passcode<span class="bl-spacer"></span>
+            <button id="close-passcode" class="bl-btn bl-btn-sm" type="button">Close</button></div>
+        <div class="bl-dialog-body">
+            <p class="bl-muted">Used to wake and unlock the phone before a task. Kept in <code>devices.json</code> and never shown again.</p>
+            <label class="bl-field"><span>Passcode <span id="passcode-state" class="bl-faint">__DEVICE_HASPASSCODE__</span></span>
+                <input id="device-passcode" class="bl-input" type="password" inputmode="numeric" autocomplete="new-password" placeholder="Four digits or more"></label>
+            <div class="bl-actions"><span id="passcode-result" class="bl-muted" aria-live="polite"></span><span class="bl-spacer"></span>
+                <button id="passcode-clear" class="bl-btn" type="button">Clear</button>
+                <button class="bl-btn bl-btn-primary" type="submit">Save passcode</button></div>
+        </div>
+    </form>
+</dialog>
+
+<dialog id="remove-dialog" class="bl-dialog">
+    <form method="dialog">
+        <div class="bl-dialog-head">Remove this phone<span class="bl-spacer"></span>
+            <button id="close-remove" class="bl-btn bl-btn-sm" type="button">Close</button></div>
+        <div class="bl-dialog-body">
+            <p class="bl-muted">This cancels every schedule for the phone and forgets its passcode, accounts and touch points.</p>
+            <div class="bl-actions"><span id="remove-result" class="bl-muted" aria-live="polite"></span><span class="bl-spacer"></span>
+                <button id="remove-device" class="bl-btn bl-btn-danger" type="button">Remove this phone</button></div>
+        </div>
+    </form>
+</dialog>
+
+<dialog id="calibrate-dialog" class="bl-dialog bl-dialog-wide">
+    <form id="calibrate-form" method="dialog">
+        <div class="bl-dialog-head">Calibrate touch points<span class="bl-spacer"></span>
+            <button id="close-calibrate" class="bl-btn bl-btn-sm" type="button">Close</button></div>
+        <div class="bl-dialog-body">
+            <p class="bl-muted">Pick a target, then click where it belongs on the live screen. Untouched targets use the <strong id="cal-profile">…</strong> profile.</p>
+            <div class="bl-actions">
+                <label class="bl-check"><input id="cal-control" type="checkbox"><span>Control the phone</span></label>
+                <button id="cal-unlock" class="bl-btn bl-btn-sm" type="button">Unlock</button>
+            </div>
+            <div class="bl-cal">
+                <div class="bl-cal-screen"><img id="cal-screen" alt="Live screen"><div id="cal-markers" aria-hidden="true"></div></div>
+                <ul id="cal-points" class="bl-cal-points"></ul>
+            </div>
+            <p id="cal-status" class="bl-muted" aria-live="polite"></p>
+            <div class="bl-actions">
+                <button id="cal-reset-all" class="bl-btn" type="button">Reset all</button><span class="bl-spacer"></span>
+                <button id="cal-cancel" class="bl-btn" type="button">Cancel</button>
+                <button id="cal-save" class="bl-btn bl-btn-primary" type="button">Save</button>
             </div>
         </div>
-    </main>
-    <dialog id="tasks-dialog">
-        <div class="modal tasks-modal">
-            <div class="modal-head">
-                <div><span class="eyebrow">This device</span><h2>Tasks &amp; schedules</h2></div>
-                <div class="inline-actions"><a href="/tasks" class="button secondary">View all tasks</a><button id="close-tasks" class="icon-button" type="button">Close</button></div>
+    </form>
+</dialog>
+
+<dialog id="doomscroll-dialog" class="bl-dialog">
+    <form id="doomscroll-form" hx-post="/api/devices/__DEVICE_UDID__/fragments/scroll-run"
+        hx-target="#device-activity" hx-swap="outerHTML" hx-disabled-elt="button">
+        <div class="bl-dialog-head">Warm up<span class="bl-spacer"></span>
+            <button id="close-doomscroll" class="bl-btn bl-btn-sm" type="button">Close</button></div>
+        <div class="bl-dialog-body">
+            <p class="bl-muted">A timed, personality-driven scrolling session on this phone.</p>
+            <label class="bl-field" for="doomscroll-duration"><span>Duration in minutes</span>
+                <input id="doomscroll-duration" class="bl-input" name="durationMinutes" type="number" min="1" max="180" value="5" required></label>
+            <div class="bl-actions">
+                <button class="bl-btn bl-btn-sm" type="button" data-doomscroll-duration="1">1 min</button>
+                <button class="bl-btn bl-btn-sm" type="button" data-doomscroll-duration="5">5 min</button>
+                <button class="bl-btn bl-btn-sm" type="button" data-doomscroll-duration="15">15 min</button>
             </div>
-            <h3>Schedules</h3>
-            <div id="device-schedules" class="task-list loading-card"><span class="spinner" aria-hidden="true"></span>Loading schedules…</div>
-            <h3>Recent runs</h3>
-            <div id="device-executions" class="task-list loading-card"><span class="spinner" aria-hidden="true"></span>Loading task history…</div>
-        </div>
-    </dialog>
-    <dialog id="accounts-dialog">
-        <form id="accounts-form" class="modal">
-            <div class="modal-head">
-                <div><span class="eyebrow">TikTok</span><h2>Accounts</h2></div>
-                <button id="close-accounts" class="icon-button" type="button">Close</button>
+            <label class="bl-field" for="doomscroll-personality"><span>Personality</span>
+                <select id="doomscroll-personality" class="bl-select" name="personality">
+                    <option value="skimmer">Skimmer</option><option value="casual" selected>Casual</option><option value="engaged">Engaged</option>
+                </select></label>
+            <label class="bl-field" for="doomscroll-account"><span>Account</span>
+                <select id="doomscroll-account" class="bl-select" name="account">
+                    <option value="">Do not switch</option>__TIKTOK_ACCOUNT_OPTIONS__
+                </select></label>
+            <div class="bl-actions">
+                <label class="bl-check"><input type="checkbox" name="likeEnabled" checked><span>Like videos</span></label>
+                <label class="bl-check"><input type="checkbox" name="saveEnabled" checked><span>Save videos</span></label>
             </div>
-            <p>Handles already signed in on this device. Leave empty to use only the currently active account.</p>
-            <label for="device-accounts">Account handles</label>
-            <input id="device-accounts" type="text" value="__TIKTOK_ACCOUNTS_VALUE__" placeholder="@account_one, @account_two">
-            <div class="form-actions"><span id="accounts-result" class="run-meta" aria-live="polite"></span><span class="spacer"></span><button class="button primary" type="submit">Save accounts</button></div>
-        </form>
-    </dialog>
-    <dialog id="passcode-dialog">
-        <form id="passcode-form" class="modal" autocomplete="off">
-            <div class="modal-head">
-                <div><span class="eyebrow">This device</span><h2>Unlock passcode</h2></div>
-                <button id="close-passcode" class="icon-button" type="button">Close</button>
-            </div>
-            <p>Used to wake and unlock the phone before automation. Kept in <code>devices.json</code> and never shown again.</p>
-            <label for="device-passcode">Passcode <span id="passcode-state" class="run-meta">__DEVICE_HASPASSCODE__</span></label>
-            <input id="device-passcode" type="password" inputmode="numeric" autocomplete="new-password" placeholder="4+ digits">
-            <div class="form-actions">
-                <span id="passcode-result" class="run-meta" aria-live="polite"></span><span class="spacer"></span>
-                <button id="passcode-clear" class="button secondary" type="button">Clear</button>
-                <button class="button primary" type="submit">Save passcode</button>
-            </div>
-        </form>
-    </dialog>
-    <dialog id="remove-dialog">
-        <form class="modal" method="dialog">
-            <div class="modal-head">
-                <div><span class="eyebrow">This device</span><h2>Remove device</h2></div>
-                <button id="close-remove" class="icon-button" type="button">Close</button>
-            </div>
-            <p>This cancels every schedule for the device and forgets its configuration (passcode, accounts, touch points). WebDriverAgent stays installed on the phone.</p>
-            <div class="form-actions">
-                <span id="remove-result" class="run-meta" aria-live="polite"></span><span class="spacer"></span>
-                <button id="remove-device" class="button danger" type="button">Remove device</button>
-            </div>
-        </form>
-    </dialog>
-    <dialog id="calibrate-dialog">
-        <form id="calibrate-form" class="modal calibrate-modal" method="dialog">
-            <div class="modal-head">
-                <div><span class="eyebrow">This device</span><h2>Calibrate touch points</h2></div>
-                <button id="close-calibrate" class="icon-button" type="button">Close</button>
-            </div>
-            <p>Pick a target, then click where it belongs on the live screen. Untouched targets use the <strong id="cal-profile">…</strong> profile.</p>
-            <div class="cal-toolbar">
-                <label class="cal-switch"><input id="cal-control" type="checkbox"><span class="cal-switch-track" aria-hidden="true"></span><span>Control device</span></label>
-                <button id="cal-unlock" class="button secondary" type="button"><span aria-hidden="true">🔓</span> Unlock</button>
-            </div>
-            <div class="calibrate-body">
-                <div class="calibrate-screen"><img id="cal-screen" alt="Live screen"><div id="cal-markers" class="cal-markers" aria-hidden="true"></div></div>
-                <ul id="cal-points" class="cal-points"></ul>
-            </div>
-            <p id="cal-status" class="run-meta" aria-live="polite"></p>
-            <div class="form-actions">
-                <button id="cal-reset-all" class="button secondary" type="button">Reset all</button>
-                <span class="spacer"></span>
-                <button id="cal-cancel" class="button secondary" type="button">Cancel</button>
-                <button id="cal-save" class="button primary" type="button">Save</button>
-            </div>
-        </form>
-    </dialog>
-    <dialog id="doomscroll-dialog">
-        <form id="doomscroll-form" class="modal" hx-post="/api/devices/__DEVICE_UDID__/fragments/scroll-run"
-            hx-target="#device-activity" hx-swap="outerHTML" hx-disabled-elt="button">
-            <div class="modal-head">
-                <div><span class="eyebrow">TikTok</span><h2>Configure doomscroll</h2></div>
-                <button id="close-doomscroll" class="icon-button" type="button">Close</button>
-            </div>
-            <p>Run a timed, personality-driven doomscrolling session on this device.</p>
-            <label for="doomscroll-duration">Duration (minutes)</label>
-            <input id="doomscroll-duration" name="durationMinutes" type="number" min="1" max="180" value="5" required>
-            <div class="duration-shortcuts">
-                <button type="button" data-doomscroll-duration="1">1 min</button>
-                <button type="button" data-doomscroll-duration="5">5 min</button>
-                <button type="button" data-doomscroll-duration="15">15 min</button>
-            </div>
-            <label for="doomscroll-personality">Personality</label>
-            <select id="doomscroll-personality" name="personality">
-                <option value="skimmer">Skimmer</option>
-                <option value="casual" selected>Casual</option>
-                <option value="engaged">Engaged</option>
-            </select>
-            <label for="doomscroll-account">TikTok account</label>
-            <select id="doomscroll-account" name="account">
-                <option value="">Don't switch</option>__TIKTOK_ACCOUNT_OPTIONS__
-            </select>
-            <fieldset><legend>Engagement</legend><div class="choices">
-                <label><input type="checkbox" name="likeEnabled" checked> Like videos</label>
-                <label><input type="checkbox" name="saveEnabled" checked> Save videos</label>
-            </div></fieldset>
-            <label class="checkbox-option"><input id="doomscroll-recurring" type="checkbox"> Recurring</label>
-            <div id="doomscroll-start-options" class="field">
+            <label class="bl-check"><input id="doomscroll-recurring" type="checkbox"><span>Repeat on a schedule</span></label>
+            <div id="doomscroll-start-options" class="bl-field">
                 <label for="doomscroll-start-kind">Start</label>
-                <select id="doomscroll-start-kind"><option value="now">Now</option><option value="once">Once</option></select>
+                <select id="doomscroll-start-kind" class="bl-select"><option value="now">Now</option><option value="once">At a time</option></select>
             </div>
-            <div id="doomscroll-once-fields" class="schedule-fields" hidden>
-                <div class="field"><label for="doomscroll-run-at">One-time date and time</label><input id="doomscroll-run-at" type="datetime-local"></div>
+            <div id="doomscroll-once-fields" hidden>
+                <label class="bl-field" for="doomscroll-run-at"><span>Date and time</span>
+                    <input id="doomscroll-run-at" class="bl-input" type="datetime-local"></label>
             </div>
-            <div id="doomscroll-recurring-fields" class="schedule-fields" hidden>
-                <div class="field"><label for="doomscroll-frequency">Repeat</label><select id="doomscroll-frequency"><option value="daily">Daily</option><option value="weekly">Weekly</option></select></div>
-                <div class="field"><label for="doomscroll-local-time">Time</label><input id="doomscroll-local-time" name="localTime" type="time" value="09:00"></div>
-                <fieldset id="doomscroll-weekday-fields" class="weekday-field" hidden><legend>Days</legend><div class="weekday-options">
-                    <label><input type="checkbox" value="1" checked><span>Mon</span></label><label><input type="checkbox" value="2" checked><span>Tue</span></label>
-                    <label><input type="checkbox" value="3" checked><span>Wed</span></label><label><input type="checkbox" value="4" checked><span>Thu</span></label>
-                    <label><input type="checkbox" value="5" checked><span>Fri</span></label><label><input type="checkbox" value="6"><span>Sat</span></label>
-                    <label><input type="checkbox" value="0"><span>Sun</span></label>
+            <div id="doomscroll-recurring-fields" hidden>
+                <label class="bl-field" for="doomscroll-frequency"><span>Repeat</span>
+                    <select id="doomscroll-frequency" class="bl-select"><option value="daily">Daily</option><option value="weekly">Weekly</option></select></label>
+                <label class="bl-field" for="doomscroll-local-time"><span>Time</span>
+                    <input id="doomscroll-local-time" class="bl-input" name="localTime" type="time" value="09:00"></label>
+                <fieldset id="doomscroll-weekday-fields" hidden><legend>Days</legend><div class="bl-actions">
+                    <label class="bl-check"><input type="checkbox" value="1" checked><span>Mon</span></label>
+                    <label class="bl-check"><input type="checkbox" value="2" checked><span>Tue</span></label>
+                    <label class="bl-check"><input type="checkbox" value="3" checked><span>Wed</span></label>
+                    <label class="bl-check"><input type="checkbox" value="4" checked><span>Thu</span></label>
+                    <label class="bl-check"><input type="checkbox" value="5" checked><span>Fri</span></label>
+                    <label class="bl-check"><input type="checkbox" value="6"><span>Sat</span></label>
+                    <label class="bl-check"><input type="checkbox" value="0"><span>Sun</span></label>
                 </div></fieldset>
             </div>
-            <div id="doomscroll-run-window-field" class="field schedule-window" hidden><label for="doomscroll-run-window">Run window (minutes)</label><input id="doomscroll-run-window" name="runWindowMinutes" type="number" min="1" max="1440" value="30"></div>
-            <input id="doomscroll-schedule-kind" name="scheduleKind" type="hidden" value="now"><input id="doomscroll-weekdays" name="weekdays" type="hidden" value="1,2,3,4,5">
-            <input id="doomscroll-run-at-iso" name="runAt" type="hidden"><input class="browser-timezone" name="timezone" type="hidden">
-            <p class="warning">Save uses a blind bookmark toggle — there is no reliable way to detect whether a video is already saved, so this may unsave one.</p>
-            <div class="form-actions">
-                <button id="cancel-doomscroll" class="button secondary" type="button">Cancel</button>
-                <button class="button primary" type="submit">Start doomscroll</button>
+            <div id="doomscroll-run-window-field" class="bl-field" hidden>
+                <label for="doomscroll-run-window">Run window in minutes</label>
+                <input id="doomscroll-run-window" class="bl-input" name="runWindowMinutes" type="number" min="1" max="1440" value="30">
             </div>
-        </form>
-    </dialog>
-    <dialog id="post-dialog">
-        <form id="post-form" class="modal">
-            <div class="modal-head"><div><span class="eyebrow">TikTok</span><h2>Create post</h2></div><button id="close-post" class="icon-button" type="button">Close</button></div>
-            <p>Choose one video or up to three slideshow images. Reorder images before starting.</p>
-            <label for="media">Media</label>
-            <input id="media" name="media-picker" type="file" accept="video/*,image/*" multiple required>
+            <input id="doomscroll-schedule-kind" name="scheduleKind" type="hidden" value="now">
+            <input id="doomscroll-weekdays" name="weekdays" type="hidden" value="1,2,3,4,5">
+            <input id="doomscroll-run-at-iso" name="runAt" type="hidden">
+            <input class="browser-timezone" name="timezone" type="hidden">
+            <p class="bl-hint">Save uses a blind bookmark toggle: there is no reliable way to tell whether a video is already saved, so this may unsave one.</p>
+            <div class="bl-actions"><span class="bl-spacer"></span>
+                <button id="cancel-doomscroll" class="bl-btn" type="button">Cancel</button>
+                <button class="bl-btn bl-btn-primary" type="submit">Start</button></div>
+        </div>
+    </form>
+</dialog>
+
+<dialog id="post-dialog" class="bl-dialog">
+    <form id="post-form">
+        <div class="bl-dialog-head">Prepare a post<span class="bl-spacer"></span>
+            <button id="close-post" class="bl-btn bl-btn-sm" type="button">Close</button></div>
+        <div class="bl-dialog-body">
+            <p class="bl-muted">One video, or up to three images in the order you want them.</p>
+            <label class="bl-field" for="media"><span>Media</span>
+                <input id="media" class="bl-input" name="media-picker" type="file" accept="video/*,image/*" multiple required></label>
             <ol id="media-list"></ol>
-            <label for="music-url">TikTok music URL <small>(optional)</small></label>
-            <input id="music-url" type="url" placeholder="https://www.tiktok.com/music/…">
-            <label for="caption">Caption <small>(optional)</small></label>
-            <textarea id="caption" maxlength="2200" placeholder="Write a caption…"></textarea>
-            <label for="post-account">TikTok account</label>
-            <select id="post-account" name="account" required>
-                <option value="" disabled selected>Choose an account…</option>__TIKTOK_ACCOUNT_OPTIONS__
-            </select>
-            <fieldset><legend>Finish as</legend><div class="choices">
-                <label><input type="radio" name="destination" value="draft" checked> Save to Drafts</label>
-                <label><input type="radio" name="destination" value="publish"> Post publicly</label>
-            </div></fieldset>
-            <label class="checkbox-option"><input id="post-recurring" type="checkbox"> Recurring</label>
-            <div id="post-start-options" class="field">
+            <label class="bl-field" for="music-url"><span>Music URL, optional</span>
+                <input id="music-url" class="bl-input" type="url" placeholder="https://www.tiktok.com/music/…"></label>
+            <label class="bl-field" for="caption"><span>Caption, optional</span>
+                <textarea id="caption" class="bl-textarea" rows="3" maxlength="2200" placeholder="Write a caption"></textarea></label>
+            <label class="bl-field" for="post-account"><span>Account</span>
+                <select id="post-account" class="bl-select" name="account" required>
+                    <option value="" disabled selected>Choose an account</option>__TIKTOK_ACCOUNT_OPTIONS__
+                </select></label>
+            <div class="bl-actions">
+                <label class="bl-check"><input type="radio" name="destination" value="draft" checked><span>Save to drafts</span></label>
+                <label class="bl-check"><input type="radio" name="destination" value="publish"><span>Post publicly</span></label>
+            </div>
+            <label class="bl-check"><input id="post-recurring" type="checkbox"><span>Repeat on a schedule</span></label>
+            <div id="post-start-options" class="bl-field">
                 <label for="post-start-kind">Start</label>
-                <select id="post-start-kind"><option value="now">Now</option><option value="once">Once</option></select>
+                <select id="post-start-kind" class="bl-select"><option value="now">Now</option><option value="once">At a time</option></select>
             </div>
-            <div id="post-once-fields" class="schedule-fields" hidden>
-                <div class="field"><label for="post-run-at">One-time date and time</label><input id="post-run-at" type="datetime-local"></div>
+            <div id="post-once-fields" hidden>
+                <label class="bl-field" for="post-run-at"><span>Date and time</span>
+                    <input id="post-run-at" class="bl-input" type="datetime-local"></label>
             </div>
-            <div id="post-recurring-fields" class="schedule-fields" hidden>
-                <div class="field"><label for="post-frequency">Repeat</label><select id="post-frequency"><option value="daily">Daily</option><option value="weekly">Weekly</option></select></div>
-                <div class="field"><label for="post-local-time">Time</label><input id="post-local-time" type="time" value="09:00"></div>
-                <fieldset id="post-weekday-fields" class="weekday-field" hidden><legend>Days</legend><div class="weekday-options">
-                    <label><input type="checkbox" value="1" checked><span>Mon</span></label><label><input type="checkbox" value="2" checked><span>Tue</span></label>
-                    <label><input type="checkbox" value="3" checked><span>Wed</span></label><label><input type="checkbox" value="4" checked><span>Thu</span></label>
-                    <label><input type="checkbox" value="5" checked><span>Fri</span></label><label><input type="checkbox" value="6"><span>Sat</span></label>
-                    <label><input type="checkbox" value="0"><span>Sun</span></label>
+            <div id="post-recurring-fields" hidden>
+                <label class="bl-field" for="post-frequency"><span>Repeat</span>
+                    <select id="post-frequency" class="bl-select"><option value="daily">Daily</option><option value="weekly">Weekly</option></select></label>
+                <label class="bl-field" for="post-local-time"><span>Time</span>
+                    <input id="post-local-time" class="bl-input" type="time" value="09:00"></label>
+                <fieldset id="post-weekday-fields" hidden><legend>Days</legend><div class="bl-actions">
+                    <label class="bl-check"><input type="checkbox" value="1" checked><span>Mon</span></label>
+                    <label class="bl-check"><input type="checkbox" value="2" checked><span>Tue</span></label>
+                    <label class="bl-check"><input type="checkbox" value="3" checked><span>Wed</span></label>
+                    <label class="bl-check"><input type="checkbox" value="4" checked><span>Thu</span></label>
+                    <label class="bl-check"><input type="checkbox" value="5" checked><span>Fri</span></label>
+                    <label class="bl-check"><input type="checkbox" value="6"><span>Sat</span></label>
+                    <label class="bl-check"><input type="checkbox" value="0"><span>Sun</span></label>
                 </div></fieldset>
             </div>
-            <div id="post-run-window-field" class="field schedule-window" hidden><label for="post-run-window">Run window (minutes)</label><input id="post-run-window" type="number" min="1" max="1440" value="30"></div>
-            <div id="publish-confirm" class="publish-confirm"><label><input id="confirm-publish" type="checkbox"> I understand this will publish to the signed-in TikTok account.</label></div>
-            <p id="post-result" aria-live="polite"></p>
-            <div class="form-actions"><button id="cancel-post" class="button secondary" type="button">Cancel</button><button id="submit-post" class="button primary" type="submit">Save to Drafts</button></div>
-        </form>
-    </dialog>
-    <script type="module" src="/assets/device.js"></script>
-    <footer class="app-footer">__FOOTER__</footer>
-</body>
-</html>
+            <div id="post-run-window-field" class="bl-field" hidden>
+                <label for="post-run-window">Run window in minutes</label>
+                <input id="post-run-window" class="bl-input" type="number" min="1" max="1440" value="30">
+            </div>
+            <div id="publish-confirm"><label class="bl-check"><input id="confirm-publish" type="checkbox"><span>I understand this posts publicly from the signed-in account.</span></label></div>
+            <p id="post-result" class="bl-muted" aria-live="polite"></p>
+            <div class="bl-actions"><span class="bl-spacer"></span>
+                <button id="cancel-post" class="bl-btn" type="button">Cancel</button>
+                <button id="submit-post" class="bl-btn bl-btn-primary" type="submit">Save to drafts</button></div>
+        </div>
+    </form>
+</dialog>

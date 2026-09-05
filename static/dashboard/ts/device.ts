@@ -1,3 +1,5 @@
+import { FramePump } from './shell.js';
+
 export {};
 
 interface ScreenSize {
@@ -134,8 +136,8 @@ const elements = {
     removeDialog: element<HTMLDialogElement>('#remove-dialog'),
     openRemove: element<HTMLButtonElement>('#open-remove'),
     closeRemove: element<HTMLButtonElement>('#close-remove'),
-    deviceSchedules: element<HTMLElement>('#device-schedules'),
-    deviceExecutions: element<HTMLElement>('#device-executions'),
+    deviceSchedules: element<HTMLTableSectionElement>('#device-schedules'),
+    deviceExecutions: element<HTMLTableSectionElement>('#device-executions'),
     tasksDialog: element<HTMLDialogElement>('#tasks-dialog'),
     openTasks: element<HTMLButtonElement>('#open-tasks'),
     closeTasks: element<HTMLButtonElement>('#close-tasks'),
@@ -162,6 +164,8 @@ const elements = {
 };
 
 let screenSize: ScreenSize | undefined;
+let pump: FramePump | null = null;
+let devicePlatform = 'ios';
 let paused = false;
 let connecting = false;
 let pointerStart: Point | undefined;
@@ -227,7 +231,9 @@ function errorMessage(error: unknown): string {
 }
 
 function setStatus(message: string, state = ''): void {
-    elements.status.className = `status ${state}`;
+    elements.status.className = `bl-state ${state}`;
+    const dot = elements.status.querySelector('.bl-dot');
+    if (dot) dot.className = `bl-dot ${state}`;
     elements.statusText.textContent = message;
 }
 
@@ -238,10 +244,18 @@ async function jsonRequest<T>(url: string, options?: RequestInit): Promise<T> {
     return data;
 }
 
+/**
+ * iOS phones have a real MJPEG stream; Android has none, so its frames are polled by the same
+ * pump the wall uses. Either way `#screen` ends up showing the phone.
+ */
 function startStream(): void {
     if (paused || !screenSize) return;
-    setStatus('Connecting video stream…');
-    elements.screen.src = `/api/devices/${encodeURIComponent(udid)}/remote/stream?t=${Date.now()}`;
+    setStatus('Connecting to the phone', 'busy');
+    pump?.stop();
+    pump = new FramePump(elements.screen, udid, devicePlatform);
+    pump.setRate(4);
+    pump.start();
+    setStatus('Live', 'live');
 }
 
 async function connectRemote(): Promise<void> {
@@ -286,7 +300,8 @@ function useDeviceSummary(summary: HTMLElement): void {
     const height = Number(summary.dataset.screenHeight);
     if (!Number.isFinite(width) || !Number.isFinite(height)) return;
     screenSize = { width, height };
-    const platform = summary.dataset.platform === 'android' ? 'Android' : 'iOS';
+    devicePlatform = summary.dataset.platform === 'android' ? 'android' : 'ios';
+    const platform = devicePlatform === 'android' ? 'Android' : 'iOS';
     const name = summary.querySelector('h1')?.textContent;
     if (name) document.title = `${name} · ${platform} Automation`;
     elements.screen.alt = `Live screen from the connected ${platform} device`;
@@ -439,10 +454,11 @@ elements.refresh.addEventListener('click', async () => {
 });
 elements.toggle.addEventListener('click', () => {
     paused = !paused;
-    elements.toggle.textContent = paused ? 'Resume stream' : 'Pause stream';
+    elements.toggle.textContent = paused ? 'Resume' : 'Pause';
     if (paused) {
+        pump?.stop();
         elements.screen.removeAttribute('src');
-        setStatus('Video stream paused');
+        setStatus('Paused');
     } else {
         void connectRemote();
     }
@@ -520,7 +536,7 @@ function formatDate(value: string | null): string {
 
 function taskActionButton(label: string, action: () => Promise<void>): HTMLButtonElement {
     const buttonElement = document.createElement('button');
-    buttonElement.className = 'icon-button';
+    buttonElement.className = 'bl-btn bl-btn-sm';
     buttonElement.type = 'button';
     buttonElement.textContent = label;
     buttonElement.addEventListener('click', () => {
@@ -556,78 +572,93 @@ function timingDescription(timing: DeviceSchedule['timing']): string {
     return 'Run immediately';
 }
 
+/** One row of a `.bl-table`; the empty state is a single spanning row. */
+function tableRow(cells: Array<string | HTMLElement>, actions: HTMLElement[]): HTMLTableRowElement {
+    const row = document.createElement('tr');
+    for (const cell of cells) {
+        const td = document.createElement('td');
+        if (typeof cell === 'string') td.textContent = cell;
+        else td.append(cell);
+        row.append(td);
+    }
+    const last = document.createElement('td');
+    last.className = 'bl-row-actions';
+    last.append(...actions);
+    row.append(last);
+    return row;
+}
+
+function emptyRow(sentence: string): HTMLTableRowElement {
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = 4;
+    cell.className = 'bl-muted';
+    cell.textContent = sentence;
+    row.append(cell);
+    return row;
+}
+
+function stateCell(status: string): HTMLElement {
+    const state = document.createElement('span');
+    const tone = status === 'running' ? 'busy' : status === 'failed' ? 'error'
+        : status === 'succeeded' || status === 'active' ? 'online' : '';
+    state.className = `bl-state ${tone}`;
+    const dot = document.createElement('span');
+    dot.className = `bl-dot ${tone}`;
+    state.append(dot, document.createTextNode(status));
+    return state;
+}
+
 function renderDeviceSchedules(schedules: DeviceSchedule[]): void {
     if (!schedules.length) {
-        elements.deviceSchedules.className = 'task-list empty-state';
-        elements.deviceSchedules.textContent = 'No schedules for this device.';
+        elements.deviceSchedules.replaceChildren(emptyRow('No schedules for this phone yet.'));
         return;
     }
-    elements.deviceSchedules.className = 'task-list';
     elements.deviceSchedules.replaceChildren(...schedules.map((schedule) => {
-        const row = document.createElement('article');
-        row.className = 'task-row';
-        const copy = document.createElement('div');
-        const title = document.createElement('h3');
-        title.textContent = taskTitle(schedule.taskType, schedule.payload);
-        const meta = document.createElement('p');
-        meta.textContent = `${timingDescription(schedule.timing)} · next ${formatDate(schedule.nextRunAt)}`;
-        copy.append(title, meta);
-        const state = document.createElement('span');
-        state.className = `status ${schedule.status}`;
-        state.textContent = schedule.status;
-        const actions = document.createElement('div');
-        actions.className = 'inline-actions';
-        if (schedule.status === 'active') actions.append(taskActionButton('Pause', async () => {
+        const actions: HTMLElement[] = [];
+        if (schedule.status === 'active') actions.push(taskActionButton('Pause', async () => {
             await jsonRequest(`/api/schedules/${schedule.id}/pause`, { method: 'POST' });
         }));
-        if (schedule.status === 'paused') actions.append(taskActionButton('Resume', async () => {
+        if (schedule.status === 'paused') actions.push(taskActionButton('Resume', async () => {
             await jsonRequest(`/api/schedules/${schedule.id}/resume`, { method: 'POST' });
         }));
         if (schedule.status !== 'cancelled' && schedule.status !== 'completed') {
-            actions.append(taskActionButton('Cancel', async () => {
+            actions.push(taskActionButton('Cancel', async () => {
                 await jsonRequest(`/api/schedules/${schedule.id}/cancel`, { method: 'POST' });
             }));
         }
-        row.append(copy, state, actions);
-        return row;
+        return tableRow([
+            taskTitle(schedule.taskType, schedule.payload),
+            `${timingDescription(schedule.timing)} · next ${formatDate(schedule.nextRunAt)}`,
+            stateCell(schedule.status),
+        ], actions);
     }));
 }
 
 function renderDeviceExecutions(executions: DeviceExecution[]): void {
     if (!executions.length) {
-        elements.deviceExecutions.className = 'task-list empty-state';
-        elements.deviceExecutions.textContent = 'No task runs for this device yet.';
+        elements.deviceExecutions.replaceChildren(emptyRow('Nothing has run on this phone yet.'));
         return;
     }
-    elements.deviceExecutions.className = 'task-list';
     elements.deviceExecutions.replaceChildren(...executions.map((execution) => {
-        const row = document.createElement('article');
-        row.className = 'task-row';
-        const copy = document.createElement('div');
-        const title = document.createElement('h3');
-        title.textContent = execution.taskType === 'post' ? 'Post' : 'Doomscroll';
-        const meta = document.createElement('p');
-        meta.textContent = `${formatDate(execution.scheduledFor)}${execution.error ? ` · ${execution.error}` : ''}`;
-        copy.append(title, meta);
-        const state = document.createElement('span');
-        state.className = `status ${execution.status}`;
-        state.textContent = execution.status;
-        const actions = document.createElement('div');
-        actions.className = 'inline-actions';
+        const actions: HTMLElement[] = [];
         if (execution.status === 'queued' || (execution.status === 'running' && execution.taskType === 'doomscroll')) {
-            actions.append(taskActionButton(execution.status === 'queued' ? 'Cancel' : 'Stop', async () => {
+            actions.push(taskActionButton(execution.status === 'queued' ? 'Cancel' : 'Stop', async () => {
                 await jsonRequest(`/api/executions/${execution.id}/stop`, { method: 'POST' });
             }));
         }
         if (execution.status === 'failed' || execution.status === 'stopped') {
-            actions.append(taskActionButton('Retry', async () => {
+            actions.push(taskActionButton('Retry', async () => {
                 if (execution.taskType === 'post'
-                    && !window.confirm('The post may already have reached TikTok. Retry only after checking the device.')) return;
+                    && !window.confirm('The post may already have reached TikTok. Retry only after checking the phone.')) return;
                 await jsonRequest(`/api/executions/${execution.id}/retry`, { method: 'POST' });
             }));
         }
-        row.append(copy, state, actions);
-        return row;
+        return tableRow([
+            execution.taskType === 'post' ? 'Post' : 'Warm up',
+            `${formatDate(execution.scheduledFor)}${execution.error ? ` · ${execution.error}` : ''}`,
+            stateCell(execution.status),
+        ], actions);
     }));
 }
 
@@ -642,10 +673,8 @@ async function loadDeviceTasks(): Promise<void> {
         renderDeviceExecutions(executionData.executions);
     } catch (error) {
         const message = errorMessage(error);
-        elements.deviceSchedules.className = 'task-list empty-state';
-        elements.deviceSchedules.textContent = message;
-        elements.deviceExecutions.className = 'task-list empty-state';
-        elements.deviceExecutions.textContent = message;
+        elements.deviceSchedules.replaceChildren(emptyRow(message));
+        elements.deviceExecutions.replaceChildren(emptyRow(message));
     }
 }
 
@@ -964,7 +993,9 @@ elements.removeDevice.addEventListener('click', async () => {
 updateDestination();
 updateDoomscrollSchedule();
 updatePostSchedule();
-setInterval(() => { if (elements.tasksDialog.open) void loadDeviceTasks(); }, 5_000);
+// The schedule and history tables live on the page now, so they load with it.
+void loadDeviceTasks();
+setInterval(() => void loadDeviceTasks(), 5_000);
 
 const loadedSummary = document.querySelector<HTMLElement>('#device-summary[data-screen-width]');
 if (loadedSummary) useDeviceSummary(loadedSummary);

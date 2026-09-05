@@ -210,10 +210,11 @@ test('remote screenshot and input for an Android device go through its driver, a
     assert.equal(connection.statusCode, 200);
     assert.equal(connection.json().appium, 'unavailable');
 
-    const grid = await inject(app, { method: 'GET', url: '/api/fragments/devices' });
-    assert.equal(grid.statusCode, 200);
-    assert.match(grid.body, /<span class="badge platform-android">Android<\/span><span class="badge driver">adb<\/span>/);
-    assert.match(grid.body, /<span class="badge platform-ios">iOS<\/span><span class="badge driver">wda<\/span>/);
+    // The registry names each phone's platform and driver, so a mixed fleet reads at a glance.
+    const registry = await inject(app, { method: 'GET', url: '/devices' });
+    assert.equal(registry.statusCode, 200);
+    assert.match(registry.body, /<td>Android<\/td><td class="bl-muted">adb<\/td>/);
+    assert.match(registry.body, /<td>iOS<\/td><td class="bl-muted">wda<\/td>/);
 });
 
 test('the adb output parsers read states, packages, services and tokens', async () => {

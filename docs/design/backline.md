@@ -6,6 +6,10 @@ dashboard, desktop app, phone app, docs, window titles, app icons, package descr
 
 The canvas this was designed on: https://claude.ai/code/artifact/148f3c5b-12f7-488d-863e-81a83df90158
 
+Screenshots of the built dashboard live in `docs/design/screenshots/`. Regenerate them with
+`npm run preview:dashboard`, which serves the whole dashboard against twelve invented phones on
+127.0.0.1:3999 without touching a rig.
+
 ## Concept
 
 A control center, not a dashboard. The home view is **the wall**: every phone's screen, live,

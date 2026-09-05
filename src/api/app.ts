@@ -3,7 +3,7 @@ import formbody from '@fastify/formbody';
 import multipart from '@fastify/multipart';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import crypto from 'node:crypto';
-import { mkdir, open, readFile } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -28,6 +28,24 @@ import type { AuthProvider, PluginNavLink } from '../plugin.js';
 import type { PluginRegistry } from '../registry.js';
 import type { CreateTaskInput, JsonObject, ScheduleTiming } from '../types.js';
 import { ScheduleTransitionError, type SchedulerRepository } from '../scheduler/repository.js';
+import { createEventStore, type EventStore, type FarmEvent } from '../fleet/events.js';
+import { acknowledgedMark } from '../push/acks.js';
+import { wdaServiceStatuses } from '../fleet/connectivity.js';
+import {
+    renderControlCenter, renderInspector, renderInspectorRun, wallToolbar, wallToolbarRight,
+    hardwareColumn, viewer, timeOfDay, type WallDevice,
+} from '../fleet/page.js';
+import { collectWall, inspectorLog, parseLogLine, readFleet, toWallDevices, type FleetRead } from '../ui/wall-data.js';
+import { renderShell, stateBadge, slotNumber, PRODUCT_NAME, type NavKey, type ShellInput } from '../ui/shell.js';
+import { icon } from '../ui/icons.js';
+import { rigServices, rigStatus, type RigFacts } from '../ui/rig.js';
+import {
+    accountRows, renderAccountsPage, renderAlertsPage, renderDevicesPage, renderRigPage, renderSettingsPage,
+} from '../ui/pages.js';
+import { fileURLToPath } from 'node:url';
+import { eq } from 'drizzle-orm';
+import { assets } from '../database/schema.js';
+import { runCommand } from '../drivers/common.js';
 import { registerContentRoutes } from './routes/content.js';
 import { registerFleetRoutes } from './routes/fleet.js';
 import { registerMcpRoutes } from './routes/mcp.js';
@@ -43,6 +61,13 @@ export interface CreateAppOptions {
     registrations?: DeviceRegistrationManager;
     /** How an Android device record becomes a live driver; tests inject a fake. iOS never uses it. */
     createDriver?: (device: RegisteredDevice) => DeviceDriver;
+    /**
+     * Which registered phones the pages should treat as connected. Production reads USB, adb and
+     * the connection manager; a test or the preview script hands over a list.
+     */
+    connectedUdids?: () => Promise<string[]>;
+    /** The event log behind Alerts and the sidebar's unread count; production builds it from the database. */
+    events?: EventStore;
     logger?: boolean;
 }
 
@@ -51,18 +76,21 @@ export interface DashboardTheme {
     renderDevice?(template: string, device: RegisteredDevice): string;
 }
 
+interface DashboardAsset {
+    contentType: string;
+    body: string;
+}
+
 interface LoadedDashboardTheme {
-    indexHtml: string;
+    /** Page bodies; the shell wraps them. */
     deviceHtml: string;
-    tasksHtml: string;
-    styles: string;
-    deviceScript: string;
-    tasksScript: string;
     registerDeviceHtml: string;
-    registerDeviceScript: string;
-    htmx: string;
-    /** The Backline token stylesheet every shell-rendered page loads. */
-    backlineStyles: string;
+    /** Still a whole document — the Schedule/Content branch owns this template. */
+    tasksHtml: string;
+    /** Everything /assets/<file> can serve: the token stylesheet, htmx and every page script. */
+    assets: Map<string, DashboardAsset>;
+    /** Content hash per asset name, so a template can ask for an immutable URL. */
+    versions: Record<string, string>;
 }
 
 function errorMessage(error: unknown): string {
@@ -107,6 +135,17 @@ function clientErrorMessage(error: unknown): string {
 export { DEVICE_ID_PATTERN } from '../devices/identifiers.js';
 
 export const MAX_DEVICE_NAME_LENGTH = 200;
+
+/** Remembers the operator's appearance choice; 'auto' follows the OS, anything else is light. */
+const THEME_COOKIE = 'bl-theme';
+
+/** Asset ids are database uuids; anything else never reaches a query. */
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The repo documents the Rig page may link to. An explicit list — never a path from a request. */
+const DOC_PAGES: readonly string[] = [
+    'getting-started', 'operations', 'android-dashboard', 'fleet-and-alerts', 'auth', 'mcp', 'runbooks',
+];
 
 function validPort(value: unknown): boolean {
     return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65_535;
@@ -191,19 +230,6 @@ function escapeHtml(value: unknown): string {
     })[character] ?? character);
 }
 
-// Shown at the foot of every dashboard page. Override the link with
-// PHONE_FARM_BRAND_URL; the text is fixed.
-const FOOTER_HTML = `Built by <a href="${escapeHtml(process.env.PHONE_FARM_BRAND_URL ?? 'https://agniverse.co')}" target="_blank" rel="noopener">Agniverse</a>, with love and curry &#10084;&#65039;`;
-
-function page(title: string, body: string, logoutPath?: string, navLinks: readonly PluginNavLink[] = []): string {
-    const logout = logoutPath ? `<a href="${escapeHtml(logoutPath)}" style="float:right;margin-right:0">Log out</a>` : '';
-    const extra = navLinks.map((link) => `<a href="${escapeHtml(link.href)}">${escapeHtml(link.label)}</a>`).join('');
-    return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${escapeHtml(title)}</title><style>
-body{font:15px system-ui,sans-serif;margin:0;background:#f6f7f9;color:#17202a}nav{padding:16px 24px;background:#111827;color:white}nav a{color:white;margin-right:18px}main{max-width:1100px;margin:24px auto;padding:0 20px}.card{background:white;border:1px solid #dde2e8;border-radius:10px;padding:18px;margin:14px 0}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:9px;border-bottom:1px solid #e5e7eb}code{font-size:12px}.muted{color:#64748b}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}button,.button{background:#2563eb;color:white;border:0;border-radius:6px;padding:8px 12px;text-decoration:none;cursor:pointer}input,select,textarea{padding:8px;border:1px solid #cbd5e1;border-radius:6px}</style></head>
-<body><nav><a href="/">Devices</a><a href="/tasks">Tasks</a><a href="/docs">API</a>${extra}${logout}</nav><main>${body}</main><footer style="max-width:1100px;margin:24px auto;padding:16px 20px;color:#94a3b8;font-size:12px">${FOOTER_HTML}</footer></body></html>`;
-}
-
 /**
  * Both the unlock passcode and `android.bridgeToken` are stripped by `redactDevice` itself, so
  * this is the registry's own redaction under the name the routes already use.
@@ -224,12 +250,6 @@ function osLabel(device: Pick<Device, 'platform' | 'osVersion'>): string {
     return `${devicePlatform(device) === 'android' ? 'Android' : 'iOS'} ${device.osVersion}`;
 }
 
-/** Small pills on the grid and the device page so a mixed fleet reads at a glance. */
-function platformBadges(device: Pick<RegisteredDevice, 'platform' | 'driver' | 'android'>): string {
-    const platform = platformOf(device);
-    return `<span class="badge platform-${platform}">${platform === 'android' ? 'Android' : 'iOS'}</span>`
-        + `<span class="badge driver">${escapeHtml(driverKindOf(device))}</span>`;
-}
 
 /** The Android remote verbs the dashboard can send; the rest are iOS/WDA-only. */
 type AndroidRemoteAction = RemoteAction | { type: 'back' } | { type: 'text'; text: string };
@@ -352,57 +372,136 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     };
     const logoutPath = options.authProvider?.logoutPath;
     const authNavHtml = logoutPath
-        ? `<a class="button secondary app-logout" href="${escapeHtml(logoutPath)}">Log out</a>` : '';
+        ? `<a class="bl-btn app-logout" href="${escapeHtml(logoutPath)}">${icon('external')}Log out</a>` : '';
     const navLinks: PluginNavLink[] = options.plugins.list()
         .flatMap((plugin) => plugin.navLinks ?? [])
         .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     const pluginNavHtml = navLinks
-        .map((link) => `<a class="button secondary" href="${escapeHtml(link.href)}">${escapeHtml(link.label)}</a>`)
+        .map((link) => `<a href="${escapeHtml(link.href)}">${icon('layers')}${escapeHtml(link.label)}</a>`)
         .join('');
-    const renderPage = (title: string, body: string) => page(title, body, logoutPath, navLinks);
     const assetHash = (body: string) => crypto.createHash('sha1').update(body).digest('base64url').slice(0, 10);
+    /** A page script, at its content-hashed URL when the theme is loaded. */
+    const scriptTag = (name: string): string => {
+        const version = themed?.versions[name];
+        return `<script type="module" src="/assets/${name}${version ? `?v=${version}` : ''}"></script>`;
+    };
+
+    // The event log backs the Alerts page and the sidebar's unread count. A farm
+    // with no scheduler database simply has no alerts, which is not an error.
+    let eventLog: EventStore | null = options.events ?? null;
+    const events = (): EventStore | null => {
+        if (!eventLog) {
+            try {
+                if (options.scheduler?.connection) eventLog = createEventStore(options.scheduler.connection);
+            } catch { /* no database wired up */ }
+        }
+        return eventLog;
+    };
+    const unreadAlerts = async (request: FastifyRequest): Promise<number> => {
+        const store = events();
+        if (!store) return 0;
+        try {
+            return await store.countAfter(await acknowledgedMark(app, request) ?? 0);
+        } catch { return 0; }
+    };
+    /** The one place the page renderers learn where the fleet's facts come from. */
+    const wallSources = () => ({
+        scheduler: options.scheduler, events,
+        ...(options.connectedUdids ? { connectedUdids: options.connectedUdids } : {}),
+    });
+    const themeOf = (request: FastifyRequest): 'auto' | 'light' =>
+        (request.cookies?.[THEME_COOKIE] === 'auto' ? 'auto' : 'light');
+
+    /** Sidebar rig block, unread count, plugin nav and theme — the chrome every page carries. */
+    const chrome = async (request: FastifyRequest, read?: FleetRead) => {
+        const fleet = read ?? await readFleet(wallSources());
+        const [statuses, unread] = await Promise.all([
+            wdaServiceStatuses().catch(() => [] as Awaited<ReturnType<typeof wdaServiceStatuses>>),
+            unreadAlerts(request),
+        ]);
+        const facts: RigFacts = {
+            devices: fleet.devices, connected: fleet.connected, statuses,
+            database: Boolean(options.scheduler?.connection),
+            running: fleet.executions.filter(({ status }) => status === 'running').length,
+            queued: fleet.executions.filter(({ status }) => status === 'queued').length,
+            eventLog: Boolean(events()), pushRegistrations: 0,
+        };
+        return { facts, fleet, rig: rigStatus(facts), unread, theme: themeOf(request) };
+    };
+    /** Render a page through the Backline shell with that chrome already filled in. */
+    const shell = async (
+        request: FastifyRequest,
+        input: Omit<ShellInput, 'rig' | 'unreadAlerts' | 'pluginNav' | 'authNav' | 'theme'>,
+        read?: FleetRead,
+    ): Promise<string> => {
+        const context = await chrome(request, read);
+        return renderShell({
+            ...input, head: `${scriptTag('shell.js')}${input.head ?? ''}`,
+            rig: context.rig, unreadAlerts: context.unread,
+            pluginNav: pluginNavHtml, authNav: authNavHtml, theme: context.theme,
+        });
+    };
+    /** The old plain-HTML fallback, now the shell with a one-panel body. */
+    const renderPage = (title: string, body: string, active: NavKey = 'devices') =>
+        renderShell({
+            title, active, body: `<div class="bl-page">${body}</div>`,
+            pluginNav: pluginNavHtml, authNav: authNavHtml, theme: 'light',
+        });
 
     let themed: LoadedDashboardTheme | null = null;
     if (options.dashboardTheme) {
         const root = options.dashboardTheme.rootDirectory;
         const require = createRequire(import.meta.url);
-        const [indexHtml, deviceHtml, tasksHtml, registerDeviceHtml, styles, deviceScript, tasksScript, registerDeviceScript, htmx, backlineStyles] = await Promise.all([
-            readFile(path.join(root, 'templates/index.html'), 'utf8'),
+        const assetRoot = path.join(root, 'assets');
+        // Every compiled page script is served by one route, so a new page needs
+        // a new .ts file and nothing else.
+        const scripts = (await readdir(assetRoot)).filter((name) => name.endsWith('.js')).sort();
+        const [deviceHtml, tasksHtml, registerDeviceHtml, htmx, backlineStyles, legacyStyles, ...scriptBodies] = await Promise.all([
             readFile(path.join(root, 'templates/device.html'), 'utf8'),
             readFile(path.join(root, 'templates/tasks.html'), 'utf8'),
             readFile(path.join(root, 'templates/register-device.html'), 'utf8'),
-            readFile(path.join(root, 'styles.css'), 'utf8'),
-            readFile(path.join(root, 'assets/device.js'), 'utf8'),
-            readFile(path.join(root, 'assets/tasks.js'), 'utf8'),
-            readFile(path.join(root, 'assets/register-device.js'), 'utf8'),
             readFile(require.resolve('htmx.org/dist/htmx.min.js'), 'utf8'),
             readFile(path.join(root, 'backline.css'), 'utf8'),
+            // The runbook plugin and the Content/Schedule templates still link the
+            // pre-Backline stylesheet; it is served until they no longer do.
+            readFile(path.join(root, 'styles.css'), 'utf8'),
+            ...scripts.map((name) => readFile(path.join(assetRoot, name), 'utf8')),
         ]);
-        // Content-hash every asset URL in the templates so a changed file gets a
-        // fresh URL that no browser or CDN can serve stale.
-        const versions: Record<string, string> = {
-            'styles.css': assetHash(styles), 'device.js': assetHash(deviceScript),
-            'tasks.js': assetHash(tasksScript), 'register-device.js': assetHash(registerDeviceScript),
-            'htmx.min.js': assetHash(htmx), 'backline.css': assetHash(backlineStyles),
-        };
+        const assets = new Map<string, DashboardAsset>([
+            ['backline.css', { contentType: 'text/css', body: backlineStyles }],
+            ['htmx.min.js', { contentType: 'text/javascript', body: htmx }],
+            ['styles.css', { contentType: 'text/css', body: legacyStyles }],
+            ...scripts.map((name, index): [string, DashboardAsset] =>
+                [name, { contentType: 'text/javascript', body: scriptBodies[index] ?? '' }]),
+        ]);
+        // Content-hash every asset URL so a changed file gets a fresh URL that no
+        // browser or CDN can serve stale.
+        const versions: Record<string, string> = {};
+        for (const [name, value] of assets) versions[name] = assetHash(value.body);
         const finalize = (html: string) => {
-            let out = html.replaceAll('__AUTH_NAV__', authNavHtml).replaceAll('__PLUGIN_NAV__', pluginNavHtml)
-                .replaceAll('__FOOTER__', FOOTER_HTML);
+            // The Schedule/Content templates are still whole documents with their own nav
+            // placeholders; the shell-rendered pages carry neither.
+            let out = html.replaceAll('__AUTH_NAV__', authNavHtml)
+                .replaceAll('__PLUGIN_NAV__', pluginNavHtml).replaceAll('__FOOTER__', '');
             for (const [name, v] of Object.entries(versions)) out = out.replaceAll(`/assets/${name}`, `/assets/${name}?v=${v}`);
             return out;
         };
         themed = {
-            indexHtml: finalize(indexHtml), deviceHtml: finalize(deviceHtml),
-            tasksHtml: finalize(tasksHtml), registerDeviceHtml: finalize(registerDeviceHtml),
-            styles, deviceScript, tasksScript, registerDeviceScript, htmx, backlineStyles,
+            deviceHtml: finalize(deviceHtml), tasksHtml: finalize(tasksHtml),
+            registerDeviceHtml: finalize(registerDeviceHtml), assets, versions,
         };
     }
 
     const renderActivity = async (deviceUdid: string, message?: string): Promise<string> => {
-        const executions = await options.scheduler.listExecutions(25, deviceUdid);
+        const partial = options.scheduler as Partial<SchedulerRepository>;
+        const executions = await partial.listExecutions?.(25, deviceUdid) ?? [];
+        const problem = message ? `<div class="bl-error">${escapeHtml(message)}</div>` : '';
         const execution = executions.find(({ status }) => status === 'running') ?? executions[0];
-        if (!execution) return `<section id="device-activity" class="run-panel"><div class="run-heading"><span class="status idle"><span class="dot"></span>idle</span><span class="run-meta">No automation has run on this device yet.</span></div>${message ? `<p class="run-error">${escapeHtml(message)}</p>` : ''}<pre>Waiting for output…</pre></section>`;
-        const detail = await options.scheduler.execution(execution.id);
+        if (!execution) {
+            return `<section id="device-activity">${problem}<div class="bl-log">`
+                + '<div><span>Nothing has run on this phone yet.</span></div></div></section>';
+        }
+        const detail = await partial.execution?.(execution.id) ?? null;
         // A plugin (or task version) can be uninstalled while old executions
         // still reference it — degrade instead of throwing out of the fragment.
         let definition: { summarize(payload: JsonObject): string; supportsStop(payload: JsonObject): boolean } | undefined;
@@ -414,11 +513,20 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         } catch { /* plugin unavailable */ }
         const summary = definition
             ? definition.summarize(execution.payload)
-            : `${execution.pluginId}/${execution.taskType}@${execution.taskVersion} (plugin not installed)`;
-        const canStop = execution.status === 'queued' || (execution.status === 'running' && (definition?.supportsStop(execution.payload) ?? true));
+            : `${execution.pluginId}/${execution.taskType} · this plugin is not installed`;
+        const canStop = execution.status === 'queued'
+            || (execution.status === 'running' && (definition?.supportsStop(execution.payload) ?? true));
         const stop = canStop
-            ? `<form hx-post="/api/executions/${execution.id}/stop" hx-target="#device-activity" hx-swap="outerHTML"><button class="button secondary" type="submit">Stop</button></form>` : '';
-        return `<section id="device-activity" class="run-panel" hx-get="/api/devices/${encodeURIComponent(deviceUdid)}/fragments/activity" hx-trigger="every 1s" hx-swap="outerHTML"><div class="run-heading"><span class="status ${escapeHtml(execution.status)}"><span class="dot"></span>${escapeHtml(execution.status)}</span><span class="run-meta">${escapeHtml(summary)} · ${escapeHtml(execution.scheduledFor.toISOString())}</span></div>${message ? `<p class="run-error">${escapeHtml(message)}</p>` : ''}${stop}<pre>${detail?.logs.length ? detail.logs.map(escapeHtml).join('\n') : escapeHtml(execution.error ?? 'Waiting for worker output…')}</pre></section>`;
+            ? `<form hx-post="/api/executions/${execution.id}/stop" hx-target="#device-activity" hx-swap="outerHTML"><button class="bl-btn bl-btn-sm" type="submit">Stop</button></form>` : '';
+        const lines = (detail?.logs.length ? detail.logs.slice(-12) : [execution.error ?? 'Waiting for the worker'])
+            .map((line) => parseLogLine(line));
+        const log = lines.map((line, index) => `<div${index === lines.length - 1 ? ' class="is-current"' : ''}>`
+            + `${line.time ? `<time>${escapeHtml(line.time)}</time>` : ''}<span>${escapeHtml(line.text)}</span></div>`).join('');
+        return `<section id="device-activity" hx-get="/api/devices/${encodeURIComponent(deviceUdid)}/fragments/activity" hx-trigger="every 2s" hx-swap="outerHTML">`
+            + `<div class="bl-activity-head"><span class="bl-state ${execution.status === 'running' ? 'busy' : execution.status === 'failed' ? 'error' : ''}">`
+            + `<span class="bl-dot ${execution.status === 'running' ? 'busy' : execution.status === 'failed' ? 'error' : ''}"></span>${escapeHtml(execution.status)}</span>`
+            + `<span class="bl-muted">${escapeHtml(summary)}</span><span class="bl-spacer"></span>${stop}</div>`
+            + `${problem}<div class="bl-log">${log}</div></section>`;
     };
 
     app.get('/health', async () => {
@@ -701,6 +809,102 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         return reply.code(202).send({ ok: true, message: 'The shared WDA supervisor will reconnect automatically' });
     });
 
+    /**
+     * Everything the wall's toolbar can do to a selection that is not already a bulk
+     * schedule: pushing a clip onto phones, and installing an APK on the Android ones.
+     * Both take the same explicit body — a list of registered udids and one payload —
+     * and both refuse anything they cannot name.
+     */
+    const MAX_ACTION_DEVICES = 100;
+    const selectionProblem = (udids: unknown): string | null => {
+        if (!Array.isArray(udids) || udids.length === 0) return 'udids must be a non-empty array of device ids';
+        if (udids.length > MAX_ACTION_DEVICES) return `udids must name at most ${MAX_ACTION_DEVICES} devices`;
+        if (!udids.every((udid) => typeof udid === 'string' && validDeviceId(udid))) return `every udid ${DEVICE_ID_MESSAGE}`;
+        return null;
+    };
+    /** Resolve a selection to registered, enabled device records, or throw a 4xx. */
+    const selectedDevices = async (udids: string[]): Promise<RegisteredDevice[]> => {
+        const registered = await loadRegisteredDevices();
+        return udids.map((udid) => {
+            const device = registered.find((entry) => entry.udid === udid);
+            if (!device) throw httpError(404, `${udid} is not registered`);
+            if (device.disabled) throw httpError(409, `${device.name} is disabled — activate it first`);
+            return device;
+        });
+    };
+    interface ActionOutcome { udid: string; ok: boolean; message: string }
+
+    app.post<{ Body: { udids?: unknown; assetId?: unknown } }>('/api/devices/actions/push-media', async (request, reply) => {
+        const problem = selectionProblem(request.body?.udids);
+        if (problem) return reply.code(400).send({ error: problem });
+        const assetId = request.body?.assetId;
+        if (typeof assetId !== 'string' || !UUID_PATTERN.test(assetId)) {
+            return reply.code(400).send({ error: 'assetId must be an uploaded asset id' });
+        }
+        let file: { path: string; name: string; mimeType: string };
+        try {
+            const [row] = await options.scheduler.connection.db.select().from(assets).where(eq(assets.id, assetId)).limit(1);
+            if (!row) return reply.code(404).send({ error: 'No such asset' });
+            const root = path.resolve(process.env.SCHEDULER_DATA_DIR ?? '.scheduler-data');
+            file = { path: path.resolve(root, row.relativePath), name: row.originalName, mimeType: row.mimeType };
+        } catch {
+            return reply.code(503).send({ error: 'Media is unavailable — the scheduler database is not connected' });
+        }
+        const devices = await selectedDevices(request.body!.udids as string[]);
+        const results: ActionOutcome[] = [];
+        for (const device of devices) {
+            try {
+                await createDriver(device).pushMedia({ localPath: file.path, fileName: file.name, mimeType: file.mimeType });
+                results.push({ udid: device.udid, ok: true, message: `${file.name} is on the phone` });
+            } catch (error) {
+                results.push({ udid: device.udid, ok: false, message: errorMessage(error) });
+            }
+        }
+        const pushed = results.filter(({ ok }) => ok).length;
+        return reply.code(pushed ? 200 : 502).send({ pushed, failed: results.length - pushed, results });
+    });
+
+    app.post<{ Body: { udids?: unknown; path?: unknown } }>('/api/devices/actions/install-apk', async (request, reply) => {
+        const problem = selectionProblem(request.body?.udids);
+        if (problem) return reply.code(400).send({ error: problem });
+        const apk = request.body?.path;
+        if (typeof apk !== 'string' || apk.includes('\0') || !apk.toLowerCase().endsWith('.apk')) {
+            return reply.code(400).send({ error: 'path must be the path of an .apk file' });
+        }
+        // The path comes from a browser, so it is only ever allowed to name a file
+        // inside the farm's own APK directory — never an arbitrary place on disk.
+        const root = path.resolve(process.env.PHONE_FARM_APK_DIR
+            ?? path.join(process.env.SCHEDULER_DATA_DIR ?? '.scheduler-data', 'apk'));
+        const resolved = path.resolve(root, apk);
+        if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+            return reply.code(400).send({ error: `path must name a file inside ${root}` });
+        }
+        try {
+            await readFile(resolved, { flag: 'r' });
+        } catch {
+            return reply.code(404).send({ error: 'No such APK' });
+        }
+        const devices = await selectedDevices(request.body!.udids as string[]);
+        const notAndroid = devices.filter((device) => platformOf(device) !== 'android');
+        if (notAndroid.length) {
+            return reply.code(400).send({
+                error: `An APK only installs on Android: ${notAndroid.map(({ name }) => name).join(', ')}`,
+            });
+        }
+        const results: ActionOutcome[] = [];
+        for (const device of devices) {
+            try {
+                await runCommand('adb', ['-s', device.android?.serial ?? device.udid, 'install', '-r', resolved],
+                    { timeoutMs: 180_000 });
+                results.push({ udid: device.udid, ok: true, message: 'Installed' });
+            } catch (error) {
+                results.push({ udid: device.udid, ok: false, message: errorMessage(error) });
+            }
+        }
+        const installed = results.filter(({ ok }) => ok).length;
+        return reply.code(installed ? 200 : 502).send({ installed, failed: results.length - installed, results });
+    });
+
     app.get<{ Querystring: KeysetQuery }>('/api/schedules', async (request, reply) => {
         const page = await keysetPage(request.query, (id) => options.scheduler.schedule(id),
             (limit, deviceUdid, before) => options.scheduler.listSchedules(limit, deviceUdid, before));
@@ -811,7 +1015,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         return reply.code(204).send();
     });
 
-    await registerContentRoutes(app, { scheduler: options.scheduler, navHtml: pluginNavHtml, footerHtml: FOOTER_HTML });
+    await registerContentRoutes(app, { scheduler: options.scheduler, navHtml: pluginNavHtml, footerHtml: '' });
     await registerFleetRoutes(app, options);
     await registerScheduleRoutes(app, options);
     await registerPushRoutes(app, options);
@@ -827,111 +1031,209 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         });
     }
 
+    const AVATAR = `<span class="bl-avatar" aria-hidden="true">${PRODUCT_NAME.slice(0, 1)}</span>`;
+
     if (themed) {
         const theme = themed;
-        // Templates request these with a ?v=<contenthash>. A versioned request is
-        // safe to cache forever; a bare one (bookmark) must revalidate via ETag.
-        const asset = (contentType: string, body: string) => {
-            const etag = `"${crypto.createHash('sha1').update(body).digest('base64url')}"`;
-            return async (request: FastifyRequest, reply: FastifyReply) => {
-                const versioned = Boolean((request.query as { v?: string }).v);
-                reply.header('cache-control', versioned ? 'public, max-age=31536000, immutable' : 'no-cache')
-                    .header('etag', etag);
-                if (request.headers['if-none-match'] === etag) return reply.code(304).send();
-                return reply.type(contentType).send(body);
-            };
-        };
-        app.get('/assets/styles.css', asset('text/css', theme.styles));
-        app.get('/assets/backline.css', asset('text/css', theme.backlineStyles));
-        app.get('/assets/device.js', asset('text/javascript', theme.deviceScript));
-        app.get('/assets/tasks.js', asset('text/javascript', theme.tasksScript));
-        app.get('/assets/register-device.js', asset('text/javascript', theme.registerDeviceScript));
-        app.get('/assets/htmx.min.js', asset('text/javascript', theme.htmx));
-        app.get('/api/fragments/devices', async (_request, reply) => {
-            const devices = await registeredWithStatus();
-            const active = devices.filter((device) => !device.disabled);
-            const disabled = devices.filter((device) => device.disabled);
-            const toggleButton = (udid: string, label: string, next: boolean) =>
-                `<button type="button" class="button secondary device-toggle" data-toggle-device="${encodeURIComponent(udid)}" data-disabled="${next}">${label}</button>`;
-            const cards = active.map((device) => {
-                const accounts = Object.values(device.pluginData).flatMap((value) => {
-                    const candidate = value.accounts;
-                    return Array.isArray(candidate) ? candidate.filter((entry) => typeof entry === 'string') : [];
-                });
-                // A still screenshot that refreshes with the 5s fragment poll —
-                // not a live MJPEG stream. Streaming every device's screen through
-                // the tunnel at once is what made the grid crawl.
-                const preview = device.connected
-                    ? `<div class="device-preview-frame"><img class="device-preview" src="/api/devices/${encodeURIComponent(device.udid)}/remote/screenshot?t=${Date.now()}" alt="Screen of ${escapeHtml(device.name)}" draggable="false" onerror="this.style.visibility='hidden'"></div>`
-                    : '<div class="device-preview-frame unavailable" aria-hidden="true"><div class="device-icon"></div></div>';
-                return `<article class="device-card">${preview}<div class="device-copy"><h2>${escapeHtml(device.name)}</h2><p class="device-badges">${platformBadges(device)}</p><p>${device.connected ? escapeHtml(osLabel(device.connected)) : escapeHtml(device.udid)}</p><span class="connected${device.connected ? '' : ' offline'}"><span></span>${device.connected ? 'Online' : 'Offline'}</span>${accounts.length ? `<p class="accounts">${accounts.map(escapeHtml).join(', ')}</p>` : ''}</div><div class="device-card-actions"><a class="button secondary" href="/devices/${encodeURIComponent(device.udid)}">Open device <span aria-hidden="true">→</span></a>${toggleButton(device.udid, 'Disconnect', true)}</div></article>`;
-            }).join('');
-            const disabledPanel = disabled.length
-                ? `<details class="disabled-devices"${disabled.length ? '' : ' hidden'}><summary>Disconnected devices (${disabled.length})</summary><ul>${disabled.map((device) => `<li><span>${escapeHtml(device.name)}</span>${toggleButton(device.udid, 'Reconnect', false)}</li>`).join('')}</ul></details>`
-                : '';
-            const toggleScript = `<script>if(!window.__deviceToggle){window.__deviceToggle=1;document.addEventListener('click',async function(e){var b=e.target.closest('[data-toggle-device]');if(!b)return;e.preventDefault();b.disabled=true;var r=await fetch('/api/devices/'+b.dataset.toggleDevice,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({disabled:b.dataset.disabled==='true'})});if(r.ok){if(window.htmx)htmx.ajax('GET','/api/fragments/devices',{target:'#device-list',swap:'outerHTML'})}else{b.disabled=false;alert(((await r.json().catch(function(){return{}}))||{}).error||'Request failed')}})}</script>`;
-            return reply.type('text/html').send(`<section id="device-list" class="device-list" hx-get="/api/fragments/devices" hx-trigger="every 5s" hx-swap="outerHTML" aria-live="polite">${cards || '<div class="empty-state"><h2>No active devices</h2></div>'}${disabledPanel}${toggleScript}</section>`);
+        // A versioned request is safe to cache forever; a bare one (a bookmark)
+        // must revalidate via ETag.
+        const etags = new Map<string, string>();
+        for (const [name, value] of theme.assets) {
+            etags.set(name, `"${crypto.createHash('sha1').update(value.body).digest('base64url')}"`);
+        }
+        app.get<{ Params: { file: string }; Querystring: { v?: string } }>('/assets/:file', async (request, reply) => {
+            const found = theme.assets.get(request.params.file);
+            if (!found) return reply.code(404).send({ error: 'Unknown asset' });
+            const etag = etags.get(request.params.file)!;
+            reply.header('cache-control', request.query.v ? 'public, max-age=31536000, immutable' : 'no-cache')
+                .header('etag', etag);
+            if (request.headers['if-none-match'] === etag) return reply.code(304).send();
+            return reply.type(found.contentType).send(found.body);
         });
+
         app.get<{ Params: { udid: string } }>('/api/devices/:udid/fragments/summary', async (request, reply) => {
             const device = (await discoverConnectedDevices()).find(({ udid }) => udid === request.params.udid);
-            if (!device) return reply.type('text/html').send('<section id="device-summary" class="device-summary error"><div><h2>Device disconnected</h2></div></section>');
+            if (!device) {
+                return reply.type('text/html').send('<section id="device-summary" class="bl-device-summary is-error">'
+                    + '<span class="bl-state error"><span class="bl-dot error"></span>offline</span>'
+                    + '<span class="bl-muted">This phone is not reachable right now.</span></section>');
+            }
             const android = await androidDevice(device.udid);
             // Android has no WebDriverAgent to ask; its screen comes from the device's own driver.
             const screen = android
                 ? await createDriver(android).screen()
                 : await remote.getScreenInfo(device.udid).then(({ screenSize, scale }) => ({ ...screenSize, scale }));
             const registered = (await loadRegisteredDevices()).find(({ udid }) => udid === device.udid);
-            const badges = registered ? platformBadges(registered) : platformBadges({ platform: devicePlatform(device) });
             const units = devicePlatform(device) === 'android' ? 'pixels' : 'points';
-            return reply.type('text/html').send(`<section id="device-summary" class="device-summary" data-screen-width="${screen.width}" data-screen-height="${screen.height}" data-platform="${escapeHtml(devicePlatform(device))}" data-driver="${escapeHtml(registered ? driverKindOf(registered) : 'wda')}"><div><span class="eyebrow">Connected device</span><h1>${escapeHtml(device.name)}</h1><p class="device-badges">${badges}</p><p>${escapeHtml(osLabel(device))} · ${screen.width} × ${screen.height} ${units} · ${screen.scale}×</p></div><code>${escapeHtml(device.udid)}</code></section>`);
+            return reply.type('text/html').send(`<section id="device-summary" class="bl-device-summary" data-screen-width="${screen.width}" data-screen-height="${screen.height}" data-platform="${escapeHtml(devicePlatform(device))}" data-driver="${escapeHtml(registered ? driverKindOf(registered) : 'wda')}"><div class="bl-rows"><div><span>Platform</span><span>${escapeHtml(osLabel(device))}</span></div><div><span>Driver</span><span>${escapeHtml(registered ? driverKindOf(registered) : 'wda')}</span></div><div><span>Screen</span><span>${screen.width} × ${screen.height} ${units} · ${screen.scale}×</span></div><div><span>Identifier</span><span class="bl-faint">${escapeHtml(device.udid)}</span></div></div></section>`);
         });
         app.get<{ Params: { udid: string } }>('/api/devices/:udid/fragments/activity', async (request, reply) => {
             return reply.type('text/html').send(await renderActivity(request.params.udid));
         });
+        // The wall's right-hand column, so selecting a tile is one small fetch.
+        app.get<{ Params: { udid: string } }>('/api/fragments/inspector/:udid', async (request, reply) => {
+            const device = await wallDevice(request.params.udid);
+            if (!device) return reply.code(404).type('text/html').send(renderInspector(undefined));
+            return reply.type('text/html')
+                .send(renderInspector(device, await inspectorLog(options.scheduler, device.udid)));
+        });
+        app.get<{ Params: { udid: string } }>('/api/fragments/inspector/:udid/run', async (request, reply) => {
+            const device = await wallDevice(request.params.udid);
+            if (!device) return reply.code(404).send({ error: 'Device not found' });
+            return reply.type('text/html')
+                .send(renderInspectorRun(device, await inspectorLog(options.scheduler, device.udid)));
+        });
     }
 
-    app.get('/', async (_request, reply) => {
-        if (themed) return reply.type('text/html').send(themed.indexHtml);
-        const devices = await registeredWithStatus();
-        const cards = devices.map((device) => `<div class="card"><h2>${escapeHtml(device.name)}</h2><p class="muted"><code>${escapeHtml(device.udid)}</code></p><p>${device.disabled ? 'Disconnected' : device.connected ? `Online · ${escapeHtml(osLabel(device.connected))}` : 'Offline'}</p><a class="button" href="/devices/${encodeURIComponent(device.udid)}">Open device</a></div>`).join('');
-        const connected = await discoverConnectedDevices();
-        const registeredIds = new Set(devices.map(({ udid }) => udid));
-        const candidates = connected.filter(({ udid }) => !registeredIds.has(udid)).map((device) => `<option value="${escapeHtml(device.udid)}" data-name="${escapeHtml(device.name)}" data-platform="${escapeHtml(devicePlatform(device))}">${escapeHtml(device.name)} · ${escapeHtml(osLabel(device))}</option>`).join('');
-        const registration = candidates ? `<section class="card"><h2>Register connected device</h2><form id="register-device"><select name="udid">${candidates}</select> <button>Register</button></form><p id="register-result" class="muted"></p><script>document.getElementById('register-device').addEventListener('submit',async function(e){e.preventDefault();var s=e.currentTarget.udid;var o=s.options[s.selectedIndex];var r=await fetch('/api/devices',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({udid:o.value,name:o.dataset.name,pluginData:{}})});document.getElementById('register-result').textContent=r.ok?'Registered. Reloading…':(await r.json()).error;if(r.ok)setTimeout(function(){location.reload()},500)});</script></section>` : '';
-        return reply.type('text/html').send(renderPage('Devices', `<h1>Devices</h1>${registration}<div class="grid">${cards || '<p>No devices registered.</p>'}</div>`));
+    /** One phone in the wall's shape, for the inspector fragments. */
+    async function wallDevice(udid: string): Promise<WallDevice | undefined> {
+        const read = await readFleet(wallSources());
+        return toWallDevices(read).find((device) => device.udid === udid);
+    }
+
+    app.get<{ Querystring: { device?: string } }>('/', async (request, reply) => {
+        const data = await collectWall({
+            ...wallSources(),
+            ...(request.query.device ? { selectedUdid: request.query.device } : {}),
+        });
+        return reply.type('text/html').send(await shell(request, {
+            title: 'Control Center', active: 'control',
+            body: renderControlCenter(data),
+            toolbar: wallToolbar(),
+            toolbarRight: `${wallToolbarRight()}${AVATAR}`,
+            head: scriptTag('wall.js'),
+        }, data.read));
     });
-    app.get('/devices/register', async (_request, reply) => {
-        if (!themed) return reply.type('text/html').send(renderPage('Register device', '<h1>Register device</h1><p>Use <code>POST /api/device-registrations</code> to start device setup.</p>'));
-        return reply.type('text/html').send(themed.registerDeviceHtml);
+
+    app.get('/devices', async (request, reply) => {
+        const read = await readFleet(wallSources());
+        return reply.type('text/html').send(await shell(request, {
+            title: 'Devices', active: 'devices',
+            body: renderDevicesPage(toWallDevices(read)),
+            toolbar: `<a class="bl-btn bl-btn-primary" href="/devices/register">${icon('plus')}Register a device</a>`,
+        }, read));
     });
+
+    app.get('/devices/register', async (request, reply) => {
+        const body = themed?.registerDeviceHtml
+            ?? '<div class="bl-page"><p>Use <code>POST /api/device-registrations</code> to start device setup.</p></div>';
+        return reply.type('text/html').send(await shell(request, {
+            title: 'Register a device', active: 'devices', body,
+            toolbar: `<a class="bl-btn" href="/devices">${icon('chevronLeft')}All devices</a>`,
+            head: themed ? scriptTag('register-device.js') : '',
+        }));
+    });
+
     app.get<{ Params: { udid: string } }>('/devices/:udid', async (request, reply) => {
         const device = (await loadRegisteredDevices()).find(({ udid }) => udid === request.params.udid);
-        if (!device) return reply.code(404).type('text/html').send(renderPage('Not found', '<h1>Device not found</h1>'));
+        if (!device) {
+            return reply.code(404).type('text/html')
+                .send(renderPage('Device not found', '<div class="bl-empty"><span>No phone is registered under that identifier.</span><a class="bl-btn" href="/devices">All devices</a></div>'));
+        }
+        const read = await readFleet(wallSources());
+        const wall = toWallDevices(read).find(({ udid }) => udid === device.udid);
+        const number = wall ? slotNumber(wall.slot) : '';
         if (themed) {
             const rendered = options.dashboardTheme?.renderDevice
                 ? options.dashboardTheme.renderDevice(themed.deviceHtml, device) : themed.deviceHtml;
-            return reply.type('text/html').send(rendered.replaceAll('__DEVICE_UDID__', encodeURIComponent(device.udid)));
-        }
-        const schedules = await options.scheduler.listSchedules(50, device.udid);
-        const executions = await options.scheduler.listExecutions(50, device.udid);
-        const panels: string[] = [];
-        for (const plugin of options.plugins.list()) {
-            for (const panel of [...(plugin.devicePanels ?? [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))) {
-                try {
-                    panels.push(`<section class="card" data-plugin="${escapeHtml(plugin.id)}"><h2>${escapeHtml(panel.title)}</h2>${await readFile(panel.fragmentPath, 'utf8')}</section>`);
-                } catch (error) {
-                    panels.push(`<section class="card"><h2>${escapeHtml(panel.title)}</h2><p>Panel unavailable: ${escapeHtml(errorMessage(error))}</p></section>`);
+            const panels: string[] = [];
+            for (const plugin of options.plugins.list()) {
+                for (const panel of [...(plugin.devicePanels ?? [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))) {
+                    try {
+                        panels.push(`<section class="bl-panel" data-plugin="${escapeHtml(plugin.id)}"><div class="bl-panel-head">${escapeHtml(panel.title)}</div><div class="bl-panel-body">${await readFile(panel.fragmentPath, 'utf8')}</div></section>`);
+                    } catch (error) {
+                        panels.push(`<section class="bl-panel"><div class="bl-panel-head">${escapeHtml(panel.title)}</div><div class="bl-panel-body bl-muted">This panel is unavailable: ${escapeHtml(errorMessage(error))}</div></section>`);
+                    }
                 }
             }
+            const body = rendered
+                .replaceAll('__DEVICE_UDID__', encodeURIComponent(device.udid))
+                .replaceAll('__DEVICE_NUMBER__', escapeHtml(number))
+                .replaceAll('__DEVICE_NAME__', escapeHtml(device.name))
+                .replaceAll('__DEVICE_PLATFORM__', platformOf(device) === 'android' ? 'Android' : 'iOS')
+                .replaceAll('__HARDWARE_COLUMN__', hardwareColumn(platformOf(device) === 'android' ? 'android' : 'ios'))
+                .replaceAll('__VIEWER__', wall ? viewer(wall, 'live') : '')
+                .replaceAll('__PLUGIN_PANELS__', panels.join(''));
+            return reply.type('text/html').send(await shell(request, {
+                title: `${number} ${device.name}`.trim(), active: 'devices', body,
+                toolbar: `<a class="bl-btn" href="/">${icon('chevronLeft')}Control Center</a>`,
+                toolbarRight: wall ? stateBadge(wall.state) : '',
+                head: scriptTag('device.js'),
+            }, read));
         }
-        const scheduleRows = schedules.map((item) => `<tr><td>${escapeHtml(item.pluginId)}/${escapeHtml(item.taskType)}</td><td>${escapeHtml(JSON.stringify(item.timing))}<br><span class="muted">Next: ${escapeHtml(item.nextRunAt?.toISOString() ?? '—')}</span></td><td>${escapeHtml(item.status)}</td><td>${item.status === 'active' ? `<button data-schedule="${item.id}" data-status="paused">Pause</button>` : item.status === 'paused' ? `<button data-schedule="${item.id}" data-status="active">Resume</button>` : ''} ${!['cancelled', 'completed'].includes(item.status) ? `<button data-schedule="${item.id}" data-status="cancelled">Cancel</button>` : ''}</td></tr>`).join('');
-        const executionRows = executions.map((item) => `<tr><td>${escapeHtml(item.pluginId)}/${escapeHtml(item.taskType)}</td><td>${escapeHtml(item.status)}<br><span class="muted">${escapeHtml(item.scheduledFor.toISOString())}</span></td><td><a href="/api/executions/${item.id}"><code>${escapeHtml(item.id)}</code></a></td><td>${['queued', 'running'].includes(item.status) ? `<button data-stop="${item.id}">Stop</button>` : ['failed', 'stopped'].includes(item.status) ? `<button data-retry="${item.id}">Retry</button>` : ''}</td></tr>`).join('');
-        const udidJs = encodeURIComponent(device.udid);
-        const passcodeCard = `<section class="card"><h2>Unlock passcode</h2><p class="muted">${device.passcode ? 'A passcode is set.' : 'No passcode set.'} Stored in devices.json, never shown.</p><form id="pc"><input id="pcv" type="password" inputmode="numeric" placeholder="4+ digits" autocomplete="new-password"> <button class="button secondary">Save</button> <button type="button" id="pcc" class="button secondary">Clear</button> <span id="pcr" class="muted"></span></form></section><script>(function(){var f=document.getElementById('pc'),v=document.getElementById('pcv'),r=document.getElementById('pcr');async function set(p){r.textContent='…';var x=await fetch('/api/devices/${udidJs}',{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({passcode:p})});if(x.ok){r.textContent=p?'Saved.':'Cleared.';v.value=''}else{r.textContent=((await x.json().catch(function(){return{}})).error)||'Failed'}}f.addEventListener('submit',function(e){e.preventDefault();if(!/^\\d{4,}$/.test(v.value.trim())){r.textContent='4+ digits';return}set(v.value.trim())});document.getElementById('pcc').addEventListener('click',function(){if(confirm('Clear passcode?'))set('')})})();</script>`;
-        const controls = `<script>document.addEventListener('click',async function(e){var b=e.target.closest('button');if(!b)return;var url,body,method='POST';if(b.dataset.schedule){url='/api/schedules/'+b.dataset.schedule+'/status';body={status:b.dataset.status}}else if(b.dataset.stop){url='/api/executions/'+b.dataset.stop+'/stop'}else if(b.dataset.retry){url='/api/executions/'+b.dataset.retry+'/retry'}else if(b.dataset.remove){if(!confirm('Remove this device? Its schedules will be cancelled.'))return;url='/api/devices/'+encodeURIComponent(b.dataset.remove);method='DELETE'}else{return}b.disabled=true;var r=await fetch(url,{method:method,headers:{'content-type':'application/json'},body:body?JSON.stringify(body):'{}'});if(r.ok){location.href=b.dataset.remove?'/':location.href;if(!b.dataset.remove)location.reload()}else{b.disabled=false;alert((await r.json().catch(function(){return{}})).error||'Request failed')}});</script>`;
-        return reply.type('text/html').send(renderPage(device.name, `<h1>${escapeHtml(device.name)}</h1><p><code>${escapeHtml(device.udid)}</code></p>${panels.join('')}<section class="card"><h2>Scheduled and recurring jobs</h2><table><tr><th>Task</th><th>Timing</th><th>Status</th><th>Actions</th></tr>${scheduleRows || '<tr><td colspan="4">No schedules.</td></tr>'}</table></section><section class="card"><h2>Execution history</h2><table><tr><th>Task</th><th>Status</th><th>ID/logs</th><th>Actions</th></tr>${executionRows || '<tr><td colspan="4">No executions.</td></tr>'}</table></section>${passcodeCard}<section class="card"><h2>Danger zone</h2><p class="muted">Removing a device cancels its schedules and forgets its configuration. WebDriverAgent stays installed on the phone.</p><button data-remove="${escapeHtml(device.udid)}" class="button secondary">Remove device</button></section>${controls}`));
+        return reply.type('text/html').send(renderPage(device.name,
+            `<p class="bl-muted">${escapeHtml(device.udid)}</p><p>The dashboard theme is not configured, so this page has no controls.</p>`));
     });
-    app.get('/docs', async (_request, reply) => reply.type('text/html').send(renderPage('API', '<h1>API</h1><p>Use <code>/api/plugins</code>, <code>/api/devices</code>, <code>/api/schedules</code>, and <code>/api/executions</code>. This route follows the configured authentication policy.</p>')));
+
+    app.get('/rig', async (request, reply) => {
+        const context = await chrome(request);
+        return reply.type('text/html').send(renderShell({
+            title: 'Rig', active: 'rig',
+            body: renderRigPage(rigServices(context.facts)),
+            toolbarRight: `<span>${escapeHtml(context.rig.headline)}</span>`,
+            head: scriptTag('shell.js'),
+            rig: context.rig, unreadAlerts: context.unread,
+            pluginNav: pluginNavHtml, authNav: authNavHtml, theme: context.theme,
+        }));
+    });
+
+    app.get('/alerts', async (request, reply) => {
+        const store = events();
+        const list = store ? await store.list({ limit: 100 }).catch(() => [] as FarmEvent[]) : [];
+        const unread = await unreadAlerts(request);
+        return reply.type('text/html').send(await shell(request, {
+            title: 'Alerts', active: 'alerts',
+            body: renderAlertsPage(list, unread),
+            toolbar: '<button type="button" class="bl-btn" data-ack-all>Acknowledge all</button>',
+        }));
+    });
+
+    app.get('/accounts', async (request, reply) => {
+        const read = await readFleet(wallSources());
+        const devices = toWallDevices(read);
+        return reply.type('text/html').send(await shell(request, {
+            title: 'Accounts', active: 'accounts',
+            body: renderAccountsPage(accountRows(devices), devices),
+        }, read));
+    });
+
+    app.get<{ Querystring: { theme?: string } }>('/settings', async (request, reply) => {
+        if (request.query.theme === 'auto' || request.query.theme === 'light') {
+            reply.setCookie(THEME_COOKIE, request.query.theme, { path: '/', httpOnly: false, sameSite: 'lax' });
+            return reply.redirect('/settings');
+        }
+        const origin = process.env.PUBLIC_ORIGIN ?? `http://${request.headers.host ?? '127.0.0.1:3000'}`;
+        const mcpConfig = JSON.stringify({
+            mcpServers: { backline: { command: 'npm', args: ['run', 'mcp'], env: { FARM_BASE_URL: origin } } },
+        }, null, 2);
+        return reply.type('text/html').send(await shell(request, {
+            title: 'Settings', active: 'settings',
+            body: renderSettingsPage({ theme: themeOf(request), mcpConfig, origin }),
+        }));
+    });
+
+    app.get('/docs', async (request, reply) => reply.type('text/html').send(await shell(request, {
+        title: 'API', active: 'settings',
+        body: '<div class="bl-page bl-page-narrow"><section class="bl-panel"><div class="bl-panel-body">'
+            + '<p>Use <code>/api/devices</code>, <code>/api/schedules</code>, <code>/api/executions</code> and '
+            + '<code>/api/events</code>. Every route follows the configured authentication policy.</p>'
+            + '</div></section></div>',
+    })));
+    // The Rig page links here when a service is not running; the docs live in the repo.
+    app.get<{ Params: { page: string } }>('/docs/:page', async (request, reply) => {
+        if (!DOC_PAGES.includes(request.params.page)) return reply.code(404).send({ error: 'No such document' });
+        let markdown: string;
+        try {
+            markdown = await readFile(fileURLToPath(new URL(`../../docs/${request.params.page}.md`, import.meta.url)), 'utf8');
+        } catch {
+            return reply.code(404).send({ error: 'No such document' });
+        }
+        return reply.type('text/html').send(await shell(request, {
+            title: request.params.page.replaceAll('-', ' '), active: 'rig',
+            body: `<div class="bl-page bl-page-narrow"><pre class="bl-code">${escapeHtml(markdown)}</pre></div>`,
+            toolbar: `<a class="bl-btn" href="/rig">${icon('chevronLeft')}Rig</a>`,
+        }));
+    });
 
     app.setErrorHandler((error, request, reply) => {
         request.log.error(error);

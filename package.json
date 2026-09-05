@@ -1,9 +1,9 @@
 {
-  "name": "@git-agni/phone-farm-core",
+  "name": "@git-agni/backline",
   "version": "0.1.0-review.0",
   "private": false,
   "license": "Apache-2.0",
-  "description": "Self-hosted iOS and Android phone farm: guided device registration, live screen and remote input, PostgreSQL-backed scheduling, a content drip queue, fleet alerts, plugins, an MCP server, and TikTok automation",
+  "description": "Backline: a self-hosted control center for a phone farm — a wall of live Android and iPhone screens, guided device registration, remote input, PostgreSQL-backed scheduling, a content drip queue, alerts, plugins, an MCP server and TikTok automation",
   "files": [
     "src",
     "static",
@@ -41,6 +41,7 @@
     "token:create": "node --env-file-if-exists=.env --import tsx src/auth/cli.ts token-create",
     "token:revoke": "node --env-file-if-exists=.env --import tsx src/auth/cli.ts token-revoke",
     "build:web": "tsc -p tsconfig.web.json",
+    "preview:dashboard": "npm run build:web && node --import tsx scripts/preview-dashboard.mts",
     "preweb": "npm run build:web",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.web.json --noEmit",
     "test": "node --import tsx --test --test-force-exit --test-timeout=60000 test/*.test.ts",

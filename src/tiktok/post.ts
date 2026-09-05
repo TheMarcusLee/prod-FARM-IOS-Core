@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { remote, type Browser } from 'webdriverio';
 
-import { loadRegisteredDevices, resolveDeviceCoordinates, WdaRemoteControl } from '@git-agni/phone-farm-core';
+import { loadRegisteredDevices, resolveDeviceCoordinates, WdaRemoteControl } from '@git-agni/backline';
 import type { PostManifest } from './post-manifest.js';
 import { type TikTokCoordinates } from './coordinates.js';
 import { coordinateProfile, registeredAccounts } from './runtime-settings.js';
