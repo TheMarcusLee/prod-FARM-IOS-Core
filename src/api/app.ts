@@ -69,6 +69,35 @@ function httpError(statusCode: number, message: string): Error & { statusCode: n
     return Object.assign(new Error(message), { statusCode });
 }
 
+/**
+ * A route that throws deliberately — `httpError`, a validator, Fastify's own
+ * schema check — is answering the caller and keeps its status and its message.
+ * Anything else is a fault in the farm, and its message is an internal detail:
+ * `ENOENT … /Users/…/devices.json` and `connect ECONNREFUSED 127.0.0.1:5432`
+ * both name things the caller has no business learning. Those become a plain
+ * 500; the real error is already in the log line above.
+ */
+function isDeliberate(error: unknown): boolean {
+    const failure = error as { statusCode?: unknown; code?: unknown };
+    if (typeof failure.statusCode === 'number') return failure.statusCode >= 400 && failure.statusCode < 500;
+    // Fastify's own client-facing errors (validation, bad JSON, body too large)
+    // carry an FST_ERR_* code; a Node system error carries ENOENT/ECONNREFUSED/…
+    if (typeof failure.code === 'string') return failure.code.startsWith('FST_ERR_');
+    // A TypeError or RangeError with no status is a bug, not an answer.
+    if (error instanceof TypeError || error instanceof RangeError || error instanceof ReferenceError) return false;
+    return error instanceof Error;
+}
+
+function clientStatus(error: unknown): number {
+    if (!isDeliberate(error)) return 500;
+    const status = (error as { statusCode?: number }).statusCode;
+    return typeof status === 'number' && status >= 400 && status < 500 ? status : 400;
+}
+
+function clientErrorMessage(error: unknown): string {
+    return isDeliberate(error) ? errorMessage(error) : 'Internal server error';
+}
+
 function csrfBlocked(reply: FastifyReply): FastifyReply {
     return reply.code(403).send({
         error: 'Cross-origin write blocked. Send an Authorization: Bearer token for API clients, '
@@ -766,9 +795,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
     app.setErrorHandler((error, request, reply) => {
         request.log.error(error);
-        const failure = error as Error & { statusCode?: number };
-        void reply.code(failure.statusCode && failure.statusCode >= 400 ? failure.statusCode : 400)
-            .send({ error: failure.message });
+        void reply.code(clientStatus(error)).send({ error: clientErrorMessage(error) });
     });
     return app;
 }
