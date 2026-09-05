@@ -1,6 +1,8 @@
 import type { JobWithMetadata } from 'pg-boss';
 
 import { assertDatabaseReady, createDatabaseConnection } from '../database/client.js';
+import { createContentStore } from '../content/store.js';
+import { startDripPlannerTick } from '../content/runner.js';
 import { createEventStore } from '../fleet/events.js';
 import { createEventRecorder } from '../fleet/recorder.js';
 import { schedulerEventHook } from '../fleet/scheduler-events.js';
@@ -118,6 +120,10 @@ export async function startWorker(plugins: PluginRegistry): Promise<WorkerRuntim
     const stuckTimer = setInterval(
         () => void sweepStuckExecutions({ repository, running }).catch(console.error), 60_000,
     );
+    // A worker-only deployment has no dashboard replica to tick the drip
+    // planner, so the worker ticks it as well. Both paths run the same
+    // `runDripPlanner` under the same advisory lock.
+    const planner = startDripPlannerTick({ store: createContentStore(connection.db), scheduler: repository });
     return {
         async close() {
             clearInterval(materializeTimer);
@@ -125,6 +131,7 @@ export async function startWorker(plugins: PluginRegistry): Promise<WorkerRuntim
             clearInterval(cleanupTimer);
             clearInterval(reconcileTimer);
             clearInterval(stuckTimer);
+            planner?.stop();
             await boss.stop({ graceful: true, timeout: 30_000 });
             await connection.close();
         },

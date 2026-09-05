@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { affectsPlanning } from '../src/api/routes/content.js';
-import { reconcileUsage, replanRule, runDripPlanner } from '../src/content/runner.js';
+import {
+    plannerIntervalMinutes, reconcileUsage, replanRule, runDripPlanner, startDripPlannerTick,
+} from '../src/content/runner.js';
 import type { ContentStore } from '../src/content/store.js';
 import type { DripPlanRow, DripRuleRow } from '../src/database/schema.js';
 import type { SchedulerRepository } from '../src/scheduler/repository.js';
@@ -129,4 +131,65 @@ test('the repeated hour of a fall-back resolves to its first occurrence', () => 
     assert.equal(ambiguous.toISOString(), '2026-11-01T05:30:00.000Z'); // 01:30 EDT, not 01:30 EST
     // An unambiguous time in the same day is untouched.
     assert.equal(zonedTimeToUtc('2026-11-01', 12 * 60, zone).toISOString(), '2026-11-01T17:00:00.000Z');
+});
+
+test('the web tick and the worker tick share one lock, so a moment is planned once', async () => {
+    // The advisory lock as Postgres gives it to us: a second holder is refused,
+    // not queued.
+    let held = false;
+    let passes = 0;
+    const shared = store({
+        async withPlannerLock<T>(body: () => Promise<T>) {
+            if (held) return null;
+            held = true;
+            try { return await body(); } finally { held = false; }
+        },
+        async listRules() {
+            passes += 1;
+            // Yield, so the other tick is genuinely inside the same window.
+            await new Promise((resolve) => setImmediate(resolve));
+            return [];
+        },
+        async succeededUnmarkedPlans() { return []; },
+    });
+
+    const scheduler = {} as SchedulerRepository;
+    const [web, worker] = await Promise.all([
+        runDripPlanner({ store: shared, scheduler }),
+        runDripPlanner({ store: shared, scheduler }),
+    ]);
+
+    assert.equal(passes, 1, 'a day is planned once however many processes tick');
+    const busy = [web, worker].filter(({ skipped }) => skipped.some((line) => /already in progress/.test(line)));
+    assert.equal(busy.length, 1, 'the loser reports the lock rather than planning a second time');
+});
+
+test('the planner tick is one implementation, started by the web process and the worker alike', async () => {
+    assert.equal(plannerIntervalMinutes(15), 15);
+    assert.equal(plannerIntervalMinutes(Number('nonsense')), 60, 'a broken env falls back to hourly');
+
+    // No database in this process: nothing to tick against, and no timer to leak.
+    assert.equal(startDripPlannerTick({ store: null, scheduler: {} as SchedulerRepository }), null);
+    // Explicitly disabled.
+    assert.equal(startDripPlannerTick({
+        store: store(), scheduler: {} as SchedulerRepository, intervalMinutes: 0,
+    }), null);
+
+    let planned = 0;
+    const ticking = store({
+        async withPlannerLock<T>(body: () => Promise<T>) { return body(); },
+        async listRules() { planned += 1; return []; },
+        async succeededUnmarkedPlans() { return []; },
+    });
+    // One millisecond, so the test does not sit on a real hour.
+    const tick = startDripPlannerTick({
+        store: ticking, scheduler: {} as SchedulerRepository, intervalMinutes: 1 / 60_000,
+    });
+    assert.ok(tick);
+    await new Promise((resolve) => { setTimeout(resolve, 25); });
+    tick.stop();
+    const afterStop = planned;
+    assert.ok(afterStop > 0, 'the tick planned at least once');
+    await new Promise((resolve) => { setTimeout(resolve, 15); });
+    assert.equal(planned, afterStop, 'stop() clears the timer');
 });

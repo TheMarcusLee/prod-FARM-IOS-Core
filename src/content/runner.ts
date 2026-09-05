@@ -198,3 +198,40 @@ export async function runDripPlanner(options: DripRunnerOptions): Promise<PlanRe
     });
     return report ?? { ...BUSY, skipped: [...BUSY.skipped] };
 }
+
+export const DEFAULT_PLANNER_INTERVAL_MINUTES = 60;
+
+/** `DRIP_PLANNER_INTERVAL_MINUTES`, or the override a caller passes. Zero or less disables the tick. */
+export function plannerIntervalMinutes(override?: number): number {
+    const value = override ?? Number(process.env.DRIP_PLANNER_INTERVAL_MINUTES ?? DEFAULT_PLANNER_INTERVAL_MINUTES);
+    return Number.isFinite(value) ? value : DEFAULT_PLANNER_INTERVAL_MINUTES;
+}
+
+export interface PlannerTickOptions {
+    /** Null when this process has no database; the tick is then simply not started. */
+    store: ContentStore | null;
+    scheduler: SchedulerRepository;
+    intervalMinutes?: number;
+    log?: (error: unknown) => void;
+}
+
+/**
+ * The recurring planning pass, started by the web process *and* the worker: a
+ * farm deployed with a worker and no dashboard replica still plans its drip
+ * queue, and a farm running both does not plan twice — every tick goes through
+ * `runDripPlanner`, which holds the advisory lock for the whole run.
+ *
+ * Returns null when the tick is disabled or there is nothing to plan against.
+ */
+export function startDripPlannerTick(options: PlannerTickOptions): { stop(): void } | null {
+    const minutes = plannerIntervalMinutes(options.intervalMinutes);
+    const store = options.store;
+    if (!store || minutes <= 0) return null;
+    const log = options.log ?? ((error: unknown) => console.error(error));
+    const timer = setInterval(
+        () => void runDripPlanner({ store, scheduler: options.scheduler }).catch(log),
+        minutes * 60_000,
+    );
+    timer.unref?.();
+    return { stop: () => clearInterval(timer) };
+}
