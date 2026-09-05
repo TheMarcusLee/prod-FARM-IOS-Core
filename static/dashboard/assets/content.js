@@ -35,7 +35,11 @@ function refresh(section) {
         location.reload();
         return;
     }
-    void htmx.ajax('GET', targets[0], targets[1]);
+    // The fragments each render their own wrapper element, so the swap has to
+    // be outerHTML. htmx.ajax defaults to innerHTML, which nested a second
+    // #content-library inside the first on every refresh — duplicate ids, and
+    // one more level of nesting each time the operator pressed Refresh.
+    void htmx.ajax('GET', targets[0], { target: targets[1], swap: 'outerHTML' });
 }
 // ---- ingest ---------------------------------------------------------------
 byId('upload-form').addEventListener('submit', (event) => {
