@@ -109,6 +109,7 @@ configured. Kinds, their severity, and the response:
 | Kind | Severity | What it means | What to do |
 | --- | --- | --- | --- |
 | `execution.started` | info | A task began | Nothing |
+| `execution.retried` | info | pg-boss started a later attempt of the same task (`detail.attempt`) | Nothing on its own. Several in a row on one device is a device or selector problem worth reading the logs for |
 | `execution.succeeded` | info | A task finished cleanly | Nothing |
 | `execution.failed` | error | A task exhausted its retries | Read `GET /api/executions/:id`. A TikTok routine's failure lists the selectors it tried and the texts on screen — usually a UI change or an interstitial |
 | `execution.stopped` | warning | Someone pressed stop, or the run-window deadline passed | If it was the deadline, the device was busy or slow; check whether `SCHEDULER_RUN_WINDOW_MINUTES` is too tight |

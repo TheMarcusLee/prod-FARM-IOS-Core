@@ -255,6 +255,7 @@ export type EventSeverity = 'info' | 'warning' | 'error';
 
 export type EventKind =
     | 'execution.started'
+    | 'execution.retried'
     | 'execution.succeeded'
     | 'execution.failed'
     | 'execution.stopped'
@@ -270,6 +271,7 @@ export type EventKind =
 
 export const EVENT_KINDS: EventKind[] = [
     'execution.started',
+    'execution.retried',
     'execution.succeeded',
     'execution.failed',
     'execution.stopped',

@@ -57,6 +57,13 @@ export type SchedulerLifecycleEvent =
     | {
         kind: 'execution.started' | 'execution.succeeded' | 'execution.failed' | 'execution.stopped' | 'execution.cancelled';
         execution: ExecutionRow;
+        /**
+         * 1-based attempt number, on the signals that have one. pg-boss runs a
+         * retry as the same job, so `startAttempt` fires once per attempt; the
+         * number is what tells a first launch from a retry, rather than the
+         * observer having to remember which executions it has already seen.
+         */
+        attempt?: number;
     }
     | { kind: 'schedule.created' | 'schedule.paused' | 'schedule.cancelled'; schedule: ScheduleRow };
 
@@ -303,7 +310,7 @@ export class SchedulerRepository {
         }).where(and(eq(executions.id, id), inArray(executions.status, ['queued', 'running']))).returning();
         if (!row) return null;
         await this.connection.db.insert(executionAttempts).values({ executionId: id, attempt }).onConflictDoNothing();
-        this.emit({ kind: 'execution.started', execution: row });
+        this.emit({ kind: 'execution.started', execution: row, attempt });
         return row;
     }
 

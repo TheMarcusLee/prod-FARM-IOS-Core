@@ -42,8 +42,8 @@ async function seededStore(): Promise<ReturnType<typeof createMemoryEventStore>>
 
 test('the event contract exposes exactly the agreed kinds and severities', () => {
     assert.deepEqual([...EVENT_KINDS], [
-        'execution.started', 'execution.succeeded', 'execution.failed', 'execution.stopped', 'execution.cancelled',
-        'execution.stuck',
+        'execution.started', 'execution.retried', 'execution.succeeded', 'execution.failed', 'execution.stopped',
+        'execution.cancelled', 'execution.stuck',
         'device.connected', 'device.disconnected', 'device.error',
         'schedule.created', 'schedule.paused', 'schedule.cancelled', 'digest.daily',
     ]);

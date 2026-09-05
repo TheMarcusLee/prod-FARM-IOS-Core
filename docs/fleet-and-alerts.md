@@ -150,7 +150,9 @@ Indexed on `created_at` and on `device_udid`. Migration: `drizzle/0003_events.sq
 
 ### Kinds
 
-`execution.started`, `execution.succeeded`, `execution.failed`,
+`execution.started`, `execution.retried` (pg-boss started a later attempt of
+the same run; `detail.attempt` is the 1-based number), `execution.succeeded`,
+`execution.failed`,
 `execution.stopped`, `execution.cancelled` (the run was cancelled before it
 started — an operator stopped a queued execution, or its schedule was
 cancelled), `execution.stuck` (still running five minutes past its
@@ -168,10 +170,12 @@ Execution and schedule events come from the optional `onEvent` hook on
 one is reported once for as long as it stays stuck.
 
 The hook never throws and never blocks: a failed insert or a malformed
-lifecycle signal costs the timeline row, not the scheduled task. It also
-deduplicates `execution.started` per execution, because pg-boss retries a job by
-running it again — without that a task with `retryLimit: 3` produced four
-"started" events and four push notifications for one launch.
+lifecycle signal costs the timeline row, not the scheduled task. pg-boss retries
+a job by running it again, so the worker starts an attempt per try;
+`startAttempt` passes the 1-based attempt number to the hook, which records
+`execution.started` for attempt 1 and `execution.retried` for the rest. A task
+with `retryLimit: 3` therefore leaves one "started" and up to three "retried"
+rows, rather than four identical launches.
 
 Device transitions are debounced: a new state has to hold for 45 s (two monitor
 polls) before it becomes an event, so a USB cable with a bad contact flapping
