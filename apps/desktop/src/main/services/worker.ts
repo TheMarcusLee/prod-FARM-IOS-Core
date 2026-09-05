@@ -10,7 +10,7 @@ export function workerService(context: ServiceContext): ServiceDefinition {
         help: 'docs/architecture.md',
         dependsOn: ['migrations'],
         launch: (runContext) => Promise.resolve(
-            spawnService(farmNodeSpawn(context, farmEntryArgs(context, 'src/scheduler/worker.ts')), runContext),
+            spawnService(farmNodeSpawn(context, farmEntryArgs(context, 'src/scheduler/worker.ts')), runContext, 'worker'),
         ),
     };
 }

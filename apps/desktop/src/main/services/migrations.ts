@@ -11,7 +11,7 @@ export function migrationsService(context: ServiceContext): ServiceDefinition {
         oneshot: true,
         dependsOn: ['postgres'],
         launch: (runContext) => Promise.resolve(
-            spawnService(farmNodeSpawn(context, farmEntryArgs(context, 'src/database/migrate.ts')), runContext),
+            spawnService(farmNodeSpawn(context, farmEntryArgs(context, 'src/database/migrate.ts')), runContext, 'migrations'),
         ),
     };
 }

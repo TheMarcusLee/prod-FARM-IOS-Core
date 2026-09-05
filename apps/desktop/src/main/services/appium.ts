@@ -31,7 +31,7 @@ export function appiumService(context: ServiceContext): ServiceDefinition {
         },
         launch: (runContext) => Promise.resolve(spawnService(farmNodeSpawn(context, [
             entry, '--address', '127.0.0.1', '--base-path', '/', '--port', String(port), '--log-level', 'info',
-        ]), runContext)),
+        ]), runContext, 'appium')),
         health: () => httpOk('/status', { port }),
     };
 }

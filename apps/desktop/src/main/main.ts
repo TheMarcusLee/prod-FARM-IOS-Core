@@ -5,6 +5,8 @@ import { createFleet, type Fleet } from './fleet.ts';
 import { buildDiagnostics, writeDiagnosticsZip } from './diagnostics.ts';
 import { resetEmbeddedPostgres } from './embedded-postgres.ts';
 import { JobRunner } from './jobs.ts';
+import { ChildRegistry } from './orphans.ts';
+import { setChildRegistry } from './process.ts';
 import { appPaths, resolveRepoRoot, type AppPaths } from './paths.ts';
 import { WDA_PREPARE_JOB_ID, wdaPrepareJob, type WdaPrepareTarget } from './services/wda-prepare.ts';
 import { SettingsStore, type Settings } from './settings.ts';
@@ -28,6 +30,7 @@ let paths: AppPaths;
 let settingsStore: SettingsStore;
 let fleet: Fleet;
 let jobs: JobRunner;
+let children: ChildRegistry;
 let windows: WindowManager | null = null;
 let tray: FleetTray | null = null;
 let quitting = false;
@@ -262,6 +265,8 @@ async function shutdown(): Promise<void> {
     tray?.destroy();
     await fleet.supervisor.stopAll();
     fleet.logs.close();
+    // Only now: anything still in the file after this point is a genuine orphan.
+    children.clear();
 }
 
 function noop(): void { /* errors are already reflected in the service state */ }
@@ -310,6 +315,16 @@ async function bootstrap(): Promise<void> {
     const repoRoot = resolveRepoRoot(app.getAppPath(), process.resourcesPath, app.isPackaged);
     paths = appPaths(repoRoot, app.getPath('userData'));
     settingsStore = new SettingsStore(paths.userData);
+
+    // Before a single child is spawned: a crash or a force-quit of the previous run
+    // left its services running (they are `detached`, in their own process groups),
+    // and they would otherwise hold the web and Appium ports against this launch.
+    children = new ChildRegistry(paths.userData);
+    for (const orphan of children.reapPrevious()) {
+        console.warn(`Killed a leftover ${orphan.label} (pid ${orphan.pid}) from a previous run.`);
+    }
+    setChildRegistry(children);
+
     // Jobs outlive a fleet rebuild on purpose: a running WebDriverAgent build must
     // not be forgotten because the operator saved Settings.
     jobs = new JobRunner();

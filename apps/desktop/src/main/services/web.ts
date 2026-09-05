@@ -13,7 +13,7 @@ export function webService(context: ServiceContext): ServiceDefinition {
         dependsOn: ['migrations'],
         healthTimeoutMs: 90_000,
         launch: (runContext) => Promise.resolve(
-            spawnService(farmNodeSpawn(context, farmEntryArgs(context, 'src/api/server.ts')), runContext),
+            spawnService(farmNodeSpawn(context, farmEntryArgs(context, 'src/api/server.ts')), runContext, 'web'),
         ),
         health: () => httpOk('/health', { port }),
     };
