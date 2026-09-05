@@ -145,9 +145,15 @@ Everything is under `~/Library/Application Support/Phone Farm`:
 | `scheduler-data/` | `SCHEDULER_DATA_DIR` |
 | `devices.json` | `DEVICES_CONFIG_PATH` — the registered fleet, including unlock passcodes |
 | `wda.sock` | `WDA_SERVICE_SOCKET` |
+| `supervised-children.json` | `0600` — the pid of every child the app is currently supervising, so the next launch can kill what a crash left behind |
+| `migrations.stamp` | `0600` — the fingerprint of the migrations last applied, and to which database |
+| `postgres-backup-<timestamp>/` | a cluster moved aside by "Reset the embedded database"; nothing else ever creates or removes one |
+| `appium/` | `APPIUM_HOME` **in a packaged app only** — a checkout uses the repository's own `.appium2` instead |
 
-Nothing is written into the repository checkout except Appium's own
-`.appium2` home.
+In a checkout nothing is written into it except Appium's own `.appium2` home.
+A packaged app writes nothing into its own bundle at all: `APPIUM_HOME` moves to
+the data directory, because writing inside `Contents/Resources` would break the
+code signature and be lost on the next update.
 
 ## Settings
 
@@ -166,9 +172,15 @@ because `assertSafeBind()` refuses one without an auth provider — see
 signed build; an unsigned development build logs `Unable to set login item` and
 carries on.
 
-"Reset the embedded database" stops the fleet, asks for confirmation in a native
-dialog and deletes the cluster directory. It refuses to run when an external
-`DATABASE_URL` is configured.
+"Reset the embedded database" stops the fleet and asks for confirmation in a
+native dialog — the destructive button *and* an explicit acknowledgement, because
+it throws away every device, schedule and execution the operator has. It does not
+delete anything: the cluster is renamed to `postgres-backup-<timestamp>` beside
+itself and the path is reported, so the data is still there if the reset turns
+out to have been the wrong idea. Deleting that folder is then a decision made in
+the Finder. It refuses to run when an external `DATABASE_URL` is configured, and
+`resetEmbeddedPostgres` independently refuses any directory that is not
+`<userData>/postgres`.
 
 ## Database
 
@@ -177,6 +189,19 @@ By default the app runs the bundled PostgreSQL 17 on port `55432`, creating the
 kept only in `settings.json`. Then it runs `src/database/migrate.ts` as a
 one‑shot step before the worker and the web server start — the same migrations
 `npm run db:migrate` runs.
+
+That step is a dependency of both `worker` and `web`, so it is reached on every
+launch, every "restart all" and every settings save. It only actually spawns
+when it has to: `migrations.stamp` records a fingerprint of the migration files,
+the app version and the target database, written **only after a run that exited
+0**. Anything else runs them — a missing or corrupt stamp, a new or edited
+`.sql`, a new app version, a different database, or an unreadable `drizzle/`.
+Resetting the database clears the stamp.
+
+A `postmaster.pid` left behind by a hard kill of the app or the machine is
+detected before every start: when no process holds the pid it is removed and the
+fact is logged, and when one does, that postmaster is reused. Nothing else in the
+data directory is touched — crash recovery is Postgres's own job.
 
 ### Pointing it at your own PostgreSQL
 
@@ -200,11 +225,19 @@ bundled one.
 
 States are `stopped`, `starting`, `healthy`, `stopping`, `failed` and
 `not configured`. A crash is restarted with exponential backoff (1s, 2s, 4s …
-capped at 30s) up to five times, then the service is parked in `failed`.
+capped at 30s) up to five times, then the service is parked in `failed`. That
+counter is reset once a service has run for a minute, so a genuinely flaky child
+keeps getting chances; a second, lifetime cap of 20 restarts is not, so a
+configuration error that kills a service just after every start is eventually
+parked with a message that says so rather than restarting for ever. Starting a
+service by hand clears both counters.
 
 Every 15 seconds the supervisor re‑probes the services it believes are healthy
-(`SupervisorOptions.reprobeIntervalMs`; `0` switches the sweep off). A service
-that stops answering is stopped and restarted through that same backoff. This is
+(`SupervisorOptions.reprobeIntervalMs`; `0` switches the sweep off). **Three**
+consecutive misses are needed before a service is torn down and restarted through
+that same backoff: on a host driving twenty phones a 2s probe times out against a
+server that is merely busy, and restarting on one miss would kill every session
+it was serving. The tolerated misses are written to the service log. This is
 what covers the bundled Postgres: `embedded-postgres` never reports an exit, so
 a postmaster that dies on its own can only be noticed by asking it something.
 The `postgres` probe is a `pg_isready` equivalent — it opens a socket, sends the
@@ -216,6 +249,14 @@ Android‑only host with no Xcode still gets Postgres, the migrations, adb, the
 worker and the dashboard. Each `not configured` row carries a one‑line reason
 and a Help link into these docs. Shutdown stops everything in reverse dependency
 order, including on `SIGINT`/`SIGTERM`.
+
+Every service is spawned `detached`, in its own process group, so stopping one
+also stops whatever it spawned. The cost is that a crash or a force‑quit of
+Electron leaves those groups running — the worker keeps posting, the web server
+keeps the port — so every spawned pid is recorded in `supervised-children.json`
+and the next launch kills what the last one left behind. It refuses to signal a
+pid whose `ps` command line no longer matches the one recorded, so a pid the OS
+has since recycled is never touched. A clean quit empties the file.
 
 ## Jobs
 
@@ -241,7 +282,7 @@ Before anything is spawned it reports every precondition, passing or not:
 | Xcode | `xcode-select -p` points at a full `Xcode.app`, not `CommandLineTools` |
 | xcodebuild | `xcodebuild -version` runs (Xcode's licence has been accepted) |
 | `XCODE_ORG_ID` / `XCODE_SIGNING_ID` / `WDA_BUNDLE_ID` | set in Settings |
-| XCUITest driver | `.appium2/node_modules/appium-xcuitest-driver` exists, or `XCUITEST_DRIVER_PATH` is set — `prepare.ts` patches and builds WebDriverAgent out of that checkout |
+| XCUITest driver | `$APPIUM_HOME/node_modules/appium-xcuitest-driver` exists (`.appium2` in a checkout, `<userData>/appium` when packaged), or `XCUITEST_DRIVER_PATH` is set — `prepare.ts` patches and builds WebDriverAgent out of that checkout |
 | Registered devices | `devices.json` has at least one device, for `--all` |
 
 Output streams into the job window while `xcodebuild` runs. **The last step is
@@ -257,16 +298,59 @@ WebDriverAgent is installed but iOS refuses to launch it.
 | Start all / Stop all / **Restart all** | Services panel, the Farm menu, the menu‑bar item |
 | **Open data folder** | Services panel, the Farm menu, the menu‑bar item — opens `~/Library/Application Support/Phone Farm` |
 | **Export diagnostics…** | Services panel and the Farm menu |
+| **Copy MCP config** | Services panel and the Farm menu — a ready client entry with the configured port already in it. `/mcp` is always token‑protected, even on loopback ([docs/mcp.md](mcp.md)), and the app cannot mint a token, so the `Authorization` value is a placeholder |
+| **Copy link / Open** (the dashboard address) | the banner at the top of the Services panel; it says so plainly when the dashboard is not running |
 
-"Export diagnostics" writes a zip: `settings.json` with the database password and
-any password inside `DATABASE_URL` replaced by `«redacted»`, the service table as
-text and as JSON, the job list, and the last 2 MB of every service log including
-its rotated generations. It is the thing to attach to a bug report.
+"Export diagnostics" writes a zip: `settings.json`, the service table as text and
+as JSON, the job list, and the last 2 MB of every service log including its
+rotated generations. It is the thing to attach to a bug report.
+
+Everything in it is scrubbed, not just `settings.json`. Redacting the settings
+file alone would only cover the one place the password is written on purpose; it
+also arrives the long way round, because the farm's children print a connection
+string when a query fails and that lands in the service logs and in the
+`recentLogs` the service JSON carries. Every file and every log tail goes through
+a scrubber built from the live secrets — the generated password, both connection
+strings, and the percent‑encoded spelling a URL puts on the wire — replacing each
+with `«redacted»`. The failure text itself survives; only the credential in it
+goes. Which *settings* are secret is decided by the key name (`password`,
+`secret`, `token`, `credential`, an API key, or any `*Url`), so a secret field
+added to `Settings` later is redacted the day it is added. `XCODE_ORG_ID` and
+`XCODE_SIGNING_ID` are deliberately kept: they are what a support conversation
+always needs, and neither is a credential.
+
+## Security posture of the app itself
+
+The Electron shell is a supervisor and a window; it is hardened as one.
+
+| | |
+|---|---|
+| Renderer | `contextIsolation: true`, `sandbox: true`, `nodeIntegration: false`, `webviewTag: false`. The preload exposes named, typed channels only — no `ipcRenderer` passthrough, no module loading, no filesystem |
+| Remote content | The only non‑`file:` URL any window may load is `http://127.0.0.1:<WEB_PORT>`, and only while `web` is healthy. `will-navigate`, `will-frame-navigate` and `setWindowOpenHandler` refuse everything else and hand `http(s)` to the system browser; `will-attach-webview` refuses outright |
+| CSP | Every renderer document carries `default-src 'none'`, so a URL that turns up in a log line or a service detail can never load anything |
+| IPC payloads | Nothing from the renderer becomes a path. `fleet:open-logs` accepts only ids the supervisor declares, `app:open-help` only the anchors the service definitions declare, `job:*` only the one job id that exists, and a WDA `--udid` must look like a udid. `settings:save` is allow‑listed key by key and re‑normalised |
+| `shell.openPath` | Only ever the app's own data directory, its own log files, and a documentation file inside the farm tree |
+| Files | `settings.json`, the logs, the pid file and the migration stamp are `0600`; the directories are `0700` |
+
+**There is no auto‑update.** The app never contacts a network service of its own:
+no update feed, no telemetry, no crash reporter. A new version is a new .dmg,
+installed by hand. That is a deliberate choice for a self‑hosted farm, and it
+means an operator who needs a fix has to be told about it out of band.
 
 ## Known gaps
 
-- **macOS only.** The packaging target, the WDA preflight and the tray assume
-  macOS. Nothing else is wired up.
+- **macOS only, and arm64 only.** `electron-builder.yml` targets `dmg`/`arm64`
+  and nothing else, and `build:farm` prunes on that assumption: the linux and
+  win32 `ffprobe-static` binaries and the `node-native-ocr` linux/win32 prebuilds
+  are deleted from the staged tree. An Intel Mac therefore needs a second build,
+  not a second architecture in the existing one — adding `x64` to the `arch`
+  matrix would produce a bundle whose `sharp`, `node-native-ocr` and `pg` native
+  modules are still arm64, because the staging `npm ci` runs once, for the host.
+  Doing it properly means one `npm ci --cpu=x64` staging tree per architecture.
+  `package.json` already allows the `@embedded-postgres/darwin-x64` install
+  script, so the Postgres half is ready; the rest is not.
+- **There is no auto‑update** — see "Security posture" above. Deliberate, but it
+  means a fix has to reach the operator some other way.
 - **The bundled Postgres is noticed by polling, not by an exit.**
   `embedded-postgres` gives no exit signal, so a postmaster that dies on its own
   is caught by the 15‑second re‑probe rather than instantly. The other services
