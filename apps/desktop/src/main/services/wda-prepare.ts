@@ -111,11 +111,13 @@ export async function wdaPrepareChecks(
     });
 
     // prepare.ts patches and builds WebDriverAgent out of the Appium XCUITest
-    // driver's own checkout, which `npm run appium:install-driver` puts under
-    // .appium2. Without it the build fails on an unresolved path, so say so here.
+    // driver's own checkout, which `appium driver install` puts under APPIUM_HOME.
+    // Without it the build fails on an unresolved path, so say so here. The path
+    // follows APPIUM_HOME rather than the checkout, so it is right for a packaged
+    // app too — there the driver lives beside the operator's other data.
     const driverPath = nodePath.resolve(
         context.env.XCUITEST_DRIVER_PATH
-        ?? nodePath.join(context.paths.repoRoot, '.appium2/node_modules/appium-xcuitest-driver'),
+        ?? nodePath.join(context.paths.appiumHome, 'node_modules/appium-xcuitest-driver'),
     );
     const driverPresent = existsSync(nodePath.join(driverPath, 'node_modules/appium-webdriveragent'));
     checks.push({
@@ -123,7 +125,8 @@ export async function wdaPrepareChecks(
         ok: driverPresent,
         detail: driverPresent
             ? driverPath
-            : `Not at ${driverPath}. Run "npm run appium:install-driver" in the farm checkout, or set XCUITEST_DRIVER_PATH.`,
+            : `Not at ${driverPath}. Run "npm run appium:install-driver" in the farm checkout, `
+                + `or install it into ${context.paths.appiumHome}, or set XCUITEST_DRIVER_PATH.`,
     });
 
     if (target.kind === 'all') {

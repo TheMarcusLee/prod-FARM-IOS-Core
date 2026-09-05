@@ -22,6 +22,7 @@ export function buildServiceContext(paths: AppPaths, settings: Settings, appVers
         schedulerDataDir: paths.schedulerDataDir,
         devicesConfigPath: paths.devicesConfigPath,
         wdaServiceSocket: paths.wdaServiceSocket,
+        appiumHome: paths.appiumHome,
     });
     return {
         paths,

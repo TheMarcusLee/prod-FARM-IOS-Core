@@ -375,6 +375,7 @@ async function bootstrap(): Promise<void> {
         const code = await runSmoke(fleet.supervisor, `http://127.0.0.1:${settingsStore.get().webPort}`);
         await fleet.supervisor.stopAll();
         fleet.logs.close();
+        children.clear();
         app.exit(code);
         return;
     }

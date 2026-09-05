@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -9,6 +9,14 @@ import {
     generatePassword, normalizeSettings,
 } from '../src/main/settings.ts';
 import { appPaths } from '../src/main/paths.ts';
+
+/** A directory that looks like a farm of the given shape to `farmEntryExtension`. */
+function farmTree(entry: 'server.ts' | 'server.js'): string {
+    const root = mkdtempSync(path.join(tmpdir(), 'farm-shape-'));
+    mkdirSync(path.join(root, 'src', 'api'), { recursive: true });
+    writeFileSync(path.join(root, 'src', 'api', entry), '');
+    return root;
+}
 
 function scratch(): string {
     return mkdtempSync(path.join(tmpdir(), 'farm-desktop-'));
@@ -98,6 +106,7 @@ test('childEnvironment binds loopback and carries the configured values', () => 
         schedulerDataDir: paths.schedulerDataDir,
         devicesConfigPath: paths.devicesConfigPath,
         wdaServiceSocket: paths.wdaServiceSocket,
+        appiumHome: paths.appiumHome,
     });
 
     assert.equal(env.WEB_HOST, '127.0.0.1', 'never bound off loopback without an auth plugin');
@@ -125,6 +134,7 @@ test('childEnvironment passes the signing and auth values once they are set', ()
         schedulerDataDir: paths.schedulerDataDir,
         devicesConfigPath: paths.devicesConfigPath,
         wdaServiceSocket: paths.wdaServiceSocket,
+        appiumHome: paths.appiumHome,
     });
 
     assert.equal(env.XCODE_ORG_ID, 'ABCDE12345');
@@ -135,4 +145,38 @@ test('the WDA unix socket path stays inside the platform length limit', () => {
     const paths = appPaths('/repo', '/Users/someone/Library/Application Support/Phone Farm');
 
     assert.ok(Buffer.byteLength(paths.wdaServiceSocket) < 104, paths.wdaServiceSocket);
+});
+
+test('APPIUM_HOME stays out of the app bundle once the farm is compiled', () => {
+    // Appium writes its driver manifest into APPIUM_HOME on every start. In a
+    // packaged app repoRoot is Contents/Resources/farm: writing there breaks the
+    // code signature and would be thrown away by the next update anyway.
+    const checkout = farmTree('server.ts');
+    assert.equal(appPaths(checkout, '/userdata').compiled, false);
+    assert.equal(
+        appPaths(checkout, '/userdata').appiumHome, path.join(checkout, '.appium2'),
+        'a checkout shares the driver `npm run appium:install-driver` installed',
+    );
+
+    const packaged = farmTree('server.js');
+    assert.equal(appPaths(packaged, '/userdata').compiled, true);
+    assert.equal(
+        appPaths(packaged, '/userdata').appiumHome, path.join('/userdata', 'appium'),
+        'a packaged app keeps its Appium home beside the operator other data',
+    );
+});
+
+test('the environment hands the resolved Appium home to every child', () => {
+    const env = childEnvironment({
+        settings: normalizeSettings({}),
+        databaseUrl: 'postgresql://u:p@127.0.0.1:5432/db',
+        repoRoot: '/resources/farm',
+        schedulerDataDir: '/userdata/scheduler-data',
+        devicesConfigPath: '/userdata/devices.json',
+        wdaServiceSocket: '/userdata/wda.sock',
+        appiumHome: '/userdata/appium',
+    });
+
+    assert.equal(env.APPIUM_HOME, '/userdata/appium');
+    assert.ok(!env.APPIUM_HOME.startsWith('/resources/farm'), 'never inside the app bundle');
 });
