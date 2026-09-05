@@ -35,10 +35,30 @@ export function activeDevices(devices: readonly RegisteredDevice[]): RegisteredD
 
 export const PASSCODE_PATTERN = /^\d{4,}$/;
 
-/** A device with its passcode removed and a boolean marker in its place — safe to serialize. */
-export function redactDevice<T extends { passcode?: string }>(device: T): Omit<T, 'passcode'> & { hasPasscode: boolean } {
-    const { passcode, ...rest } = device;
-    return { ...rest, hasPasscode: Boolean(passcode) };
+/** What is left of an Android config once the bearer token is gone. */
+export type RedactedAndroidConfig = Omit<AndroidDeviceConfig, 'bridgeToken'> & { hasBridgeToken: boolean };
+
+export type RedactedDevice<T extends RedactableDevice> =
+    Omit<T, 'passcode' | 'android'> & { hasPasscode: boolean; android?: RedactedAndroidConfig };
+
+interface RedactableDevice {
+    passcode?: string;
+    android?: AndroidDeviceConfig;
+}
+
+/**
+ * A device with every credential removed and a boolean marker in its place — safe to serialize.
+ * Both the unlock passcode and `android.bridgeToken` are credentials: the token is what
+ * authenticates control of the accessibility bridge on that phone. Redacting here rather than at
+ * an API boundary is deliberate — a route added later that returns a device record cannot leak
+ * one by forgetting to call a second helper.
+ */
+export function redactDevice<T extends RedactableDevice>(device: T): RedactedDevice<T> {
+    const { passcode, android, ...rest } = device;
+    const redacted = { ...rest, hasPasscode: Boolean(passcode) } as RedactedDevice<T>;
+    if (!android) return redacted;
+    const { bridgeToken, ...withoutToken } = android;
+    return { ...redacted, android: { ...withoutToken, hasBridgeToken: Boolean(bridgeToken) } };
 }
 
 const defaultRegistryPath = path.resolve(process.env.DEVICES_CONFIG_PATH ?? 'devices.json');

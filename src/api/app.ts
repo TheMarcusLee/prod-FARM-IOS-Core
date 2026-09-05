@@ -210,17 +210,10 @@ body{font:15px system-ui,sans-serif;margin:0;background:#f6f7f9;color:#17202a}na
 }
 
 /**
- * `redactDevice` drops the unlock passcode, but `android.bridgeToken` is a
- * credential too — it is what authenticates control of the accessibility
- * bridge on that phone — and it was going out with every device response. Same
- * treatment: a boolean saying whether one is configured, never the value.
+ * Both the unlock passcode and `android.bridgeToken` are stripped by `redactDevice` itself, so
+ * this is the registry's own redaction under the name the routes already use.
  */
-export function publicDevice<T extends { passcode?: string; android?: AndroidDeviceConfig }>(device: T) {
-    const redacted = redactDevice(device);
-    if (!redacted.android) return redacted;
-    const { bridgeToken, ...android } = redacted.android;
-    return { ...redacted, android: { ...android, hasBridgeToken: Boolean(bridgeToken) } };
-}
+export const publicDevice = redactDevice;
 
 async function registeredWithStatus() {
     const [registered, connected] = await Promise.all([loadRegisteredDevices(), discoverConnectedDevices()]);
