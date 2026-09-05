@@ -1,6 +1,6 @@
 import type { ContentItemRow, DripPlanRow, DripRuleRow } from '../database/schema.js';
 import { clampCaption, renderCaptionTemplate } from './templates.js';
-import { addDays, localDate, windowForDate } from './time.js';
+import { addDays, isTimeZone, localDate, windowForDate } from './time.js';
 
 const MINUTE_MS = 60_000;
 
@@ -133,6 +133,13 @@ export async function planDripRules(ports: PlannerPorts): Promise<PlanReport> {
             report.cancelled += await ports.cancelRuleSchedules(rule.id);
             continue;
         }
+        // A zone the API accepted can still be unknown here: a restored dump, a
+        // hand-edited row, or an ICU build without it. Reading the wall clock
+        // would throw and take every *other* rule's planning down with it.
+        if (!isTimeZone(rule.timezone)) {
+            report.skipped.push(`${rule.id}: "${rule.timezone}" is not a time zone this host knows`);
+            continue;
+        }
         const today = localDate(ports.now, rule.timezone);
         const dates = Array.from({ length: horizon }, (_, offset) => addDays(today, offset));
         const alreadyPlanned = new Set((await ports.plansForDates(rule.id, dates)).map((plan) => plan.date));
@@ -160,9 +167,10 @@ export async function planDripRules(ports: PlannerPorts): Promise<PlanReport> {
                 break;
             }
             let created = 0;
+            let exhausted = false;
             for (const runAt of times) {
                 const group = pool[cursor];
-                if (!group) break;
+                if (!group) { exhausted = true; break; }
                 cursor += 1;
                 const caption = captionFor(group, template, rule, ports.random, date);
                 const post: PlannedPost = { rule, items: group, date, runAt, ...(caption ? { caption } : {}) };
@@ -173,6 +181,15 @@ export async function planDripRules(ports: PlannerPorts): Promise<PlanReport> {
             }
             report.planned += created;
             if (created) await ports.markRulePlanned(rule.id, date);
+            if (exhausted) {
+                // The day is recorded with fewer posts than the rule asks for.
+                // Say so: silently under-posting for weeks is the failure mode
+                // an unattended farm actually has.
+                report.skipped.push(
+                    `${rule.id}: ran out of unused content on ${date} after ${created} of ${times.length} posts`,
+                );
+                break;
+            }
         }
     }
     return report;

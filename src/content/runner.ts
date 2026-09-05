@@ -153,14 +153,48 @@ export function dripPorts(options: DripRunnerOptions): { ports: PlannerPorts; sk
  */
 export async function reconcileUsage(store: ContentStore, now = new Date()): Promise<number> {
     const plans = await store.succeededUnmarkedPlans();
-    for (const plan of plans) await store.markPlanUsed(plan.id, plan.itemId, now);
-    return plans.length;
+    let credited = 0;
+    for (const plan of plans) if (await store.markPlanUsed(plan.id, plan.itemId, now)) credited += 1;
+    return credited;
 }
 
+/**
+ * Releases a rule's not-yet-run posts so the next planning pass rebuilds them.
+ * An edited window, gap, or source has to reach *today's* queue to be worth
+ * anything; leaving the old times in place means an operator's change silently
+ * does nothing until tomorrow.
+ */
+export async function replanRule(options: {
+    store: ContentStore; scheduler: SchedulerRepository; ruleId: string;
+}): Promise<{ cancelled: number; released: number }> {
+    const { store, scheduler, ruleId } = options;
+    const plans = await store.unstartedPlans(ruleId);
+    let cancelled = 0;
+    for (const scheduleId of new Set(plans.map((plan) => plan.scheduleId).filter((id): id is string => Boolean(id)))) {
+        try {
+            await scheduler.setScheduleStatus(scheduleId, 'cancelled');
+            cancelled += 1;
+        } catch { /* already terminal — the plan row still has to go */ }
+    }
+    const released = await store.deletePlans(plans.map((plan) => plan.planId));
+    return { cancelled, released };
+}
+
+const BUSY: PlanReport = {
+    rulesConsidered: 0, planned: 0, cancelled: 0,
+    skipped: ['Another planning run is already in progress'],
+};
+
 export async function runDripPlanner(options: DripRunnerOptions): Promise<PlanReport> {
-    const { ports, skipped } = dripPorts(options);
-    const report = await planDripRules(ports);
-    report.skipped.push(...skipped);
-    await reconcileUsage(options.store, options.now ?? new Date());
-    return report;
+    const now = options.now ?? new Date();
+    // One lock around planning *and* crediting: the hourly tick in every web
+    // replica, the worker, and a manual "Plan now" all land here.
+    const report = await options.store.withPlannerLock(async () => {
+        const { ports, skipped } = dripPorts(options);
+        const planned = await planDripRules(ports);
+        planned.skipped.push(...skipped);
+        await reconcileUsage(options.store, now);
+        return planned;
+    });
+    return report ?? { ...BUSY, skipped: [...BUSY.skipped] };
 }

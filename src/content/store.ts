@@ -74,9 +74,27 @@ export interface ContentStore {
     upcomingPlans(ruleId?: string, limit?: number): Promise<Array<DripPlanRow & { status: string | null }>>;
     insertPlan(values: typeof dripPlans.$inferInsert): Promise<DripPlanRow>;
     unstartedScheduleIds(ruleId: string): Promise<string[]>;
+    /** Plans for a rule whose schedule has not run yet — what a rule edit releases. */
+    unstartedPlans(ruleId: string): Promise<Array<{ planId: string; scheduleId: string | null }>>;
+    deletePlans(planIds: string[]): Promise<number>;
     succeededUnmarkedPlans(): Promise<DripPlanRow[]>;
-    markPlanUsed(planId: string, itemId: string, at: Date): Promise<void>;
+    /** Credits the item once. False means another process had already credited this plan. */
+    markPlanUsed(planId: string, itemId: string, at: Date): Promise<boolean>;
+    /**
+     * Runs `body` while holding the cluster-wide planning lock, or returns null
+     * without running it when another process already holds it.
+     */
+    withPlannerLock<T>(body: () => Promise<T>): Promise<T | null>;
 }
+
+/**
+ * A fixed key for `pg_advisory_xact_lock`. The web process ticks hourly and an
+ * operator can press "Plan now" at the same moment in another replica; without
+ * this both runs read an empty `drip_plans` for today and each create a full
+ * day of posts. The lock is held by a transaction, so a crashed planner
+ * releases it when its connection dies rather than wedging the farm.
+ */
+export const DRIP_PLANNER_LOCK_KEY = 7_735_101_002;
 
 function rowsOrNull<T>(rows: T[]): T | null {
     return rows[0] ?? null;
@@ -291,6 +309,21 @@ export function createContentStore(db: ContentDatabase): ContentStore {
                 .where(and(eq(dripPlans.ruleId, ruleId), inArray(schedules.status, ['active', 'paused'])));
             return rows.map(({ id }) => id);
         },
+        async unstartedPlans(ruleId) {
+            const rows = await db.select({ planId: dripPlans.id, scheduleId: dripPlans.scheduleId }).from(dripPlans)
+                .leftJoin(schedules, eq(schedules.id, dripPlans.scheduleId))
+                .where(and(
+                    eq(dripPlans.ruleId, ruleId),
+                    or(isNull(dripPlans.scheduleId), inArray(schedules.status, ['active', 'paused'])),
+                ));
+            return rows;
+        },
+        async deletePlans(planIds) {
+            if (!planIds.length) return 0;
+            const rows = await db.delete(dripPlans).where(inArray(dripPlans.id, planIds))
+                .returning({ id: dripPlans.id });
+            return rows.length;
+        },
         async succeededUnmarkedPlans() {
             const rows = await db.selectDistinctOn([dripPlans.id], { plan: dripPlans }).from(dripPlans)
                 .innerJoin(executions, eq(executions.scheduleId, dripPlans.scheduleId))
@@ -298,12 +331,32 @@ export function createContentStore(db: ContentDatabase): ContentStore {
             return rows.map(({ plan }) => plan);
         },
         async markPlanUsed(planId, itemId, at) {
-            await db.transaction(async (tx) => {
-                await tx.update(dripPlans).set({ usedMarkedAt: at }).where(eq(dripPlans.id, planId));
+            return db.transaction(async (tx) => {
+                // Claiming the plan and crediting the item must be one step: two
+                // reconcile sweeps racing would otherwise both see usedMarkedAt
+                // null and count the same post twice, which quietly breaks both
+                // `avoidReuseDays` and the "used N×" the operator reads.
+                const claimed = await tx.update(dripPlans).set({ usedMarkedAt: at })
+                    .where(and(eq(dripPlans.id, planId), isNull(dripPlans.usedMarkedAt)))
+                    .returning({ id: dripPlans.id });
+                if (!claimed.length) return false;
                 await tx.update(contentItems).set({
                     usedCount: sql`${contentItems.usedCount} + 1`, lastUsedAt: at,
                 }).where(eq(contentItems.id, itemId));
+                return true;
             });
+        },
+        async withPlannerLock(body) {
+            let outcome: { value: unknown } | null = null;
+            await db.transaction(async (tx) => {
+                const result = await tx.execute(
+                    sql`select pg_try_advisory_xact_lock(${DRIP_PLANNER_LOCK_KEY}) as locked`,
+                );
+                const row = result.rows[0] as { locked?: boolean } | undefined;
+                if (row?.locked !== true) return;
+                outcome = { value: await body() };
+            });
+            return outcome === null ? null : (outcome as { value: unknown }).value as never;
         },
     };
 }

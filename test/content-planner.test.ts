@@ -204,3 +204,110 @@ test('a rejected schedule is skipped without recording a plan', async () => {
     assert.equal(context.plans.length, 0);
     assert.equal(context.markedDates.length, 0);
 });
+
+// ---- DST and midnight ------------------------------------------------------
+
+const NY = 'America/New_York';
+
+/** The wall clock in `zone` at an instant, as 'YYYY-MM-DD HH:MM'. */
+function wallClock(instant: Date, zone: string): string {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: zone, hourCycle: 'h23',
+        year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+    }).formatToParts(instant);
+    const read = (type: string) => parts.find((part) => part.type === type)?.value ?? '';
+    return `${read('year')}-${read('month')}-${read('day')} ${read('hour')}:${read('minute')}`;
+}
+
+test('a spring-forward day is an hour shorter but its window edges still read right', () => {
+    // 2026-03-08: America/New_York jumps 02:00 → 03:00.
+    const normal = windowForDate('2026-03-07', '00:00', '23:00', NY);
+    const spring = windowForDate('2026-03-08', '00:00', '23:00', NY);
+    assert.equal(wallClock(spring.start, NY), '2026-03-08 00:00');
+    assert.equal(wallClock(spring.end, NY), '2026-03-08 23:00');
+    const hour = 3_600_000;
+    assert.equal((normal.end.getTime() - normal.start.getTime()) / hour, 23);
+    assert.equal((spring.end.getTime() - spring.start.getTime()) / hour, 22);
+});
+
+test('a local time that the spring-forward skips lands on the instant the clock jumped to', () => {
+    // 02:30 does not exist on 2026-03-08 in New York.
+    const skipped = zonedTimeToUtc('2026-03-08', 2 * 60 + 30, NY);
+    assert.equal(wallClock(skipped, NY), '2026-03-08 03:30');
+    // A window that starts inside the gap still opens before it ends.
+    const window = windowForDate('2026-03-08', '02:30', '06:00', NY);
+    assert.ok(window.start < window.end);
+    assert.equal(wallClock(window.end, NY), '2026-03-08 06:00');
+});
+
+test('a fall-back day is an hour longer and posts stay inside the real window', () => {
+    // 2026-11-01: America/New_York repeats 01:00 → 02:00.
+    const fall = windowForDate('2026-11-01', '00:00', '23:00', NY);
+    assert.equal(wallClock(fall.start, NY), '2026-11-01 00:00');
+    assert.equal(wallClock(fall.end, NY), '2026-11-01 23:00');
+    assert.equal((fall.end.getTime() - fall.start.getTime()) / 3_600_000, 24);
+    for (let seed = 1; seed <= 20; seed += 1) {
+        for (const time of chooseTimes(fall, 4, 120, seeded(seed))) {
+            assert.ok(time >= fall.start && time <= fall.end, time.toISOString());
+        }
+    }
+});
+
+test('a window that crosses midnight runs into the next local day', () => {
+    const window = windowForDate('2026-03-10', '22:00', '02:00', NY);
+    assert.equal(wallClock(window.start, NY), '2026-03-10 22:00');
+    assert.equal(wallClock(window.end, NY), '2026-03-11 02:00');
+    assert.equal((window.end.getTime() - window.start.getTime()) / 3_600_000, 4);
+
+    // Equal edges mean the whole 24 hours, not an empty window.
+    const allDay = windowForDate('2026-03-10', '06:00', '06:00', NY);
+    assert.equal((allDay.end.getTime() - allDay.start.getTime()) / 3_600_000, 24);
+});
+
+test('a midnight-crossing window over the spring-forward keeps its wall-clock edges', () => {
+    const window = windowForDate('2026-03-07', '22:00', '04:00', NY);
+    assert.equal(wallClock(window.start, NY), '2026-03-07 22:00');
+    assert.equal(wallClock(window.end, NY), '2026-03-08 04:00');
+    // 22:00 → 04:00 is normally six hours; the skipped hour makes it five.
+    assert.equal((window.end.getTime() - window.start.getTime()) / 3_600_000, 5);
+    const times = chooseTimes(window, 3, 60, seeded(9));
+    assert.equal(times.length, 3);
+    for (const time of times) assert.ok(time >= window.start && time <= window.end);
+});
+
+test('posts_per_day that cannot fit the gap is truncated, never squeezed', () => {
+    const window = windowForDate('2026-03-10', '09:00', '13:00', 'UTC'); // 240 minutes
+    for (let seed = 1; seed <= 30; seed += 1) {
+        const times = chooseTimes(window, 8, 90, seeded(seed));
+        assert.equal(times.length, 3, `seed ${seed}`); // floor(240/90) + 1
+        for (let index = 1; index < times.length; index += 1) {
+            const gap = (times[index] as Date).getTime() - (times[index - 1] as Date).getTime();
+            assert.ok(gap >= 90 * 60_000, `seed ${seed} gap ${gap / 60_000}`);
+        }
+    }
+    // A zero gap means "no constraint", not "no posts".
+    assert.equal(chooseTimes(window, 5, 0, seeded(1)).length, 5);
+});
+
+test('a rule whose timezone this host does not know is skipped, not thrown', async () => {
+    const context = ports({
+        rules: async () => [rule({ id: 'broken', timezone: 'Mars/Olympus_Mons' }), rule({ id: 'fine' })],
+    });
+    const report = await planDripRules(context.ports);
+    assert.equal(report.rulesConsidered, 2);
+    assert.ok(report.planned > 0, 'the healthy rule still planned');
+    assert.equal(context.created.every(({ post }) => post.rule.id === 'fine'), true);
+    assert.match(report.skipped.join(' '), /broken: "Mars\/Olympus_Mons" is not a time zone/);
+});
+
+test('running out of media mid-day reports the shortfall instead of silently under-posting', async () => {
+    const context = ports({
+        rules: async () => [rule({ postsPerDay: 3, minGapMinutes: 60 })],
+        pool: [item('only-one'), item('only-two')],
+    });
+    const report = await planDripRules(context.ports);
+    assert.equal(report.planned, 2);
+    assert.match(report.skipped.join(' '), /ran out of unused content on .* after 2 of 3 posts/);
+    // The day it did manage is still recorded, so the next tick does not double it.
+    assert.equal(context.markedDates.length, 1);
+});
