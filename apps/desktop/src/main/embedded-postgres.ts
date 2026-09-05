@@ -1,8 +1,11 @@
-import { existsSync } from 'node:fs';
-import { mkdir, rm } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
+import { mkdir, readdir, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { LaunchContext, RunHandle } from './types.ts';
+
+/** The postmaster's own lock file. Its first line is the pid that holds the cluster. */
+export const LOCK_FILE = 'postmaster.pid';
 
 export interface EmbeddedPostgresOptions {
     dataDir: string;
@@ -46,6 +49,62 @@ export function clusterInitialised(dataDir: string): boolean {
     return existsSync(path.join(dataDir, 'PG_VERSION'));
 }
 
+export type LockVerdict =
+    | { kind: 'absent' }
+    | { kind: 'held'; pid: number }
+    | { kind: 'stale'; pid: number | null; reason: string };
+
+/**
+ * What `postmaster.pid` in a data directory means right now.
+ *
+ * Postgres refuses to start while that file is there, and after a hard kill of
+ * the app — or of the machine — it is there with a pid that no longer exists.
+ * The operator then sees "pg_ctl start failed" for ever with nothing actionable
+ * in it, which is exactly the half-dead state this app must not produce. This
+ * decides whether the file describes a live postmaster or is simply litter.
+ */
+export function readLock(dataDir: string, alive: (pid: number) => boolean): LockVerdict {
+    let contents: string;
+    try {
+        contents = readFileSync(path.join(dataDir, LOCK_FILE), 'utf8');
+    } catch {
+        return { kind: 'absent' };
+    }
+    const first = contents.split('\n')[0]?.trim() ?? '';
+    const pid = Number.parseInt(first, 10);
+    if (!Number.isInteger(pid) || pid <= 1) {
+        return { kind: 'stale', pid: null, reason: `${LOCK_FILE} does not start with a pid` };
+    }
+    if (alive(pid)) return { kind: 'held', pid };
+    return { kind: 'stale', pid, reason: `no process is running under pid ${pid}` };
+}
+
+/** `process.kill(pid, 0)` as a predicate: true when a process holds that pid. */
+export function pidAlive(pid: number): boolean {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (error) {
+        // EPERM means it exists but belongs to another user, which still counts.
+        return (error as NodeJS.ErrnoException).code === 'EPERM';
+    }
+}
+
+/**
+ * Removes a `postmaster.pid` that no live postmaster owns. Returns what it did.
+ *
+ * Only ever removes the lock file itself: everything else in the data directory
+ * is the operator's data, and a crash recovery on the next start is Postgres's
+ * job, not this app's.
+ */
+export async function clearStaleLock(
+    dataDir: string, alive: (pid: number) => boolean = pidAlive,
+): Promise<LockVerdict> {
+    const verdict = readLock(dataDir, alive);
+    if (verdict.kind === 'stale') await rm(path.join(dataDir, LOCK_FILE), { force: true });
+    return verdict;
+}
+
 /**
  * Starts (and on first run bootstraps) the bundled Postgres cluster.
  *
@@ -59,6 +118,13 @@ export async function startEmbeddedPostgres(
     const EmbeddedPostgres = await loadEmbeddedPostgres();
     await mkdir(path.dirname(options.dataDir), { recursive: true, mode: 0o700 });
     const first = !clusterInitialised(options.dataDir);
+
+    const lock = await clearStaleLock(options.dataDir);
+    if (lock.kind === 'stale') {
+        context.log('app', `Removed a stale ${LOCK_FILE} (${lock.reason}) — the last run did not shut down cleanly.`);
+    } else if (lock.kind === 'held') {
+        context.log('app', `A postmaster is already running for this cluster (pid ${lock.pid}); reusing it.`);
+    }
 
     const postgres = new EmbeddedPostgres({
         databaseDir: options.dataDir,
@@ -124,7 +190,46 @@ async function describeFailure(
     }
 }
 
-/** Deletes the cluster. The caller must have stopped the service first. */
-export async function resetEmbeddedPostgres(dataDir: string): Promise<void> {
-    await rm(dataDir, { recursive: true, force: true });
+/** `postgres-backup-2026-01-02T03-04-05` beside the cluster it came from. */
+export function backupDirFor(dataDir: string, at = new Date()): string {
+    const stamp = at.toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    return `${dataDir}-backup-${stamp}`;
+}
+
+export interface ResetResult {
+    /** Where the old cluster now is, or null when there was nothing to keep. */
+    backupDir: string | null;
+}
+
+/**
+ * Retires the cluster so a new one can be created in its place.
+ *
+ * It is deliberately a rename and not a delete. "Reset the database" is the one
+ * button in this app that destroys the operator's whole farm — every device,
+ * schedule and execution — and a non-technical operator reaches for it when
+ * something looks broken, not when they want to lose their data. The old cluster
+ * is moved aside and its path handed back to be shown; deleting it is then a
+ * decision the operator makes in the Finder, with the data still in front of them.
+ *
+ * `expectedParent` is the app's own userData directory. An external DATABASE_URL
+ * is refused a layer above, in the IPC handler, but this is the check that means
+ * no code path can ever aim this function at somebody else's data.
+ */
+export async function resetEmbeddedPostgres(
+    dataDir: string, expectedParent: string, at = new Date(),
+): Promise<ResetResult> {
+    const resolved = path.resolve(dataDir);
+    const parent = path.resolve(expectedParent);
+    if (path.dirname(resolved) !== parent || path.basename(resolved) !== 'postgres') {
+        throw new Error(`Refusing to reset ${resolved}: it is not this app's bundled cluster.`);
+    }
+    if (!existsSync(resolved)) return { backupDir: null };
+    // An empty directory is not data; moving it aside would only be confusing.
+    if ((await readdir(resolved)).length === 0) {
+        await rm(resolved, { recursive: true, force: true });
+        return { backupDir: null };
+    }
+    const backupDir = backupDirFor(resolved, at);
+    await rename(resolved, backupDir);
+    return { backupDir };
 }

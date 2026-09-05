@@ -127,18 +127,33 @@ function registerIpc(): void {
         }
         const choice = await dialog.showMessageBox({
             type: 'warning',
-            buttons: ['Cancel', 'Delete the database'],
+            buttons: ['Cancel', 'Reset the database'],
             defaultId: 0,
             cancelId: 0,
+            checkboxLabel: 'I understand every device, schedule and execution will be gone',
             title: 'Reset the embedded database',
-            message: 'Delete every device, schedule and execution stored in the bundled Postgres?',
-            detail: `This permanently removes ${paths.postgresDataDir}. It cannot be undone.`,
+            message: 'Start again with an empty database?',
+            detail: `The fleet will be stopped and ${paths.postgresDataDir} moved aside to a `
+                + 'dated backup folder next to it, so nothing is deleted and you can put it '
+                + 'back. The farm itself starts again empty.',
         });
-        if (choice.response !== 1) return { ok: false, message: 'Cancelled.' };
+        // Two deliberate acts: the destructive button, and the acknowledgement. This
+        // is the one action in the app that throws the operator's whole farm away.
+        if (choice.response !== 1 || !choice.checkboxChecked) return { ok: false, message: 'Cancelled.' };
         await fleet.supervisor.stopAll();
-        await resetEmbeddedPostgres(paths.postgresDataDir);
+        let backupDir: string | null;
+        try {
+            ({ backupDir } = await resetEmbeddedPostgres(paths.postgresDataDir, paths.userData));
+        } catch (error) {
+            return { ok: false, message: error instanceof Error ? error.message : String(error) };
+        }
         rebuildFleet(settingsStore.get());
-        return { ok: true, message: 'The embedded database was deleted. Start the fleet to recreate it.' };
+        return {
+            ok: true,
+            message: backupDir
+                ? `The old database was moved to ${backupDir}. Start the fleet to create an empty one.`
+                : 'There was no database to reset. Start the fleet to create one.',
+        };
     });
 }
 
