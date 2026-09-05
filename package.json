@@ -45,7 +45,9 @@
     "test": "node --import tsx --test test/*.test.ts",
     "check": "npm run typecheck && npm test",
     "desktop:dev": "npm --prefix apps/desktop run dev",
-    "desktop:build": "npm --prefix apps/desktop run dist"
+    "desktop:build": "npm --prefix apps/desktop run dist",
+    "mobile:start": "npm --prefix apps/mobile run start",
+    "mobile:test": "npm --prefix apps/mobile run test"
   },
   "engines": {
     "node": ">=22"
