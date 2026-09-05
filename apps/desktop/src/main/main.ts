@@ -24,9 +24,16 @@ const smokeMode = process.argv.includes('--smoke');
 // scoped npm package name would otherwise produce "Application Support/@scope/…".
 app.setName('Phone Farm');
 
-/** A second launch should raise the existing app, not start a second fleet. */
+/**
+ * A second launch should raise the existing app, not start a second fleet.
+ *
+ * `app.exit` and not `app.quit`: quit is asynchronous, so `whenReady` still fired
+ * and `bootstrap` still ran — the second instance spawned a whole second set of
+ * services, which then fought the first for the web and Appium ports and, worse,
+ * wrote to the same Postgres data directory. `app.exit` stops here and now.
+ */
 if (!smokeMode && !app.requestSingleInstanceLock()) {
-    app.quit();
+    app.exit(0);
 }
 
 let paths: AppPaths;
@@ -304,10 +311,12 @@ async function shutdown(): Promise<void> {
     if (quitting) return;
     quitting = true;
     tray?.destroy();
+    // Bootstrap may not have got this far; a shutdown must still be a clean exit.
+    if (!fleet) return;
     await fleet.supervisor.stopAll();
     fleet.logs.close();
     // Only now: anything still in the file after this point is a genuine orphan.
-    children.clear();
+    children?.clear();
 }
 
 function noop(): void { /* errors are already reflected in the service state */ }
