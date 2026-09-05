@@ -8,6 +8,11 @@ const recent = document.querySelector('#schedule-recent');
 const updated = document.querySelector('#schedule-updated');
 const popover = document.querySelector('#schedule-popover');
 const picker = document.querySelector('#schedule-picker');
+/**
+ * The `alert` glyph, copied verbatim from `src/ui/icons.ts`. Page scripts compile under
+ * tsconfig.web.json and cannot import from `src/`, so this is the one place a glyph is repeated;
+ * change it there first and bring the path across.
+ */
 const ALERT_GLYPH = '<svg class="bl-icon" width="11" height="11" viewBox="0 0 16 16" aria-hidden="true">'
     + '<path d="M8 2.5l6 11H2z"/><path d="M8 6.5v3M8 11.5h.01"/></svg>';
 let current = null;
