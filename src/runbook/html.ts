@@ -141,7 +141,10 @@ export function runbookEditorFragment(runbook: Runbook, devices: readonly Regist
         + `<input type="hidden" name="view" value="editor">`
         + `<label>Run on <select name="udid">${deviceOptions(devices)}</select></label> ${varInputs} `
         + `<button class="button" type="submit">Run now</button></form>`;
+    // baseCount tells the save how many steps this form was rendered from, so steps a
+    // recording appends while the editor is open are kept rather than clobbered.
     const steps = `<form hx-post="/plugins/com.farm.runbook/runbooks/${escapeHtml(runbook.id)}/steps-form" hx-target="#runbook-editor" hx-swap="outerHTML">`
+        + `<input type="hidden" name="baseCount" value="${runbook.steps.length}">`
         + `<table class="runbook-table runbook-steps"><tr><th>#</th><th>Type</th><th>Value</th><th>Target id</th><th>Target text</th>`
         + `<th>x / y</th><th>x2 / y2</th><th>ms</th><th>Expect</th><th>Retries / delay</th><th>Opt.</th><th>Del.</th></tr>`
         + `${rows}</table><button class="button" type="submit">Save steps</button></form>`;

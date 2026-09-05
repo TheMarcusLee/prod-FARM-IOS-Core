@@ -28,6 +28,11 @@ Source map:
 | `src/push/*` | Expo registrations, per-token ack marks, and the push relay |
 | `src/api/routes/push.ts` | `registerPushRoutes(app, options)` — `/api/push/*` and `/api/events/ack` |
 
+> **What "connected" means on this page.** A device counts as connected when USB/adb
+> enumeration lists it *or* the connection manager reports it physically connected, so an
+> a11y-bridge phone that is healthy over Wi-Fi with nothing attached shows as online. The
+> same union feeds `GET /api/mobile/bootstrap` (`src/fleet/connectivity.ts`).
+
 ## The `/fleet` page
 
 Every registered device is a card in a responsive grid showing its name, a

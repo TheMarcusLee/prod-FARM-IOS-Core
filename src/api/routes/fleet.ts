@@ -1,10 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import type { ExecutionRow } from '../../database/schema.js';
-import { discoverConnectedDeviceUdids } from '../../devices/discovery.js';
+import { connectedFleetUdids, wdaServiceStatuses } from '../../fleet/connectivity.js';
 import { loadRegisteredDevices, type RegisteredDevice } from '../../devices/registry.js';
 import type { DeviceConnectionStatus } from '../../devices/connection-manager.js';
-import { requestWdaService } from '../../devices/wda-service-client.js';
 import { driverKindOf, platformOf } from '../../drivers/select.js';
 import { createBulkSchedules, parseBulkRequest } from '../../fleet/bulk.js';
 import {
@@ -91,12 +90,6 @@ function accountsOf(device: RegisteredDevice): string[] {
     });
 }
 
-/** Ask wda-service for the live per-device connection states over its Unix socket. */
-async function wdaServiceStatuses(): Promise<DeviceConnectionStatus[]> {
-    const response = await requestWdaService('/devices', { timeoutMs: 2_000 });
-    if (response.statusCode < 200 || response.statusCode >= 300) return [];
-    return (JSON.parse(response.body).devices ?? []) as DeviceConnectionStatus[];
-}
 
 function parseEventQuery(query: Record<string, string | undefined>): EventQuery {
     const parsed: EventQuery = { limit: clampLimit(query.limit) };
@@ -139,7 +132,9 @@ export async function registerFleetRoutes(app: FastifyInstance, options: FleetRo
     // Only the UDIDs: discoverConnectedDevices() also asks usbmuxd for a name,
     // an OS version and a device-info blob per phone — three extra round trips
     // each — and every one of them is thrown away here.
-    const connectedUdids = options.connectedUdids ?? (() => discoverConnectedDeviceUdids());
+    // Union of USB/adb enumeration and the connection manager's view, so a bridge
+    // phone that is healthy over Wi-Fi with nothing attached still counts as connected.
+    const connectedUdids = options.connectedUdids ?? (() => connectedFleetUdids({ statuses: options.deviceStatuses }));
 
     let store: EventStore | null = options.events ?? null;
     const eventStore = (): EventStore | null => {

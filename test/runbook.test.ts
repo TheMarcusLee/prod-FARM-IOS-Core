@@ -442,7 +442,7 @@ test('saving the step editor cannot drop a step an open recording just appended'
     const [, recorded] = await Promise.all([
         inject(app, {
             method: 'POST', url: `/plugins/com.farm.runbook/runbooks/${id}/steps-form`,
-            payload: 'step.0.type=wait&step.0.ms=500',
+            payload: 'baseCount=0&step.0.type=wait&step.0.ms=500',
             headers: { 'content-type': 'application/x-www-form-urlencoded' },
         }),
         inject(app, {
@@ -453,8 +453,8 @@ test('saving the step editor cannot drop a step an open recording just appended'
 
     const saved = await readRunbook(id, directory);
     const types = saved!.steps.map((step) => step.type);
-    assert.ok(types.includes('key'), `the recorded step survived: ${types.join(', ')}`);
-    assert.equal(saved!.steps.length, types.includes('wait') ? 2 : 1);
+    // Whichever order the two landed in, the edited list comes first and the recorded step survives.
+    assert.deepEqual(types, ['wait', 'key']);
 });
 
 test('a rejected runbook body is a 400 that names the field', async (context) => {

@@ -13,7 +13,7 @@ import { contentRoot, dataRoot } from '../../content/paths.js';
 import { resolveMediaTools } from '../../content/ffmpeg.js';
 import { createContentStore, type ContentStore, type QueuePlanRow } from '../../content/store.js';
 import type { ExecutionRow, ScheduleRow } from '../../database/schema.js';
-import { discoverConnectedDevices } from '../../devices/discovery.js';
+import { connectedFleetUdids } from '../../fleet/connectivity.js';
 import { loadRegisteredDevices, type RegisteredDevice } from '../../devices/registry.js';
 import { platformOf } from '../../drivers/select.js';
 import { createEventStore, serializeEvent, type EventStore, type FarmEvent } from '../../fleet/events.js';
@@ -353,8 +353,8 @@ function countStates(devices: readonly BootstrapDevice[]): JsonObject {
 export async function registerMobileRoutes(app: FastifyInstance, options: MobileRouteOptions): Promise<void> {
     const clock = options.now ?? (() => new Date());
     const loadDevices = options.loadDevices ?? loadRegisteredDevices;
-    const connectedUdids = options.connectedUdids
-        ?? (async () => (await discoverConnectedDevices()).map(({ udid }) => udid));
+    // Same union the fleet page uses, so a Wi-Fi bridge phone is not shown offline.
+    const connectedUdids = options.connectedUdids ?? (() => connectedFleetUdids());
 
     let contentStore: ContentStore | null | undefined;
     const store = (): ContentStore | null => {

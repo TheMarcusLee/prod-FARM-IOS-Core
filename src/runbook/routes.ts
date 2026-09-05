@@ -324,9 +324,15 @@ export async function registerRunbookRoutes(context: PluginRouteContext, options
         if (!runbook) return reply.code(404).type('text/html').send(await listFragment('Runbook not found'));
         try {
             const steps = stepsFromForm(request.body ?? {});
-            // Same serialisation as recording: the editor and an open recording
-            // both read-modify-write the same file.
-            const updated = await mutateRunbook(runbook.id, (stored) => { stored.steps = steps; }, directory);
+            // The form replaces the steps it was rendered from (baseCount of them);
+            // anything a recording appended since then is kept behind the edited list.
+            // Same serialisation as recording, so the two never read-modify-write past
+            // each other either.
+            const base = Number(field(request.body ?? {}, 'baseCount'));
+            const updated = await mutateRunbook(runbook.id, (stored) => {
+                const appendedSince = Number.isInteger(base) && base >= 0 ? stored.steps.slice(base) : [];
+                stored.steps = validateSteps([...steps, ...appendedSince] as unknown as JsonValue[]);
+            }, directory);
             return html(reply, await editorFragment(updated ?? runbook, `Saved ${steps.length} steps.`));
         } catch (error) {
             return html(reply, await editorFragment(runbook, errorMessage(error)));
