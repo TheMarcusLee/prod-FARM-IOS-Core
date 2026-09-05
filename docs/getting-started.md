@@ -1,6 +1,6 @@
 # Getting started
 
-Phone Farm drives physical **iPhones and Android phones** from a local
+Backline drives physical **iPhones and Android phones** from a local
 dashboard: guided device registration, a live screen with remote tap/swipe, and
 a PostgreSQL-backed scheduler that runs versioned automation tasks (a TikTok
 plugin ships built in, with an iOS routine and an Android routine).
@@ -22,13 +22,13 @@ TypeScript directly through `tsx`, there is no build step) and **PostgreSQL 14+*
 
 ## A. The desktop app
 
-`Phone Farm.app` supervises PostgreSQL, the migrations, `adb`, Appium, the WDA
+The desktop app supervises PostgreSQL, the migrations, `adb`, Appium, the WDA
 service, the worker and the web server, and opens the dashboard in its own
 window. It bundles PostgreSQL 17, so you need neither Docker nor a database.
 
 ```sh
-git clone <this-repo> phone-farm
-cd phone-farm
+git clone <this-repo> backline
+cd backline
 npm install
 npm --prefix apps/desktop install
 npm run desktop:dev
@@ -49,7 +49,7 @@ Then:
 4. The main window is the dashboard. Go to **Register device**.
 
 The app does not read `.env`. Its configuration is
-`~/Library/Application Support/Phone Farm/settings.json`, and its data —
+`~/Library/Application Support/Backline/settings.json`, and its data —
 `devices.json`, the scheduler data directory, the Postgres cluster and one
 rotating log per service — lives beside it. Everything else about it, including
 packaging and diagnostics export, is in [desktop.md](desktop.md).
@@ -76,8 +76,8 @@ adb version
 ### B2. Install and configure the farm
 
 ```sh
-git clone <this-repo> phone-farm
-cd phone-farm
+git clone <this-repo> backline
+cd backline
 npm install
 cp .env.example .env
 ```
@@ -167,8 +167,8 @@ xcrun xctrace list devices      # your iPhone must be under "Devices", not "Devi
 ### C2. Install
 
 ```sh
-git clone <this-repo> phone-farm
-cd phone-farm
+git clone <this-repo> backline
+cd backline
 npm install
 npm run appium:install-driver     # installs the XCUITest driver into ./.appium2
 ```

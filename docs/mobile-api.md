@@ -919,7 +919,7 @@ the Settings screen's "can I reach the Mac" check — it is cheap and, unlike
 | `/api/fragments/*`, `/api/devices/:udid/fragments/*` | HTMX HTML fragments for the dashboard. |
 | `/api/device-registrations/*`, `POST /api/devices`, `DELETE /api/devices/:udid`, `POST /api/devices/:udid/checks`, `GET /api/devices/discovered`, `GET /api/devices/:udid/coordinates` | Registration and calibration need the Mac, a cable, and (on iOS) Xcode. Desktop-only. |
 | `/mcp` | Agent surface, not a client API. |
-| `/`, `/tasks`, `/fleet`, `/content`, `/runbooks`, `/devices/:udid`, `/devices/register`, `/login`, `/auth/logout`, `/assets/*` | Server-rendered HTML and its browser assets. `/docs` is a hand-written stub, not generated from the routing table — this file is the contract. |
+| `/`, `/schedule`, `/fleet`, `/content`, `/runbooks`, `/devices/:udid`, `/devices/register`, `/login`, `/auth/logout`, `/assets/*` | Server-rendered HTML and its browser assets. `/docs` is a hand-written stub, not generated from the routing table — this file is the contract. |
 | `/api/content/*` except `/api/content/queue*`, `/api/drip/*`, `/api/notifications/test` | The content library and alert plumbing are operated from the dashboard. |
 
 ### Plugin-registered routes on the device namespace

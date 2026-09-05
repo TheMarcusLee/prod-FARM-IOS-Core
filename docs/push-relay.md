@@ -103,16 +103,16 @@ FARM_API_TOKEN=<token> npm run push:relay
 ```
 
 On the farm Mac, supervise it with launchd. Copy
-`docs/launchd/co.agniverse.phone-farm.push-relay.plist` to
+`docs/launchd/co.backline.push-relay.plist` to
 `~/Library/LaunchAgents/`, edit the paths and the token, then:
 
 ```sh
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/co.agniverse.phone-farm.push-relay.plist
-launchctl kickstart -k gui/$(id -u)/co.agniverse.phone-farm.push-relay
-tail -f ~/Library/Logs/phone-farm/push-relay.log
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/co.backline.push-relay.plist
+launchctl kickstart -k gui/$(id -u)/co.backline.push-relay
+tail -f ~/Library/Logs/backline/push-relay.log
 ```
 
-`launchctl bootout gui/$(id -u)/co.agniverse.phone-farm.push-relay` stops it.
+`launchctl bootout gui/$(id -u)/co.backline.push-relay` stops it.
 Keep the token out of the plist if you can — point `.env` at it instead, since
 `npm run push:relay` already loads `.env` when one is present.
 

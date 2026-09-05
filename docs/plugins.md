@@ -1,4 +1,4 @@
-# Extending Phone Farm with plugins
+# Extending Backline with plugins
 
 A plugin adds **versioned automation tasks** — and optionally device‑page
 panels, registration checks, HTTP routes, and declared WDA patches — without

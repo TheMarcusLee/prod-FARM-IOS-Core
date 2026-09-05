@@ -3,6 +3,8 @@
 The `/content` page turns a folder of raw clips into a queue of scheduled TikTok
 posts. It does three things:
 
+![The Content page](design/screenshots/content.png)
+
 1. **Ingest and normalise** — every upload is probed, and video is transcoded to
    a TikTok-safe copy (9:16, H.264 + AAC, ≤ 1080×1920, ≤ 180 s, metadata
    stripped, `faststart`). The original is kept untouched.
@@ -11,7 +13,7 @@ posts. It does three things:
 3. **Drip** — a rule says "two posts a day for `@handle` on this phone, between
    09:00 and 21:00 local, at least two hours apart, from the `fitness` tag". A
    planner turns that into ordinary one-off schedules through the existing
-   scheduler, so everything the Tasks page can do to a schedule still works.
+   scheduler, so everything the Schedule page can do to a schedule still works.
 
 ## Requirements
 
@@ -52,7 +54,9 @@ in-process behind a two-slot limiter:
   9:16 is reached by padding; pass `crop: true` to fill and lose the edges.
 - **image** → used as-is.
 - both get a poster frame in `CONTENT_DIR/posters/<item id>.jpg`, served from
-  `GET /api/content/items/:id/poster`.
+  `GET /api/content/items/:id/poster`. The library grid draws the shared asset
+  thumbnail instead (`GET /api/assets/:id/thumbnail`), so one cache serves the
+  dashboard and the companion app.
 
 The row ends at `ready`, or at `failed` with the FFmpeg message in `error`.
 
@@ -61,7 +65,7 @@ The row ends at `ready`, or at `failed` with the FFmpeg message in `error`.
 Deliberately tiny, and fully covered by tests:
 
 ```
-{title} {random:🔥|✨|💪} {hashtags}
+{title} {random:new drop|back at it|day two} {hashtags}
 ```
 
 `{title}`, `{hashtags}`, `{account}` and `{date}` substitute; `{random:a|b|c}`
@@ -157,7 +161,7 @@ worker.
 
 | Route | Purpose |
 | --- | --- |
-| `GET /content` | The dashboard page. |
+| `GET /content` | The page: ingest, the library grid, sets, caption templates and the drip rules. |
 | `GET/POST /api/content/items` | List, or upload multipart media. |
 | `PATCH/DELETE /api/content/items/:id` | Edit tags/caption/hashtags/status, or delete with its files. |
 | `GET /api/content/items/:id/poster` | Poster frame. |

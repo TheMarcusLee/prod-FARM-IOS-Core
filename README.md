@@ -1,16 +1,30 @@
-# Phone Farm
+# Backline
 
-An open-source, self-hosted application for operating a rack of physical phones —
-**iPhones over WebDriverAgent and Android phones over adb or an on-device
-accessibility bridge** — from one local dashboard. It gives you guided device
-registration for both platforms, a live screen with remote tap/swipe, a
-PostgreSQL-backed scheduler that runs versioned automation tasks (a TikTok plugin
-ships built in, with an iOS and an Android routine), a content library that
-normalises clips with FFmpeg and drips them out as scheduled posts, a fleet page
-with tags, bulk actions, an event timeline and alerts over webhook/Slack/Discord/ntfy,
-an MCP server so an agent can drive the farm, a macOS desktop app that supervises
-every process for you, and an Expo companion app for watching and steering the
-farm from your own phone.
+Backline is an open-source, self-hosted application for operating a rack of
+physical phones — **iPhones over WebDriverAgent and Android phones over adb or an
+on-device accessibility bridge** — from one local control center. It gives you
+guided device registration for both platforms, a live screen with remote
+tap/swipe, a PostgreSQL-backed scheduler that runs versioned automation tasks (a
+TikTok plugin ships built in, with an iOS and an Android routine), a content
+library that normalises clips with FFmpeg and drips them out as scheduled posts,
+tags, bulk actions, an event timeline and alerts over
+webhook/Slack/Discord/ntfy, an MCP server so an agent can drive the farm, a macOS
+desktop app that supervises every process for you, and an Expo companion app for
+watching and steering the farm from your own phone.
+
+## The pages
+
+| Page | What it answers |
+| --- | --- |
+| **Control Center** (`/`) | *What is happening.* Every phone's screen, live, numbered and selectable. Batch actions act on the selection; clicking a tile opens the viewer with hardware controls and the running task's log. |
+| **Schedule** (`/schedule`) | *What happens tonight.* One track per phone, one clip per post, coloured by the account that owns it, with a playhead at now. A red clip needs you; a dashed one is the retry already booked. Click a clip to stop, retry, pause, skip or open the phone. |
+| **Content** (`/content`) | The media library, the sets and caption templates, and the drip rules that turn tagged media into scheduled posts. |
+| **Runbooks** (`/runbooks`) | Sequences recorded once on one phone and replayed on the fleet. |
+| **Rig** (`/rig`) | The services under the farm — Postgres, Appium, the WDA supervisor, the worker — and their live logs. |
+
+Accounts, Alerts, Devices and Settings sit alongside them in the same shell.
+
+![The Schedule timeline](docs/design/screenshots/schedule.png)
 
 It runs locally as-is; authentication is optional on a loopback bind. Harden it
 for a shared or exposed deployment with the built-in `local` auth provider or
@@ -18,15 +32,13 @@ your own `AuthProvider` (`PHONE_FARM_AUTH_PLUGIN`) — no fork required. Tasks a
 persisted as `pluginId`, `taskType`, `taskVersion` and a JSON payload, so an old
 schedule can never silently execute a new contract.
 
-> Live demo and setup walkthrough: **[gethandler.ai/ios-farm](https://gethandler.ai/ios-farm)**
-
 ## Which way to run it
 
 There are two supported ways to run the same code. Pick one.
 
 ### 1. The desktop app (recommended)
 
-`Phone Farm.app` (`apps/desktop`) is a macOS Electron supervisor. It starts and
+The desktop app (`apps/desktop`) is a macOS Electron supervisor. It starts and
 restarts PostgreSQL (bundled, or yours), the migrations, `adb`, Appium, the WDA
 service, the worker and the web server, keeps a rotating log per service, and
 opens the real dashboard in its own window. No terminal, no Docker, no `.env`.
@@ -38,7 +50,7 @@ npm run desktop:dev        # run it against this checkout
 npm run desktop:build      # build the .app / .dmg into apps/desktop/release/
 ```
 
-Settings live in `~/Library/Application Support/Phone Farm/settings.json` — the
+Settings live in `~/Library/Application Support/Backline/settings.json` — the
 app does **not** read `.env`. Full details, including what is bundled and where
 the data lives: [docs/desktop.md](docs/desktop.md).
 
@@ -89,8 +101,9 @@ every Xcode step, and never run `appium` or `wda:service`.
 
 - [docs/getting-started.md](docs/getting-started.md) — install, configure, run, register your first device (Android and iOS paths)
 - [docs/device-testing-checklist.md](docs/device-testing-checklist.md) — the step-by-step checklist for your first session with real hardware
-- [docs/operations.md](docs/operations.md) — running it day to day: the drip queue, the fleet page, alerts, tokens, backups, upgrades, logs
+- [docs/operations.md](docs/operations.md) — running it day to day: the Control Center and Schedule loop, the drip queue, alerts, tokens, backups, upgrades, logs
 - [docs/architecture.md](docs/architecture.md) — the processes, data stores, task model, source map
+- [docs/design/backline.md](docs/design/backline.md) — the design system every surface is built from: tokens, components, copy
 
 **Subsystems**
 

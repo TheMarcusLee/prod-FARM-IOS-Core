@@ -3,13 +3,13 @@
 <!--
   Supervises `npm run push:relay` beside the scheduler worker.
 
-  Copy to ~/Library/LaunchAgents/, replace /Users/you/phone-farm with the
+  Copy to ~/Library/LaunchAgents/, replace /Users/you/backline with the
   checkout path and /Users/you with your home directory (launchd does not
   expand ~ or $HOME in any of these values), then:
 
-    mkdir -p ~/Library/Logs/phone-farm
-    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/co.agniverse.phone-farm.push-relay.plist
-    launchctl kickstart -k gui/$(id -u)/co.agniverse.phone-farm.push-relay
+    mkdir -p ~/Library/Logs/backline
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/co.backline.push-relay.plist
+    launchctl kickstart -k gui/$(id -u)/co.backline.push-relay
 
   ProgramArguments[0] must be a real path: launchd does not search PATH for it,
   and PATH below only applies to what npm itself spawns. On Apple Silicon
@@ -21,7 +21,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>co.agniverse.phone-farm.push-relay</string>
+  <string>co.backline.push-relay</string>
 
   <key>ProgramArguments</key>
   <array>
@@ -31,7 +31,7 @@
   </array>
 
   <key>WorkingDirectory</key>
-  <string>/Users/you/phone-farm</string>
+  <string>/Users/you/backline</string>
 
   <key>EnvironmentVariables</key>
   <dict>
@@ -40,7 +40,7 @@
     <key>FARM_BASE_URL</key>
     <string>http://127.0.0.1:3000</string>
     <key>SCHEDULER_DATA_DIR</key>
-    <string>/Users/you/phone-farm/.scheduler-data</string>
+    <string>/Users/you/backline/.scheduler-data</string>
     <key>PUSH_QUIET_HOURS</key>
     <string>22:00-07:00</string>
     <key>PUSH_TIMEZONE</key>
@@ -63,9 +63,9 @@
   <integer>30</integer>
 
   <key>StandardOutPath</key>
-  <string>/Users/you/Library/Logs/phone-farm/push-relay.log</string>
+  <string>/Users/you/Library/Logs/backline/push-relay.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/you/Library/Logs/phone-farm/push-relay.log</string>
+  <string>/Users/you/Library/Logs/backline/push-relay.log</string>
 
   <key>ProcessType</key>
   <string>Background</string>

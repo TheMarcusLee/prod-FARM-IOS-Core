@@ -27,11 +27,11 @@ client will not run in your shell's working directory.
 Claude Code:
 
 ```sh
-claude mcp add phone-farm \
+claude mcp add backline \
   --env DATABASE_URL=postgresql://phone_farm:CHANGE_ME@127.0.0.1:5432/phone_farm \
-  --env DEVICES_CONFIG_PATH=/Users/you/phone-farm/devices.json \
-  --env SCHEDULER_DATA_DIR=/Users/you/phone-farm/.scheduler-data \
-  -- npm --prefix /Users/you/phone-farm run --silent mcp
+  --env DEVICES_CONFIG_PATH=/Users/you/backline/devices.json \
+  --env SCHEDULER_DATA_DIR=/Users/you/backline/.scheduler-data \
+  -- npm --prefix /Users/you/backline run --silent mcp
 ```
 
 Claude Desktop — `~/Library/Application Support/Claude/claude_desktop_config.json`:
@@ -39,13 +39,13 @@ Claude Desktop — `~/Library/Application Support/Claude/claude_desktop_config.j
 ```json
 {
   "mcpServers": {
-    "phone-farm": {
+    "backline": {
       "command": "npm",
-      "args": ["--prefix", "/Users/you/phone-farm", "run", "--silent", "mcp"],
+      "args": ["--prefix", "/Users/you/backline", "run", "--silent", "mcp"],
       "env": {
         "DATABASE_URL": "postgresql://phone_farm:CHANGE_ME@127.0.0.1:5432/phone_farm",
-        "DEVICES_CONFIG_PATH": "/Users/you/phone-farm/devices.json",
-        "SCHEDULER_DATA_DIR": "/Users/you/phone-farm/.scheduler-data"
+        "DEVICES_CONFIG_PATH": "/Users/you/backline/devices.json",
+        "SCHEDULER_DATA_DIR": "/Users/you/backline/.scheduler-data"
       }
     }
   }
@@ -70,7 +70,7 @@ npm run token:create -- --name agent-1
 ```
 
 ```sh
-claude mcp add --transport http phone-farm http://127.0.0.1:3000/mcp \
+claude mcp add --transport http backline http://127.0.0.1:3000/mcp \
   --header "Authorization: Bearer pf_…"
 ```
 
@@ -102,7 +102,7 @@ names it, and `DELETE /mcp` tears it down. Each session records the id of the
 token that opened it, and a request presenting a different token gets `404 No
 such MCP session` — not a `403`, because it should not learn that the session
 exists. So revoking one phone's token cannot leave it talking through a session
-the desktop app opened.
+The desktop app opened.
 
 | | |
 |---|---|

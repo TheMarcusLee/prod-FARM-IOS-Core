@@ -35,16 +35,60 @@ function refresh(section) {
         location.reload();
         return;
     }
-    void htmx.ajax('GET', targets[0], targets[1]);
+    // The fragments each render their own wrapper element, so the swap has to
+    // be outerHTML. htmx.ajax defaults to innerHTML, which nested a second
+    // #content-library inside the first on every refresh — duplicate ids, and
+    // one more level of nesting each time the operator pressed Refresh.
+    void htmx.ajax('GET', targets[0], { target: targets[1], swap: 'outerHTML' });
 }
 // ---- ingest ---------------------------------------------------------------
+/**
+ * The dropzone is the primary way media arrives; the file input behind it stays the thing that
+ * actually carries the files, so the form posts exactly as it did before drag and drop existed.
+ */
+const dropzone = byId('upload-drop');
+const fileInput = byId('upload-media');
+const chosen = byId('upload-chosen');
+function describeChosen() {
+    const count = fileInput.files?.length ?? 0;
+    chosen.textContent = count === 0 ? '' : count === 1
+        ? (fileInput.files?.[0]?.name ?? '1 file ready')
+        : `${count} files ready`;
+}
+byId('upload-choose').addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', describeChosen);
+dropzone.addEventListener('click', (event) => {
+    if (!event.target.closest('button'))
+        fileInput.click();
+});
+dropzone.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        fileInput.click();
+    }
+});
+for (const name of ['dragenter', 'dragover']) {
+    dropzone.addEventListener(name, (event) => { event.preventDefault(); dropzone.classList.add('is-over'); });
+}
+for (const name of ['dragleave', 'dragend']) {
+    dropzone.addEventListener(name, () => dropzone.classList.remove('is-over'));
+}
+dropzone.addEventListener('drop', (event) => {
+    event.preventDefault();
+    dropzone.classList.remove('is-over');
+    const dropped = event.dataTransfer?.files;
+    if (!dropped?.length)
+        return;
+    fileInput.files = dropped;
+    describeChosen();
+});
 byId('upload-form').addEventListener('submit', (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     const result = byId('upload-result');
     say(result, 'Uploading…');
     void request('/api/content/items', { method: 'POST', body: new FormData(form) })
-        .then(() => { say(result, 'Uploaded. Normalising in the background.'); form.reset(); refresh('library'); })
+        .then(() => { say(result, 'Uploaded. Normalising in the background.'); form.reset(); describeChosen(); refresh('library'); })
         .catch((error) => say(result, error.message));
 });
 byId('ingest-form').addEventListener('submit', (event) => {

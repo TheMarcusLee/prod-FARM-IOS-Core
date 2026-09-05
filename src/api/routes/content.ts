@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import crypto from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -8,7 +9,9 @@ import type { DripRuleRow } from '../../database/schema.js';
 import type { SchedulerRepository } from '../../scheduler/repository.js';
 import { downloadWithYtDlp, ytDlpPath } from '../../content/ffmpeg.js';
 import { ingestDirectory, ingestMedia, listMediaFiles, mimeTypeFor, removeItemFiles } from '../../content/ingest.js';
-import { escapeHtml, renderLibrary, renderRules, renderSets, renderTemplates } from '../../content/page.js';
+import { escapeHtml, renderContentPage, renderLibrary, renderRules, renderSets, renderTemplates } from '../../content/page.js';
+import { loadRegisteredDevices, type RegisteredDevice } from '../../devices/registry.js';
+import { assignAccountColours, collectAccounts } from '../../schedule/accounts.js';
 import { contentRoot } from '../../content/paths.js';
 import { renderCaptionTemplate } from '../../content/templates.js';
 import { replanRule, runDripPlanner, startDripPlannerTick } from '../../content/runner.js';
@@ -24,7 +27,11 @@ export interface ContentRouteOptions {
     store?: ContentStore;
     /** Overrides DRIP_PLANNER_INTERVAL_MINUTES. Zero or less disables the tick. */
     plannerIntervalMinutes?: number;
+    /** Rendered into the shell's sidebar; plugins contribute these. */
     navHtml?: string;
+    /** Test seam for the device registry, which supplies the account colour order. */
+    loadDevices?: () => Promise<RegisteredDevice[]>;
+    /** Accepted and ignored: the Backline shell has no footer. Kept so app.ts still compiles. */
     footerHtml?: string;
 }
 
@@ -76,14 +83,24 @@ export async function registerContentRoutes(app: FastifyInstance, options: Conte
         return resolved;
     };
 
-    const [pageTemplate, pageScript] = await Promise.all([
-        readFile(path.join(STATIC_ROOT, 'templates/content.html'), 'utf8'),
+    const loadDevices = options.loadDevices ?? loadRegisteredDevices;
+    const [pageScript, pageStyles] = await Promise.all([
         readFile(path.join(STATIC_ROOT, 'assets/content.js'), 'utf8').catch(() => '/* run npm run build:web */'),
+        // Only for the cache key: a CSS-only edit has to give the page a fresh
+        // asset URL too, and /assets/pages.css is served by the schedule routes.
+        readFile(path.join(STATIC_ROOT, 'pages.css'), 'utf8').catch(() => ''),
     ]);
-    const page = pageTemplate
-        .replaceAll('__PLUGIN_NAV__', options.navHtml ?? '')
-        .replaceAll('__AUTH_NAV__', '')
-        .replaceAll('__FOOTER__', options.footerHtml ?? '');
+    const version = `?v=${crypto.createHash('sha1').update(pageScript + pageStyles).digest('base64url').slice(0, 10)}`;
+    const page = renderContentPage({
+        assetVersion: version,
+        ...(options.navHtml ? { pluginNav: options.navHtml } : {}),
+    });
+
+    /** Colours follow the same registration order the Schedule timeline uses. */
+    const ruleColours = async (accounts: readonly string[]) => {
+        const devices = await loadDevices().catch(() => [] as RegisteredDevice[]);
+        return assignAccountColours(collectAccounts(devices, accounts));
+    };
 
     app.get('/content', async (_request, reply) => reply.type('text/html').send(page));
     app.get('/assets/content.js', async (_request, reply) => reply.type('text/javascript').send(pageScript));
@@ -306,7 +323,9 @@ export async function registerContentRoutes(app: FastifyInstance, options: Conte
         const views = await Promise.all(rules.map(async (rule) => ({
             rule, plans: await active.upcomingPlans(rule.id, 20),
         })));
-        if (request.headers['hx-request']) return reply.type('text/html').send(renderRules(views));
+        if (request.headers['hx-request']) {
+            return reply.type('text/html').send(renderRules(views, await ruleColours(rules.map(({ account }) => account))));
+        }
         return { rules: views };
     });
 

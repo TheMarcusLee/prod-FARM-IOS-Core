@@ -284,7 +284,7 @@ sheet without leaving the grid.
 │ [ Doomscroll now ] [ Reconnect ]     │
 │ [ Disable device ]                   │
 ├──────────────────────────────────────┤
-│ Remote control      [ locked  🔒 ]   │   toggle → biometric prompt
+│ Remote control      [ locked ]       │   toggle → biometric prompt
 └──────────────────────────────────────┘
 ```
 
@@ -365,7 +365,7 @@ disagree.
 and the last 200 events persist to disk (`expo-sqlite` or MMKV). Offline, the
 app renders them behind a dimmed banner — *"Last updated 12 minutes ago — can't
 reach the Mac"* — with every action control disabled. Nothing is queued for
-later replay: a stop or a tap that fires twenty minutes late on a phone farm is
+later replay: a stop or a tap that fires twenty minutes late on a rack of phones is
 worse than one that never fired.
 
 **Foregrounded → SSE.** One `/api/events/stream` connection, resumed with
