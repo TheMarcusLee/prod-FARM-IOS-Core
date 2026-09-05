@@ -1,8 +1,8 @@
 {
-  "name": "@git-agni/phone-farm-desktop",
+  "name": "@backline/rig",
   "version": "0.1.0",
   "private": true,
-  "description": "macOS desktop supervisor for the Phone Farm services",
+  "description": "Rig — the Backline desktop supervisor",
   "type": "module",
   "main": "dist/main/main.cjs",
   "scripts": {
@@ -35,5 +35,5 @@
     "@embedded-postgres/darwin-x64@17.10.0-beta.17": true,
     "electron@44.2.0": true
   },
-  "productName": "Phone Farm"
+  "productName": "Backline"
 }

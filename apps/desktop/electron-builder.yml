@@ -1,5 +1,5 @@
-appId: ai.gethandler.phonefarm.desktop
-productName: Phone Farm
+appId: io.backline.rig
+productName: Backline
 copyright: Apache-2.0
 directories:
   output: release
@@ -55,4 +55,4 @@ mac:
   gatekeeperAssess: false
 
 dmg:
-  title: Phone Farm
+  title: Backline

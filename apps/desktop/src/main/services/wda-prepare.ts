@@ -167,7 +167,7 @@ export function wdaPrepareSpawn(context: ServiceContext, target: WdaPrepareTarge
 export function wdaPrepareJob(context: ServiceContext, target: WdaPrepareTarget): JobDefinition {
     return {
         id: WDA_PREPARE_JOB_ID,
-        label: 'Prepare WebDriverAgent',
+        label: 'Prepare iPhones',
         note: WDA_TRUST_NOTE,
         command: `npm run wda:prepare -- ${wdaPrepareArgs(target).join(' ')}`,
         checks: () => wdaPrepareChecks(context, target),

@@ -22,7 +22,7 @@ const smokeMode = process.argv.includes('--smoke');
 
 // Set before any getPath('userData') call: it decides the data directory, and a
 // scoped npm package name would otherwise produce "Application Support/@scope/…".
-app.setName('Phone Farm');
+app.setName('Backline');
 
 /**
  * A second launch should raise the existing app, not start a second fleet.
@@ -211,7 +211,7 @@ async function exportDiagnostics(): Promise<{ ok: boolean; message: string }> {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const chosen = await dialog.showSaveDialog({
         title: 'Export diagnostics',
-        defaultPath: path.join(app.getPath('desktop'), `phone-farm-diagnostics-${stamp}.zip`),
+        defaultPath: path.join(app.getPath('desktop'), `backline-diagnostics-${stamp}.zip`),
         filters: [{ name: 'Zip archive', extensions: ['zip'] }],
     });
     if (chosen.canceled || !chosen.filePath) return { ok: false, message: 'Cancelled.' };
@@ -275,16 +275,16 @@ function buildMenu(): void {
             ],
         },
         {
-            label: 'Farm',
+            label: 'Rig',
             submenu: [
-                { label: 'Services', accelerator: 'Cmd+Shift+S', click: () => windows?.showServices() },
+                { label: 'Rig', accelerator: 'Cmd+Shift+R', click: () => windows?.showServices() },
                 { label: 'Dashboard', accelerator: 'Cmd+D', click: () => { if (dashboardUrl) windows?.loadDashboard(dashboardUrl); } },
                 { type: 'separator' },
                 { label: 'Start all', click: () => void fleet.supervisor.startAll().catch(noop) },
                 { label: 'Stop all', click: () => void fleet.supervisor.stopAll().catch(noop) },
                 { label: 'Restart all', click: () => void fleet.supervisor.restartAll().catch(noop) },
                 { type: 'separator' },
-                { label: 'Prepare WebDriverAgent…', click: () => void runWdaPrepare(null) },
+                { label: 'Prepare iPhones…', click: () => void runWdaPrepare(null) },
                 { type: 'separator' },
                 { label: 'Copy MCP config', click: () => { copyMcpConfig(); } },
                 { type: 'separator' },
@@ -430,6 +430,6 @@ app.on('before-quit', (event) => {
 });
 
 void app.whenReady().then(bootstrap).catch((error: unknown) => {
-    dialog.showErrorBox('Phone Farm could not start', error instanceof Error ? error.stack ?? error.message : String(error));
+    dialog.showErrorBox('Backline could not start', error instanceof Error ? error.stack ?? error.message : String(error));
     app.exit(1);
 });

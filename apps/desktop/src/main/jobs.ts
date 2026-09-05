@@ -39,7 +39,7 @@ export interface JobRunnerOptions {
  * One-shot supervised jobs — right now only the WebDriverAgent build.
  *
  * A job is not a service: it is expected to exit, it is never restarted, and its
- * result stays visible in the Services panel until the operator dismisses it.
+ * result stays visible in the Rig window until the operator dismisses it.
  * That is why it lives beside the supervisor rather than inside it.
  */
 export class JobRunner extends EventEmitter {
