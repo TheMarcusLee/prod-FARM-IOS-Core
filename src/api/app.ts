@@ -98,6 +98,76 @@ function clientErrorMessage(error: unknown): string {
     return isDeliberate(error) ? errorMessage(error) : 'Internal server error';
 }
 
+/**
+ * A device id is not just a map key: on Android it is handed to `adb -s <id>`
+ * and on iOS it names a WDA session, so it reaches `execFile` argument vectors
+ * from a request body. execFile never goes through a shell, but a value that
+ * starts with `-` is still read by adb as a flag, and whitespace or a slash
+ * turns an id into something the callers assume it never is. iOS UDIDs, adb
+ * serials and `host:port` wireless serials all fit this shape.
+ */
+export const DEVICE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+export const MAX_DEVICE_NAME_LENGTH = 200;
+
+function validPort(value: unknown): boolean {
+    return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65_535;
+}
+
+/** The bridge is fetched by the a11y-bridge driver, so an unchecked value here is an SSRF hole. */
+function validBridgeUrl(value: unknown): boolean {
+    if (typeof value !== 'string') return false;
+    try {
+        return ['http:', 'https:'].includes(new URL(value).protocol);
+    } catch { return false; }
+}
+
+/** Returns the first problem with a device body, or null. Shared by POST and PATCH. */
+function deviceBodyProblem(body: {
+    name?: unknown; wdaLocalPort?: unknown; mjpegLocalPort?: unknown;
+    android?: { serial?: unknown; bridgeUrl?: unknown; bridgeToken?: unknown } | null;
+}): string | null {
+    if (body.name !== undefined && (typeof body.name !== 'string' || body.name.length > MAX_DEVICE_NAME_LENGTH)) {
+        return `name must be a string of at most ${MAX_DEVICE_NAME_LENGTH} characters`;
+    }
+    for (const port of ['wdaLocalPort', 'mjpegLocalPort'] as const) {
+        if (body[port] !== undefined && !validPort(body[port])) return `${port} must be a port between 1 and 65535`;
+    }
+    const android = body.android;
+    if (android !== undefined && android !== null) {
+        if (typeof android !== 'object') return 'android must be an object with a serial';
+        if (typeof android.serial !== 'string' || !DEVICE_ID_PATTERN.test(android.serial)) {
+            return 'android.serial must be an adb serial: letters, digits, dot, colon, dash or underscore';
+        }
+        if (android.bridgeUrl !== undefined && !validBridgeUrl(android.bridgeUrl)) {
+            return 'android.bridgeUrl must be an http(s) URL';
+        }
+        if (android.bridgeToken !== undefined && typeof android.bridgeToken !== 'string') {
+            return 'android.bridgeToken must be a string';
+        }
+    }
+    return null;
+}
+
+function positiveBytes(name: string, fallback: number): number {
+    const parsed = Number(process.env[name]);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+/**
+ * Non-multipart bodies. 8 MB covers the largest thing the JSON API legitimately
+ * carries (an MCP `upload_asset` with inline base64), where 50 MB meant any
+ * caller could make the process buffer 50 MB per in-flight request.
+ */
+function jsonBodyLimit(): number {
+    return positiveBytes('PHONE_FARM_BODY_LIMIT', 8 * 1024 * 1024);
+}
+
+/** Media uploads stream to disk, so this bounds one file rather than memory. */
+function uploadFileSizeLimit(): number {
+    return positiveBytes('PHONE_FARM_UPLOAD_LIMIT', 2 * 1024 * 1024 * 1024);
+}
+
 function csrfBlocked(reply: FastifyReply): FastifyReply {
     return reply.code(403).send({
         error: 'Cross-origin write blocked. Send an Authorization: Bearer token for API clients, '
@@ -148,6 +218,40 @@ function platformBadges(device: Pick<RegisteredDevice, 'platform' | 'driver' | '
 /** The Android remote verbs the dashboard can send; the rest are iOS/WDA-only. */
 type AndroidRemoteAction = RemoteAction | { type: 'back' } | { type: 'text'; text: string };
 
+const REMOTE_VERBS = ['tap', 'home', 'lock', 'wake', 'unlock', 'volumeUp', 'volumeDown', 'swipe', 'back', 'text'];
+
+/** Coordinates and durations reach `adb input` and WDA as numbers; NaN there taps nothing, slowly. */
+function finiteNumber(value: unknown): boolean {
+    return typeof value === 'number' && Number.isFinite(value);
+}
+
+export const MAX_REMOTE_TEXT_LENGTH = 4_096;
+
+/**
+ * The body of `/remote/action` was cast straight to a `RemoteAction`, so a tap
+ * with `x: "1e999"` or a 5 MB `text` reached the device driver as-is. Validate
+ * the union here instead: it is the only door these actions come through.
+ */
+function remoteActionProblem(body: unknown): string | null {
+    if (typeof body !== 'object' || body === null) return 'A remote action object is required';
+    const action = body as Record<string, unknown>;
+    if (typeof action.type !== 'string' || !REMOTE_VERBS.includes(action.type)) {
+        return `type must be one of ${REMOTE_VERBS.join(', ')}`;
+    }
+    if (action.type === 'tap' && !(finiteNumber(action.x) && finiteNumber(action.y))) {
+        return 'tap needs finite x and y';
+    }
+    if (action.type === 'swipe'
+        && !['startX', 'startY', 'endX', 'endY', 'durationMs'].every((key) => finiteNumber(action[key]))) {
+        return 'swipe needs finite startX, startY, endX, endY and durationMs';
+    }
+    if (action.type === 'text'
+        && !(typeof action.text === 'string' && action.text.length <= MAX_REMOTE_TEXT_LENGTH)) {
+        return `text must be a string of at most ${MAX_REMOTE_TEXT_LENGTH} characters`;
+    }
+    return null;
+}
+
 async function performAndroidAction(driver: DeviceDriver, action: AndroidRemoteAction): Promise<void> {
     switch (action.type) {
         case 'tap': return driver.tap({ x: action.x, y: action.y });
@@ -163,10 +267,18 @@ async function performAndroidAction(driver: DeviceDriver, action: AndroidRemoteA
 }
 
 export async function createApp(options: CreateAppOptions): Promise<FastifyInstance> {
-    const app = Fastify({ logger: options.logger ?? false, bodyLimit: 50 * 1024 * 1024 });
+    const app = Fastify({ logger: options.logger ?? false, bodyLimit: jsonBodyLimit() });
     await app.register(formbody);
     await app.register(cookie);
-    await app.register(multipart, { limits: { fileSize: 2 * 1024 * 1024 * 1024, files: 20 } });
+    // fileSize is the one limit a 4K screen recording needs room under; the
+    // rest are there so a malformed (or hostile) multipart body cannot make the
+    // parser hold an unbounded number of parts or an unbounded field in memory.
+    await app.register(multipart, {
+        limits: {
+            fileSize: uploadFileSizeLimit(), files: 20, parts: 60, fields: 40,
+            fieldSize: 1024 * 1024, fieldNameSize: 200, headerPairs: 200,
+        },
+    });
 
     // Server-rendered HTML must never be cached — a stale page + fresh assets
     // (or vice versa) breaks the dashboard after a deploy.
@@ -348,6 +460,13 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         '/api/devices', async (request, reply) => {
             const { name, udid, wdaLocalPort, mjpegLocalPort, passcode, coordinateProfile, pluginData, platform, driver, android } = request.body;
             if (!udid) return reply.code(400).send({ error: 'A device UDID is required' });
+            if (typeof udid !== 'string' || !DEVICE_ID_PATTERN.test(udid)) {
+                return reply.code(400).send({
+                    error: 'udid must be a device id: letters, digits, dot, colon, dash or underscore',
+                });
+            }
+            const problem = deviceBodyProblem(request.body);
+            if (problem) return reply.code(400).send({ error: problem });
             if (passcode !== undefined && !PASSCODE_PATTERN.test(passcode)) {
                 return reply.code(400).send({ error: 'Device passcode must contain at least four digits' });
             }
@@ -357,7 +476,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
             if (driver !== undefined && driver !== 'wda' && driver !== 'adb' && driver !== 'a11y-bridge') {
                 return reply.code(400).send({ error: 'driver must be "wda", "adb" or "a11y-bridge"' });
             }
-            if (android !== undefined && (typeof android !== 'object' || android === null || typeof android.serial !== 'string')) {
+            if (android !== undefined && (typeof android !== 'object' || android === null)) {
                 return reply.code(400).send({ error: 'android must be an object with a serial' });
             }
             // Narrowed here, outside the closure below, so the whitelist keeps its types.
@@ -388,6 +507,8 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     app.patch<{ Params: { udid: string }; Body: { name?: string; wdaLocalPort?: number; mjpegLocalPort?: number; passcode?: string; coordinates?: unknown; disabled?: boolean; coordinateProfile?: string; pluginData?: Record<string, JsonObject>; tags?: unknown } }>(
         '/api/devices/:udid', async (request, reply) => {
             const { passcode, coordinates, name, wdaLocalPort, mjpegLocalPort, disabled, coordinateProfile, pluginData, tags } = request.body;
+            const problem = deviceBodyProblem(request.body);
+            if (problem) return reply.code(400).send({ error: problem });
             if (passcode !== undefined && passcode !== '' && !PASSCODE_PATTERN.test(passcode)) {
                 return reply.code(400).send({ error: 'Device passcode must contain at least four digits' });
             }
@@ -509,6 +630,8 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
             .send(Readable.from(upstream.body as AsyncIterable<Uint8Array>));
     });
     app.post<{ Params: { udid: string }; Body: AndroidRemoteAction }>('/api/devices/:udid/remote/action', async (request, reply) => {
+        const problem = remoteActionProblem(request.body);
+        if (problem) return reply.code(400).send({ error: problem });
         if (await options.scheduler.activeExecution(request.params.udid)) {
             return reply.code(409).send({ error: 'Remote input is disabled while automation is running' });
         }
@@ -666,7 +789,11 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         return reply.code(201).send(await options.scheduler.registerAssets(created));
     });
     app.delete<{ Body: { assetIds: string[] } }>('/api/assets', async (request, reply) => {
-        await options.scheduler.deleteAssets(request.body.assetIds ?? []);
+        const assetIds = request.body?.assetIds ?? [];
+        if (!Array.isArray(assetIds) || assetIds.some((id) => typeof id !== 'string')) {
+            return reply.code(400).send({ error: 'assetIds must be an array of asset ids' });
+        }
+        await options.scheduler.deleteAssets(assetIds);
         return reply.code(204).send();
     });
 
