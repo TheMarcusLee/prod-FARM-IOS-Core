@@ -77,6 +77,15 @@ export interface FleetSnapshot {
     shuttingDown: boolean;
 }
 
+/**
+ * Something the operator has to be told once, before the fleet is even up: shown
+ * in the Starting window, which is the first thing a launch puts on screen.
+ */
+export interface StartupNotice {
+    title: string;
+    message: string;
+}
+
 export type PreflightResult =
     | { ok: true }
     | { ok: false; reason: string; help?: string };

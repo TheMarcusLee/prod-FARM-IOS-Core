@@ -20,6 +20,7 @@ const api = {
     openServices: () => ipcRenderer.invoke('app:open-services'),
     openSettings: () => ipcRenderer.invoke('app:open-settings'),
     openDataFolder: () => ipcRenderer.invoke('app:open-data-folder'),
+    getStartupNotice: () => ipcRenderer.invoke('app:startup-notice'),
     exportDiagnostics: () => ipcRenderer.invoke('app:export-diagnostics'),
     copyMcpConfig: () => ipcRenderer.invoke('app:copy-mcp-config'),
     copyDashboardUrl: () => ipcRenderer.invoke('app:copy-dashboard-url'),

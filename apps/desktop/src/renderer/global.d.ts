@@ -1,4 +1,4 @@
-import type { FleetSnapshot, JobSnapshot, LogLine, ServiceSnapshot } from '../main/types.ts';
+import type { FleetSnapshot, JobSnapshot, LogLine, ServiceSnapshot, StartupNotice } from '../main/types.ts';
 import type { Settings } from '../main/settings.ts';
 
 export interface FarmBridge {
@@ -15,6 +15,8 @@ export interface FarmBridge {
     openServices(): Promise<void>;
     openSettings(): Promise<void>;
     openDataFolder(): Promise<void>;
+    /** A one-time notice from the launch itself, or null. */
+    getStartupNotice(): Promise<StartupNotice | null>;
     exportDiagnostics(): Promise<{ ok: boolean; message: string }>;
     copyMcpConfig(): Promise<{ ok: boolean; message: string }>;
     copyDashboardUrl(): Promise<{ ok: boolean; message: string }>;
@@ -32,4 +34,4 @@ declare global {
     interface Window { farm: FarmBridge }
 }
 
-export type { FleetSnapshot, JobSnapshot, LogLine, ServiceSnapshot, Settings };
+export type { FleetSnapshot, JobSnapshot, LogLine, ServiceSnapshot, Settings, StartupNotice };

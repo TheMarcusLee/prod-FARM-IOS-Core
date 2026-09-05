@@ -2,6 +2,7 @@ import { app, clipboard, dialog, ipcMain, Menu, shell } from 'electron';
 import path from 'node:path';
 
 import { createFleet, type Fleet } from './fleet.ts';
+import { LEGACY_DATA_DIR_NAME, migrateLegacyDataDirectory } from './data-migration.ts';
 import { buildDiagnostics, secretScrubber, secretsOf, writeDiagnosticsZip } from './diagnostics.ts';
 import { resetEmbeddedPostgres } from './embedded-postgres.ts';
 import { JobRunner } from './jobs.ts';
@@ -15,7 +16,7 @@ import { WDA_PREPARE_JOB_ID, wdaPrepareJob, type WdaPrepareTarget } from './serv
 import { SettingsStore, type Settings } from './settings.ts';
 import { runSmoke } from './smoke.ts';
 import { FleetTray } from './tray.ts';
-import type { FleetSnapshot } from './types.ts';
+import type { FleetSnapshot, StartupNotice } from './types.ts';
 import { WindowManager } from './windows.ts';
 
 const smokeMode = process.argv.includes('--smoke');
@@ -45,6 +46,8 @@ let windows: WindowManager | null = null;
 let tray: FleetTray | null = null;
 let quitting = false;
 let dashboardUrl: string | null = null;
+/** Set only when the data directory could not be migrated; the Starting window asks for it. */
+let startupNotice: StartupNotice | null = null;
 
 function currentSnapshot(): FleetSnapshot {
     return fleet.supervisor.snapshot(dashboardUrl, jobs.list());
@@ -109,6 +112,7 @@ function registerIpc(): void {
     ipcMain.handle('app:open-services', () => { windows?.showServices(); });
     ipcMain.handle('app:open-settings', () => { windows?.showSettings(); });
     ipcMain.handle('app:open-data-folder', () => shell.openPath(paths.userData));
+    ipcMain.handle('app:startup-notice', () => startupNotice);
     ipcMain.handle('app:export-diagnostics', () => exportDiagnostics());
     ipcMain.handle('app:copy-mcp-config', () => copyMcpConfig());
     ipcMain.handle('app:copy-dashboard-url', () => {
@@ -363,7 +367,16 @@ function applyLoginItem(openAtLogin: boolean): void {
 
 async function bootstrap(): Promise<void> {
     const repoRoot = resolveRepoRoot(app.getAppPath(), process.resourcesPath, app.isPackaged);
-    paths = appPaths(repoRoot, app.getPath('userData'));
+
+    // Before the data directory is used for anything: an install from before
+    // `app.setName('Backline')` keeps everything the operator has next door under
+    // the old name, and would otherwise be invisible to this launch.
+    const userData = app.getPath('userData');
+    const migration = migrateLegacyDataDirectory(path.join(path.dirname(userData), LEGACY_DATA_DIR_NAME), userData);
+    console.log(`Data directory: ${migration.reason}`);
+    startupNotice = migration.notice;
+
+    paths = appPaths(repoRoot, userData);
     settingsStore = new SettingsStore(paths.userData);
 
     // Before a single child is spawned: a crash or a force-quit of the previous run
