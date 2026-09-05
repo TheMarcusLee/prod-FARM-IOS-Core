@@ -102,6 +102,13 @@ export class HttpTransport {
         return error.retryAfterMs ?? Math.min(5_000, 300 * 3 ** attempt);
     }
 
+    /**
+     * A retry the operator would notice as a hang is not a retry, it is a
+     * freeze. Past this the failure goes to the screen instead, where the
+     * rate-limit banner counts the same `Retry-After` down in the open.
+     */
+    private static readonly SILENT_RETRY_CEILING_MS = 2_000;
+
     /** Retried only for a GET, and only for a transient failure. */
     private async attempt(path: string, options: RequestOptions, run: (response: Response) => Promise<Response>): Promise<Response> {
         const method = options.method ?? 'GET';
@@ -114,7 +121,9 @@ export class HttpTransport {
                 const failure = error instanceof FarmError ? error : null;
                 // An abort from the caller is the caller's decision, not a fault.
                 if (!failure?.retryable || attempt >= budget || options.signal?.aborted) throw error;
-                await sleep(this.retryDelay(attempt, failure));
+                const delay = this.retryDelay(attempt, failure);
+                if (delay > HttpTransport.SILENT_RETRY_CEILING_MS) throw error;
+                await sleep(delay);
             }
         }
     }

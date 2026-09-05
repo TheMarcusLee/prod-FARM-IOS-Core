@@ -240,7 +240,23 @@ describe('retry policy', () => {
         expect(attempts).toBe(1);
     });
 
-    it('waits exactly as long as a 429 told it to', async () => {
+    it('surfaces a long rate limit instead of freezing behind it', async () => {
+        let attempts = 0;
+        const transport = new HttpTransport({
+            baseUrl: 'http://farm:3000',
+            token: 't',
+            sleep: async () => {},
+            fetch: async () => {
+                attempts += 1;
+                return new Response('{}', { status: 429, headers: { 'retry-after': '30' } });
+            },
+        });
+        // 30 s of silence reads as a hang; the screen counts it down instead.
+        await expect(transport.request('/api/devices')).rejects.toMatchObject({ kind: 'rate-limited' });
+        expect(attempts).toBe(1);
+    });
+
+    it('waits exactly as long as a short 429 told it to', async () => {
         const { slept, sleep } = seam();
         let attempts = 0;
         const transport = new HttpTransport({

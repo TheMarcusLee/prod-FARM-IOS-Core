@@ -145,6 +145,7 @@ export function QueueScreen() {
 
             {segment === 'schedules' ? (
                 <FlatList
+                    testID="queue-schedules-list"
                     data={schedules}
                     keyExtractor={(row) => row.id}
                     contentContainerStyle={{ padding: spacing.lg, gap: spacing.sm, paddingBottom: spacing.xxl }}
@@ -162,6 +163,7 @@ export function QueueScreen() {
                 />
             ) : (
                 <FlatList
+                    testID="queue-executions-list"
                     data={executions}
                     keyExtractor={(row) => row.id}
                     contentContainerStyle={{ padding: spacing.lg, gap: spacing.sm, paddingBottom: spacing.xxl }}
