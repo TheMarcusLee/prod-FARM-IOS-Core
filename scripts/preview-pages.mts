@@ -125,7 +125,7 @@ const sets = [
     { id: 'set-2', name: 'Slideshows', notes: null, createdAt: now, itemCount: 3 },
 ];
 const templates = [
-    { id: 'tpl-1', name: 'Hook', template: '{title} {random:🔥|✨} {hashtags}', createdAt: now },
+    { id: 'tpl-1', name: 'Hook', template: '{title} {random:new drop|back at it} {hashtags}', createdAt: now },
     { id: 'tpl-2', name: 'Plain', template: '{title}', createdAt: now },
 ];
 

@@ -65,7 +65,7 @@ The row ends at `ready`, or at `failed` with the FFmpeg message in `error`.
 Deliberately tiny, and fully covered by tests:
 
 ```
-{title} {random:🔥|✨|💪} {hashtags}
+{title} {random:new drop|back at it|day two} {hashtags}
 ```
 
 `{title}`, `{hashtags}`, `{account}` and `{date}` substitute; `{random:a|b|c}`

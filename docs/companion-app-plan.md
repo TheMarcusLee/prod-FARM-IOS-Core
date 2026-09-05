@@ -284,7 +284,7 @@ sheet without leaving the grid.
 │ [ Doomscroll now ] [ Reconnect ]     │
 │ [ Disable device ]                   │
 ├──────────────────────────────────────┤
-│ Remote control      [ locked  🔒 ]   │   toggle → biometric prompt
+│ Remote control      [ locked ]       │   toggle → biometric prompt
 └──────────────────────────────────────┘
 ```
 

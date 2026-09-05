@@ -60,6 +60,9 @@
 .bl-tl-lane {
     background-image: repeating-linear-gradient(90deg, var(--bl-hairline) 0 1px, transparent 1px var(--bl-tl-step, 12.5%));
     border-bottom: 1px solid var(--bl-hairline);
+    /* A clip at the very end of the window is held to its pixel minimum and would
+       otherwise hang past the panel's edge. */
+    overflow: hidden;
 }
 .bl-tl-track-name { border-bottom-color: var(--bl-hairline); gap: 8px; }
 .bl-tl-slot { color: var(--bl-text-4); font-weight: 600; font-size: 11.5px; }
@@ -68,7 +71,9 @@
 .bl-tl-empty { padding: 14px; color: var(--bl-text-3); font-size: 12.5px; }
 .bl-tl-overlay { position: absolute; left: var(--bl-gutter); right: 0; top: var(--bl-ruler); bottom: 0; pointer-events: none; }
 .bl-tl-overlay .bl-playhead { position: absolute; top: calc(var(--bl-ruler) * -1); bottom: 0; }
-.bl-tl-overlay .bl-playhead-label { top: 4px; }
+/* The label sits in the ruler band and can land on an hour mark; its own
+   background keeps both readable. */
+.bl-tl-overlay .bl-playhead-label { top: 4px; padding: 0 4px; background: var(--bl-panel); border-radius: 4px; }
 .bl-seg a, .bl-seg button { white-space: nowrap; }
 
 /* Short work still has to be readable and clickable, so a clip has a floor in pixels

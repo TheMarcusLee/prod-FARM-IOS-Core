@@ -129,7 +129,8 @@ export async function registerScheduleRoutes(app: FastifyInstance, options: Sche
             });
             if (definition) return definition.summarize(execution.payload);
         } catch { /* plugin uninstalled, or no registry at all */ }
-        return execution.taskType;
+        // The bare task type opens a sentence in the popover, so it is written like one.
+        return execution.taskType.charAt(0).toUpperCase() + execution.taskType.slice(1);
     };
 
     const planViews = async (from: Date, to: Date): Promise<{ plans: PlanView[]; planner: PlannerStatus | null }> => {
