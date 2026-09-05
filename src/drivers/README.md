@@ -28,7 +28,8 @@ Add to `devices.json` (the `udid` is the adb serial):
 }
 ```
 
-Switch the same phone to the bridge by changing one field and adding the bridge details:
+Switch the same phone to the bridge by changing one field and adding the bridge details (the APK
+listens on 8080; see the bootstrap section below for where the address and the token come from):
 
 ```json
 {
@@ -38,7 +39,7 @@ Switch the same phone to the bridge by changing one field and adding the bridge 
   "driver": "a11y-bridge",
   "android": {
     "serial": "R58N12ABCDE",
-    "bridgeUrl": "http://127.0.0.1:18300",
+    "bridgeUrl": "http://192.168.1.42:8080",
     "bridgeToken": "<from adb shell content query --uri content://com.linecorp.simuse.devicebridge/auth_token>"
   },
   "pluginData": {}
@@ -80,13 +81,42 @@ icon and never push media. `POST /api/devices` accepts the field; the dashboard 
 
 ## Bootstrapping the bridge on a phone (once, over USB)
 
-1. Build the APK: `cd <sim-use>/bridge && ./gradlew :app:assembleRelease`.
-2. `adb -s <serial> install app/build/outputs/apk/release/app-release.apk`
-3. Enable the accessibility service on the phone (Settings → Accessibility → sim-use bridge).
-4. Read the token: `adb -s <serial> shell content query --uri content://com.linecorp.simuse.devicebridge/auth_token`
-5. Forward the port: `adb -s <serial> forward tcp:18300 tcp:8080` (the APK listens on 8080) — or,
-   with our Wi-Fi fork of the APK, use `http://<phone-ip>:8080` as `bridgeUrl` and skip the forward.
-   The token query prints `Row: 0 result={"status":"success","result":"<uuid>"}`; the uuid is the token.
+**The running order lives in [docs/device-testing-checklist.md](../../docs/device-testing-checklist.md),
+part 2** — build flags, the Restricted Settings trap that silently swallows the
+accessibility grant, and what a healthy `/ping` looks like. Do not follow a
+summary here instead; that is how this section went stale.
+
+The facts a caller of this directory needs:
+
+- The APK listens on **8080** on the phone. That is `SERVER_PORT` in the bridge
+  and is not configurable — `18300` is only ever a *host-side* forwarded port.
+- Build the fork with `./gradlew :app:assembleDebug` (`app-debug.apk`). Our
+  Wi-Fi fork is debug-signed; there is no release build to install.
+- Wi-Fi mode is a ContentProvider call, not a build flag:
+  ```sh
+  adb -s "$SERIAL" shell content call \
+    --uri content://com.linecorp.simuse.devicebridge --method set_bind_all --arg true
+  ```
+- `--method status` prints the LAN address to put in `bridgeUrl`:
+  ```sh
+  adb -s "$SERIAL" shell content call \
+    --uri content://com.linecorp.simuse.devicebridge --method status
+  # → {"bind_all":true,"bound_all":true,"server_running":true,
+  #    "accessibility_service_connected":true,"port":8080,"lan_ipv4":"192.168.1.42"}
+  ```
+- The token comes from the same provider:
+  ```sh
+  adb -s "$SERIAL" shell content query \
+    --uri content://com.linecorp.simuse.devicebridge/auth_token
+  # → Row: 0 result={"status":"success","result":"<uuid>"}
+  ```
+
+So `bridgeUrl` is `http://<lan_ipv4>:8080` on the Wi-Fi fork, with no `adb
+forward` at all. Only an upstream (loopback-bound) build needs
+`adb -s "$SERIAL" forward tcp:18300 tcp:8080` and `http://127.0.0.1:18300`.
+
+Anyone who can reach `<ip>:8080` and holds the token has accessibility-level
+control of that phone, so keep the phones on a network you trust.
 
 ## What `adb` cannot do
 
@@ -131,10 +161,14 @@ await waitForText(driver, { text: 'Posted' }, { timeoutMs: 60_000, signal });
   phone on Wi-Fi with nothing attached still shows as connected.
 - `scheduler/executor.ts` builds the driver with `driverForDevice` and hands it to plugins as
   `context.driver`; the older `context.automation` is served by the same driver. Readiness before
-  a run follows the driver: WDA plus Appium on iOS, adb visibility for `adb`, the ping for the bridge.
+  a run follows the driver: WDA plus Appium on iOS, adb visibility for `adb`, and for `a11y-bridge`
+  the ping **plus** adb visibility unless `android.bridgeOnly` is set — see above.
 - Plugin child processes receive `DEVICE_UDID`, `DEVICE_PLATFORM` and `DEVICE_DRIVER` on every
   platform; `IOS_UDID`, `WDA_URL` and `IOS_PASSCODE` on iOS; `ANDROID_SERIAL` (which adb honours
-  natively) plus `A11Y_BRIDGE_URL` / `A11Y_BRIDGE_TOKEN` on Android.
+  natively) plus `A11Y_BRIDGE_URL` / `A11Y_BRIDGE_TOKEN` on Android. Everything such a process
+  prints is appended to the stored run log, so the executor runs each line through a redactor
+  seeded with that device's token and passcode first — a routine that echoes its environment
+  cannot put a live credential in the database.
 - `POST /api/devices` accepts `platform`, `driver` and `android` so an Android phone can be
   registered without the iOS registration wizard.
 - The registration wizard (`devices/registration.ts`) runs an Android check set — adb on PATH, the

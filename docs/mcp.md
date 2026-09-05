@@ -74,10 +74,53 @@ claude mcp add --transport http phone-farm http://127.0.0.1:3000/mcp \
   --header "Authorization: Bearer pf_…"
 ```
 
-A missing or unknown token gets `401` with `WWW-Authenticate: Bearer`. Sessions
-are per-client: the first `initialize` allocates one, the `Mcp-Session-Id`
-response header names it, and `DELETE /mcp` tears it down. Revoke a token and
-its next request fails; see `docs/auth.md`.
+A missing or unknown token gets `401` with `WWW-Authenticate: Bearer`. Revoke a
+token and its next request fails; see `docs/auth.md`.
+
+### The Origin check
+
+An MCP client is an agent, not a page, and agents send no `Origin` header at
+all. A browser always sends one — so an `Origin` that is *present and untrusted*
+is the DNS-rebinding case (a name that resolves to `127.0.0.1`, pointed at a
+farm on the operator's own machine), and it is refused with `403` before the
+token is even read.
+
+| `Origin` | Result |
+|---|---|
+| absent | served — this is what every real MCP client looks like |
+| in `PUBLIC_ORIGIN` / `PHONE_FARM_TRUSTED_ORIGINS` | served |
+| anything else | `403 Cross-origin MCP requests are not accepted` |
+
+The allow-list is the same pair of variables the dashboard's CSRF guard reads,
+compared after trimming trailing slashes. With neither set, *any* `Origin` is
+untrusted, which is the right default for an endpoint no browser should reach.
+
+### Sessions are bound to the token that opened them
+
+The first `initialize` allocates a session; the `Mcp-Session-Id` response header
+names it, and `DELETE /mcp` tears it down. Each session records the id of the
+token that opened it, and a request presenting a different token gets `404 No
+such MCP session` — not a `403`, because it should not learn that the session
+exists. So revoking one phone's token cannot leave it talking through a session
+the desktop app opened.
+
+| | |
+|---|---|
+| Idle expiry | 30 minutes with no traffic (`SESSION_IDLE_MS`), swept on every `initialize` and on a timer |
+| Cap | 64 open sessions (`MAX_SESSIONS`); past that, `initialize` answers `503 Too many open MCP sessions` |
+| On shutdown | every transport is closed by the `onClose` hook |
+
+The cap exists because a session that is never closed cleanly — an agent that is
+killed, a tunnel that drops — otherwise keeps its transport and the MCP server
+behind it alive for the life of the process, and a loop of `initialize` calls
+would be an easy way to exhaust memory. Both numbers are constants in
+`src/api/routes/mcp.ts`, not environment variables.
+
+### Rate limit
+
+`/mcp` has its own bucket — 600 requests a minute per token, `RATE_LIMIT_MCP` —
+so an agent's tool loop is bounded without being throttled. See the table in
+`docs/auth.md`.
 
 ## Tools
 
@@ -113,6 +156,24 @@ its next request fails; see `docs/auth.md`.
 Resource `farm://status` returns a JSON fleet summary (device, schedule, and
 execution counts plus loaded plugins). Prompt `plan_posting_day` returns the
 guidance an agent should follow before booking a day of activity.
+
+Device shapes never carry a credential: `list_devices` and `get_device` build
+their own projection, and the device registry strips the unlock passcode and
+`android.bridgeToken` from anything it serialises anyway.
+
+## Screenshots are downscaled
+
+`screenshot` does not return the phone's frame at native resolution. A modern
+phone screen is roughly 1200×2600, which costs most of a context window as
+base64 image content and can exceed a transport's message limit outright — so
+the image is resized to at most **800 px wide** (`MCP_SCREENSHOT_MAX_WIDTH` in
+`src/mcp/server.ts`), aspect preserved and never upscaled, and re-encoded as
+PNG. A screen that is already narrower comes back untouched, and an image sharp
+cannot decode is returned as-is rather than failing the tool call.
+
+That is enough for a model to read UI text and locate controls. It is not enough
+for pixel work: the dashboard's own `GET /api/devices/:udid/remote/screenshot`
+serves the full frame (with its own `?width=` for thumbnails).
 
 ## Publishing is not gated
 
