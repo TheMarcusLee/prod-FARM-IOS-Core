@@ -49,6 +49,7 @@ export class FramePump {
     timer;
     running = false;
     stopped = true;
+    objectUrl;
     constructor(image, udid, platform, 
     /** Fraction of a period this pump waits before its first frame, 0…1. */
     offset = 0) {
@@ -98,25 +99,35 @@ export class FramePump {
         const css = this.image.clientWidth || this.image.parentElement?.clientWidth || 200;
         return Math.max(80, Math.min(1200, Math.round(css * (window.devicePixelRatio || 1))));
     }
+    /**
+     * Fetched as a blob and swapped in once it has decoded. Assigning the URL to the visible
+     * `<img>` directly would blank the tile for as long as the request takes — twelve tiles
+     * flickering in turn is what that looks like on the wall.
+     */
     poll() {
         if (this.stopped || this.running)
             return;
         this.running = true;
-        const next = () => {
+        const again = (delay) => {
             this.running = false;
             if (this.stopped || this.fps === 0)
                 return;
-            this.timer = window.setTimeout(() => this.poll(), this.periodMs());
+            this.timer = window.setTimeout(() => this.poll(), delay);
         };
-        this.image.onload = next;
-        this.image.onerror = () => {
-            this.running = false;
-            if (this.stopped)
-                return;
-            this.timer = window.setTimeout(() => this.poll(), Math.max(2000, this.periodMs()));
-        };
-        this.image.src = `/api/devices/${encodeURIComponent(this.udid)}/remote/screenshot`
-            + `?width=${this.width()}&t=${Date.now()}`;
+        const url = `/api/devices/${encodeURIComponent(this.udid)}/remote/screenshot?width=${this.width()}`;
+        void fetch(`${url}&t=${Date.now()}`, { cache: 'no-store' })
+            .then(async (response) => {
+            if (!response.ok)
+                throw new Error(String(response.status));
+            const next = URL.createObjectURL(await response.blob());
+            const previous = this.objectUrl;
+            this.image.src = next;
+            this.objectUrl = next;
+            if (previous)
+                URL.revokeObjectURL(previous);
+            again(this.periodMs());
+        })
+            .catch(() => again(Math.max(2000, this.periodMs())));
     }
 }
 /** The phone's own coordinate space, so a click on a scaled image lands where the operator meant. */

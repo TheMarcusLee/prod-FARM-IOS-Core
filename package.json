@@ -41,6 +41,7 @@
     "token:create": "node --env-file-if-exists=.env --import tsx src/auth/cli.ts token-create",
     "token:revoke": "node --env-file-if-exists=.env --import tsx src/auth/cli.ts token-revoke",
     "build:web": "tsc -p tsconfig.web.json",
+    "preview:dashboard": "npm run build:web && node --import tsx scripts/preview-dashboard.mts",
     "preweb": "npm run build:web",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.web.json --noEmit",
     "test": "node --import tsx --test --test-force-exit --test-timeout=60000 test/*.test.ts",

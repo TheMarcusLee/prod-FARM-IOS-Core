@@ -258,3 +258,5 @@ dialog.bl-dialog .bl-dialog-head { display: flex; align-items: center; gap: 10px
 /* Several components set display, which would otherwise beat the hidden attribute the
    wizard and the wall's filters rely on. */
 [hidden] { display: none !important; }
+.bl-table .bl-row-actions { align-items: center; white-space: nowrap; }
+.bl-table td:last-child { width: 1%; }
