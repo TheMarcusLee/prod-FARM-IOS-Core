@@ -464,9 +464,8 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
         session.checks.developer = check('checking', 'Checking Developer Mode through an Xcode device build');
         session.checks.wda = check('checking', 'Preparing WebDriverAgent');
         const prepareScript = path.join(this.packageRoot, 'src/devices/wda/prepare.ts');
-        const result = await this.runCommand(session, process.execPath, [
-            '--env-file-if-exists=.env', '--env-file-if-exists=.env.devices', '--import', 'tsx', prepareScript,
-        ], {
+        // farmEntryArgs keeps this working in the packaged desktop app, where only compiled .js exists.
+        const result = await this.runCommand(session, process.execPath, farmEntryArgs(prepareScript, { envFiles: ['.env', '.env.devices'] }), {
             ...process.env,
             IOS_UDID: session.device.udid,
             WDA_LOCAL_PORT: String(session.wdaLocalPort),

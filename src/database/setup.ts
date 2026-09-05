@@ -1,3 +1,4 @@
+import { farmEntryArgs } from '../runtime/farm-entry.js';
 import { spawn } from 'node:child_process';
 
 import { createDatabaseConnection } from './client.js';
@@ -25,4 +26,4 @@ try {
 } finally {
     await connection.close();
 }
-await run(process.execPath, ['--env-file-if-exists=.env', '--import', 'tsx', 'src/database/migrate.ts']);
+await run(process.execPath, farmEntryArgs('src/database/migrate.ts', { envFiles: ['.env'] }));
