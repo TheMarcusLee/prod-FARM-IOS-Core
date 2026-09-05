@@ -9,6 +9,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 
 import { discoverConnectedDevices, devicePlatform, type Device } from '../devices/discovery.js';
+import { DEVICE_ID_MESSAGE, validDeviceId } from '../devices/identifiers.js';
 import { loadRegisteredDevices, mutateRegisteredDevices, saveRegisteredDevices, redactDevice, PASSCODE_PATTERN, type RegisteredDevice } from '../devices/registry.js';
 import { driverForDevice, driverKindOf, platformOf } from '../drivers/select.js';
 import type { AndroidDeviceConfig, DeviceDriver } from '../drivers/types.js';
@@ -99,15 +100,8 @@ function clientErrorMessage(error: unknown): string {
     return isDeliberate(error) ? errorMessage(error) : 'Internal server error';
 }
 
-/**
- * A device id is not just a map key: on Android it is handed to `adb -s <id>`
- * and on iOS it names a WDA session, so it reaches `execFile` argument vectors
- * from a request body. execFile never goes through a shell, but a value that
- * starts with `-` is still read by adb as a flag, and whitespace or a slash
- * turns an id into something the callers assume it never is. iOS UDIDs, adb
- * serials and `host:port` wireless serials all fit this shape.
- */
-export const DEVICE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+/** Defined in `devices/identifiers.ts`, so devices.json is held to the same shape. */
+export { DEVICE_ID_PATTERN } from '../devices/identifiers.js';
 
 export const MAX_DEVICE_NAME_LENGTH = 200;
 
@@ -137,9 +131,7 @@ function deviceBodyProblem(body: {
     const android = body.android;
     if (android !== undefined && android !== null) {
         if (typeof android !== 'object') return 'android must be an object with a serial';
-        if (typeof android.serial !== 'string' || !DEVICE_ID_PATTERN.test(android.serial)) {
-            return 'android.serial must be an adb serial: letters, digits, dot, colon, dash or underscore';
-        }
+        if (!validDeviceId(android.serial)) return `android.serial ${DEVICE_ID_MESSAGE}`;
         if (android.bridgeUrl !== undefined && !validBridgeUrl(android.bridgeUrl)) {
             return 'android.bridgeUrl must be an http(s) URL';
         }
@@ -481,11 +473,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         '/api/devices', async (request, reply) => {
             const { name, udid, wdaLocalPort, mjpegLocalPort, passcode, coordinateProfile, pluginData, platform, driver, android } = request.body;
             if (!udid) return reply.code(400).send({ error: 'A device UDID is required' });
-            if (typeof udid !== 'string' || !DEVICE_ID_PATTERN.test(udid)) {
-                return reply.code(400).send({
-                    error: 'udid must be a device id: letters, digits, dot, colon, dash or underscore',
-                });
-            }
+            if (!validDeviceId(udid)) return reply.code(400).send({ error: `udid ${DEVICE_ID_MESSAGE}` });
             const problem = deviceBodyProblem(request.body);
             if (problem) return reply.code(400).send({ error: problem });
             if (passcode !== undefined && !PASSCODE_PATTERN.test(passcode)) {

@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { coordinatesForProfile, validateCoordinateOverrides, type DeviceCoordinateOverrides, type DeviceProfileName } from './coordinates.js';
+import { DEVICE_ID_MESSAGE, validDeviceId } from './identifiers.js';
 import type { JsonObject } from '../types.js';
 import type { AndroidDeviceConfig, DriverKind, Platform } from '../drivers/types.js';
 
@@ -87,6 +88,13 @@ export async function loadRegisteredDevices(registryPath = defaultRegistryPath):
 export async function saveRegisteredDevices(devices: RegisteredDevice[], registryPath = defaultRegistryPath): Promise<void> {
     const unique = new Set<string>();
     for (const device of devices) {
+        // The same gate the API applies, because devices.json is also edited by hand and by
+        // scripts: `udid` and `android.serial` both reach `adb -s <value>`, where a leading dash
+        // is a flag rather than a device.
+        if (!validDeviceId(device.udid)) throw new Error(`Device udid ${JSON.stringify(device.udid)} ${DEVICE_ID_MESSAGE}`);
+        if (device.android !== undefined && !validDeviceId(device.android.serial)) {
+            throw new Error(`Device ${device.udid} android.serial ${JSON.stringify(device.android.serial)} ${DEVICE_ID_MESSAGE}`);
+        }
         coordinatesForProfile(device.coordinateProfile);
         if (device.passcode !== undefined && !PASSCODE_PATTERN.test(device.passcode)) {
             throw new Error(`Device ${device.udid} passcode must contain at least four digits`);

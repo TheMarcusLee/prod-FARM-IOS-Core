@@ -25,7 +25,7 @@ const { setPassword } = await import('../src/auth/state.js');
 const { resolveUploadPath } = await import('../src/mcp/uploads.js');
 const { originAllowed } = await import('../src/api/routes/mcp.js');
 const { shrinkScreenshot, createFarmMcpServer } = await import('../src/mcp/server.js');
-const { redactDevice } = await import('../src/devices/registry.js');
+const { redactDevice, saveRegisteredDevices, loadRegisteredDevices } = await import('../src/devices/registry.js');
 
 const seed = (devices: unknown[]) => writeFile(configPath, JSON.stringify(devices));
 const onDisk = async () => JSON.parse(await readFile(configPath, 'utf8')) as Array<Record<string, unknown>>;
@@ -127,6 +127,36 @@ test('android.bridgeOnly is whitelisted, typed, and only stored when true', asyn
     assert.equal(created.statusCode, 201);
     const [stored] = await onDisk();
     assert.deepEqual(stored!.android, { serial: 'S1', bridgeUrl: 'http://127.0.0.1:8080', bridgeOnly: true });
+});
+
+test('devices.json is held to the same id shape as the API, so a hand edit cannot reach adb -s', async () => {
+    const registryPath = path.join(await mkdtemp(path.join(os.tmpdir(), 'pf-registry-')), 'devices.json');
+    const device = (overrides: Record<string, unknown>) => ({ name: 'Phone', udid: 'R58N1', pluginData: {}, ...overrides });
+
+    for (const udid of ['-s', '--help', 'a b', 'a;rm -rf /', 'a/../b', '', '-e']) {
+        await assert.rejects(
+            saveRegisteredDevices([device({ udid })] as never, registryPath),
+            /must be a device id/,
+            JSON.stringify(udid),
+        );
+    }
+    for (const serial of ['-e', 'a b', '']) {
+        await assert.rejects(
+            saveRegisteredDevices([device({ android: { serial } })] as never, registryPath),
+            /android\.serial .* must be a device id/,
+            JSON.stringify(serial),
+        );
+    }
+
+    // Nothing was written by any of the refusals, and the shapes a real fleet uses still save.
+    await assert.rejects(readFile(registryPath, 'utf8'));
+    const good = [
+        device({ udid: '00008030-001A2B3C4D5E802E' }),
+        device({ udid: '192.168.1.40:5555', android: { serial: '192.168.1.40:5555' } }),
+    ];
+    await saveRegisteredDevices(good as never, registryPath);
+    assert.deepEqual((await loadRegisteredDevices(registryPath)).map(({ udid }) => udid),
+        ['00008030-001A2B3C4D5E802E', '192.168.1.40:5555']);
 });
 
 // ---- secret redaction ------------------------------------------------------
