@@ -227,7 +227,7 @@ export async function registerFleetRoutes(app: FastifyInstance, options: FleetRo
         }
         const probe: FarmEvent = {
             id: 0, kind: 'digest.daily', severity: 'info', deviceUdid: null, executionId: null, scheduleId: null,
-            title: 'Phone Farm notification test',
+            title: 'Backline notification test',
             detail: { test: true, sentAt: clock().toISOString() },
             createdAt: clock(),
         };

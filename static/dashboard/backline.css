@@ -247,3 +247,14 @@ dialog.bl-dialog .bl-dialog-head { display: flex; align-items: center; gap: 10px
 .bl-activity-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 12.5px; }
 .bl-device-summary { font-size: 12.5px; }
 .bl-viewer .bl-viewer-screen img, .bl-device-screen .bl-viewer-screen img { object-fit: contain; }
+.bl-page-wizard { max-width: 860px; }
+/* The wall scrolls inside the three columns rather than stretching the page,
+   so the filter panel's needs-you callout stays where the operator can see it. */
+.bl-content { min-height: 0; }
+.bl-cc { flex: none; height: calc(100vh - var(--bl-toolbar)); overflow: hidden; }
+.bl-seg button, .bl-seg a { white-space: nowrap; }
+.bl-cc-filters .bl-seg { padding: 2px; }
+.bl-cc-filters .bl-seg button { padding: 5px 6px; font-size: 12px; }
+/* Several components set display, which would otherwise beat the hidden attribute the
+   wizard and the wall's filters rely on. */
+[hidden] { display: none !important; }

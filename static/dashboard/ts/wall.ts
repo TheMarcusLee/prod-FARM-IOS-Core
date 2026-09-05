@@ -124,6 +124,8 @@ rateSlider?.addEventListener('input', () => { applyRate(); remember('tileRate', 
 
 function refreshPumps(): void {
     const hidden = document.hidden;
+    if (hidden) inspectorPump?.stop();
+    else inspectorPump?.start();
     for (const tile of tiles) {
         if (!tile.pump) continue;
         if (hidden || tile.element.hidden || !tile.visible) tile.pump.stop();

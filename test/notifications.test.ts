@@ -405,7 +405,7 @@ test('POST /api/notifications/test includes the ntfy channel', async (context) =
     assert.equal(response.statusCode, 200);
     assert.deepEqual(response.json().channels.map((result: { channel: string; ok: boolean }) => [result.channel, result.ok]),
         [['ntfy', true]]);
-    assert.equal(calls[0]!.headers.Title, 'Phone Farm notification test');
+    assert.equal(calls[0]!.headers.Title, 'Backline notification test');
     assert.equal(calls[0]!.headers.Tags, NTFY_TAGS['digest.daily']);
 });
 

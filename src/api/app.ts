@@ -60,6 +60,11 @@ export interface CreateAppOptions {
     registrations?: DeviceRegistrationManager;
     /** How an Android device record becomes a live driver; tests inject a fake. iOS never uses it. */
     createDriver?: (device: RegisteredDevice) => DeviceDriver;
+    /**
+     * Which registered phones the pages should treat as connected. Production reads USB, adb and
+     * the connection manager; a test or the preview script hands over a list.
+     */
+    connectedUdids?: () => Promise<string[]>;
     logger?: boolean;
 }
 
@@ -396,12 +401,17 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
             return await store.countAfter(await acknowledgedMark(app, request) ?? 0);
         } catch { return 0; }
     };
+    /** The one place the page renderers learn where the fleet's facts come from. */
+    const wallSources = () => ({
+        scheduler: options.scheduler, events,
+        ...(options.connectedUdids ? { connectedUdids: options.connectedUdids } : {}),
+    });
     const themeOf = (request: FastifyRequest): 'auto' | 'light' =>
         (request.cookies?.[THEME_COOKIE] === 'auto' ? 'auto' : 'light');
 
     /** Sidebar rig block, unread count, plugin nav and theme — the chrome every page carries. */
     const chrome = async (request: FastifyRequest, read?: FleetRead) => {
-        const fleet = read ?? await readFleet({ scheduler: options.scheduler, events });
+        const fleet = read ?? await readFleet(wallSources());
         const [statuses, unread] = await Promise.all([
             wdaServiceStatuses().catch(() => [] as Awaited<ReturnType<typeof wdaServiceStatuses>>),
             unreadAlerts(request),
@@ -443,17 +453,21 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         // Every compiled page script is served by one route, so a new page needs
         // a new .ts file and nothing else.
         const scripts = (await readdir(assetRoot)).filter((name) => name.endsWith('.js')).sort();
-        const [deviceHtml, tasksHtml, registerDeviceHtml, htmx, backlineStyles, ...scriptBodies] = await Promise.all([
+        const [deviceHtml, tasksHtml, registerDeviceHtml, htmx, backlineStyles, legacyStyles, ...scriptBodies] = await Promise.all([
             readFile(path.join(root, 'templates/device.html'), 'utf8'),
             readFile(path.join(root, 'templates/tasks.html'), 'utf8'),
             readFile(path.join(root, 'templates/register-device.html'), 'utf8'),
             readFile(require.resolve('htmx.org/dist/htmx.min.js'), 'utf8'),
             readFile(path.join(root, 'backline.css'), 'utf8'),
+            // The runbook plugin and the Content/Schedule templates still link the
+            // pre-Backline stylesheet; it is served until they no longer do.
+            readFile(path.join(root, 'styles.css'), 'utf8'),
             ...scripts.map((name) => readFile(path.join(assetRoot, name), 'utf8')),
         ]);
         const assets = new Map<string, DashboardAsset>([
             ['backline.css', { contentType: 'text/css', body: backlineStyles }],
             ['htmx.min.js', { contentType: 'text/javascript', body: htmx }],
+            ['styles.css', { contentType: 'text/css', body: legacyStyles }],
             ...scripts.map((name, index): [string, DashboardAsset] =>
                 [name, { contentType: 'text/javascript', body: scriptBodies[index] ?? '' }]),
         ]);
@@ -493,7 +507,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         } catch { /* plugin unavailable */ }
         const summary = definition
             ? definition.summarize(execution.payload)
-            : `${execution.pluginId}/${execution.taskType} is installed no longer`;
+            : `${execution.pluginId}/${execution.taskType} · this plugin is not installed`;
         const canStop = execution.status === 'queued'
             || (execution.status === 'running' && (definition?.supportsStop(execution.payload) ?? true));
         const stop = canStop
@@ -1066,13 +1080,13 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
     /** One phone in the wall's shape, for the inspector fragments. */
     async function wallDevice(udid: string): Promise<WallDevice | undefined> {
-        const read = await readFleet({ scheduler: options.scheduler, events });
+        const read = await readFleet(wallSources());
         return toWallDevices(read).find((device) => device.udid === udid);
     }
 
     app.get<{ Querystring: { device?: string } }>('/', async (request, reply) => {
         const data = await collectWall({
-            scheduler: options.scheduler, events,
+            ...wallSources(),
             ...(request.query.device ? { selectedUdid: request.query.device } : {}),
         });
         return reply.type('text/html').send(await shell(request, {
@@ -1085,7 +1099,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     });
 
     app.get('/devices', async (request, reply) => {
-        const read = await readFleet({ scheduler: options.scheduler, events });
+        const read = await readFleet(wallSources());
         return reply.type('text/html').send(await shell(request, {
             title: 'Devices', active: 'devices',
             body: renderDevicesPage(toWallDevices(read)),
@@ -1109,7 +1123,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
             return reply.code(404).type('text/html')
                 .send(renderPage('Device not found', '<div class="bl-empty"><span>No phone is registered under that identifier.</span><a class="bl-btn" href="/devices">All devices</a></div>'));
         }
-        const read = await readFleet({ scheduler: options.scheduler, events });
+        const read = await readFleet(wallSources());
         const wall = toWallDevices(read).find(({ udid }) => udid === device.udid);
         const number = wall ? slotNumber(wall.slot) : '';
         if (themed) {
@@ -1167,7 +1181,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     });
 
     app.get('/accounts', async (request, reply) => {
-        const read = await readFleet({ scheduler: options.scheduler, events });
+        const read = await readFleet(wallSources());
         const devices = toWallDevices(read);
         return reply.type('text/html').send(await shell(request, {
             title: 'Accounts', active: 'accounts',

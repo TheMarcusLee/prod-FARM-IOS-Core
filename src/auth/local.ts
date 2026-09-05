@@ -116,7 +116,7 @@ function loginPage(options: { message?: string; next: string; passwordSet: boole
       <button type="submit">Sign in</button>
     </form>` : '';
     return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign in · Phone Farm</title><style>
+<title>Sign in · Backline</title><style>
 :root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--bg:#080b10;--panel:#11161e;--border:#242c38;--text:#f5f7fa;--muted:#929cab;--accent:#ff365e}
 *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 50% -20%,#1a2330 0,var(--bg) 42%);color:var(--text)}
 .card{width:min(380px,100%);padding:28px;border:1px solid var(--border);border-radius:15px;background:var(--panel)}
@@ -125,7 +125,7 @@ h1{margin:0 0 6px;font-size:26px;letter-spacing:-.03em}p{margin:0 0 18px;color:v
 input{width:100%;min-height:42px;padding:0 12px;border:1px solid var(--border);border-radius:10px;background:#171d26;color:var(--text);font:inherit}
 button{width:100%;min-height:42px;margin-top:14px;border:0;border-radius:10px;background:var(--accent);color:var(--text);font:inherit;font-weight:750;cursor:pointer}
 button:hover{filter:brightness(1.08)}
-</style></head><body><main class="card"><h1>Phone Farm</h1><p>Sign in to reach the dashboard.</p>${notice}${form}</main></body></html>`;
+</style></head><body><main class="card"><h1>Backline</h1><p>Sign in to reach the dashboard.</p>${notice}${form}</main></body></html>`;
 }
 
 /**

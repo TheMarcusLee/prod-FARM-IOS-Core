@@ -1,82 +1,86 @@
-<!doctype html>
-<html lang="en">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Register device · Handler</title>
-    <link rel="stylesheet" href="/assets/styles.css">
-    <script type="module" src="/assets/register-device.js"></script>
-</head>
-<body>
-    <header class="topbar">
-        <div class="topbar-inner">
-            <div class="brand">
-                <a class="brand-name" href="/">iOS Farm</a>
-                <a class="brand-by" href="https://gethandler.ai" target="_blank" rel="noopener">by Handler</a>
-            </div>
-            <nav class="topbar-nav"><a class="button secondary" href="/">Back to devices</a>__PLUGIN_NAV____AUTH_NAV__</nav>
+<div class="bl-page bl-page-wizard">
+    <section class="bl-panel" id="candidate-panel">
+        <div class="bl-panel-head">Connect a phone<span class="bl-spacer"></span>
+            <button class="bl-btn bl-btn-sm" id="refresh-candidates" type="button">Check again</button></div>
+        <div class="bl-panel-body">
+            <p class="bl-muted"><strong>Android:</strong> turn on Developer options, then USB debugging, connect the
+                cable and tap Allow on the phone.</p>
+            <p class="bl-muted"><strong>iPhone:</strong> connect the cable, unlock, and accept Trust this computer. If
+                Developer Mode has never been enabled, pairing with Xcode makes the setting appear.</p>
+            <div id="candidate-list" class="bl-candidates" aria-live="polite">Looking for phones…</div>
         </div>
-    </header>
-    <main class="shell registration-shell">
-        <header class="page-header">
-            <div><span class="eyebrow">Guided setup</span><h1>Register a device</h1><p>iPhone or Android. Keep the phone connected and unlocked. Every requirement is rechecked before it is saved.</p></div>
-        </header>
+    </section>
 
-        <section class="registration-panel" id="candidate-panel">
-            <div class="section-heading"><div><span class="eyebrow">Step 1</span><h2>Connect an unregistered device</h2></div><button class="button secondary" id="refresh-candidates" type="button">Recheck</button></div>
-            <p><strong>iPhone:</strong> connect by USB, unlock, and accept <strong>Trust This Computer</strong>. If Developer Mode has never been enabled, pairing with Xcode makes the setting appear.</p>
-            <p><strong>Android:</strong> enable Developer options → USB debugging, connect by USB, and tap <strong>Allow</strong> on the &ldquo;Allow USB debugging?&rdquo; prompt.</p>
-            <div id="candidate-list" class="candidate-list" aria-live="polite">Checking connected devices…</div>
-        </section>
+    <section class="bl-panel" id="registration-panel" hidden>
+        <div class="bl-panel-head"><span id="registration-title">Phone</span><span class="bl-spacer"></span>
+            <span id="registration-busy" class="bl-state busy" hidden><span class="bl-dot busy"></span>checking</span></div>
+        <div class="bl-panel-body">
+            <div id="registration-error" class="bl-error" hidden></div>
 
-        <section class="registration-panel" id="registration-panel" hidden>
-            <div class="section-heading"><div><span class="eyebrow">Setup checklist</span><h2 id="registration-title">Device</h2></div><span id="registration-busy" class="status checking" hidden>checking</span></div>
-            <div id="registration-error" class="run-error" hidden></div>
-
-            <form id="registration-details" class="registration-form">
-                <label>Device name<input id="registration-name" name="name" required maxlength="100"></label>
-                <label id="registration-profile-field">Coordinate profile <span class="field-help">The detected model is recommended automatically; you may override it.</span><select id="registration-profile" name="coordinateProfile" required><option value="">Detecting model</option></select></label>
-                <label id="registration-driver-field" hidden>Android driver <span class="field-help">adb replays input over the cable or wireless debugging. The accessibility bridge runs an on-device app and needs nothing attached once it is set up.</span><select id="registration-driver" name="driver"><option value="adb">adb — adb shell input / screencap</option><option value="a11y-bridge">a11y-bridge — on-device accessibility service</option></select></label>
-                <label id="registration-bridge-field" hidden>Bridge URL <span class="field-help">Optional. Leave blank to use <code>adb forward</code> to 127.0.0.1; set it to <code>http://&lt;phone-ip&gt;:8080</code> with the Wi-Fi build of the APK.</span><input id="registration-bridge-url" name="bridgeUrl" placeholder="http://127.0.0.1:18300"></label>
-                <label class="wide">TikTok accounts <span class="field-help">Optional. Add comma-separated signed-in handles now, or manage them later from the device page.</span><input id="registration-accounts" name="accounts" placeholder="@account_one, @account_two"></label>
-                <label class="wide" id="registration-passcode-field">Unlock passcode <span class="field-help">Optional; stored only in the git-ignored owner-readable devices.json file, never returned by the API.</span><input id="registration-passcode" name="passcode" type="password" inputmode="numeric" autocomplete="off" pattern="[0-9]{4,}"></label>
-                <div class="wide inline-actions"><button class="button secondary" type="submit">Save details</button><span id="registration-ports" class="run-meta"></span></div>
+            <form id="registration-details" class="bl-form">
+                <label class="bl-field"><span>Name</span>
+                    <input id="registration-name" class="bl-input" name="name" required maxlength="100"></label>
+                <label class="bl-field" id="registration-profile-field"><span>Coordinate profile</span>
+                    <select id="registration-profile" class="bl-select" name="coordinateProfile" required>
+                        <option value="">Detecting the model</option></select>
+                    <span class="bl-hint">The detected model is chosen for you; change it if it is wrong.</span></label>
+                <div class="bl-field" id="registration-driver-field" hidden><span>Android driver</span>
+                    <div class="bl-seg" id="registration-driver-seg" role="group" aria-label="Android driver">
+                        <button type="button" data-driver="adb" aria-pressed="true">adb</button>
+                        <button type="button" data-driver="a11y-bridge" aria-pressed="false">Accessibility bridge</button>
+                    </div>
+                    <input id="registration-driver" name="driver" type="hidden" value="adb">
+                    <span class="bl-hint">adb replays input over the cable or wireless debugging. The accessibility
+                        bridge runs an app on the phone and needs nothing attached once it is set up.</span></div>
+                <label class="bl-field" id="registration-bridge-field" hidden><span>Bridge URL</span>
+                    <input id="registration-bridge-url" class="bl-input" name="bridgeUrl" placeholder="http://127.0.0.1:18300">
+                    <span class="bl-hint">Optional. Leave it blank to forward a local port over adb; set it to
+                        <code>http://&lt;phone-ip&gt;:8080</code> for the Wi-Fi build of the bridge.</span></label>
+                <label class="bl-field"><span>Accounts</span>
+                    <input id="registration-accounts" class="bl-input" name="accounts" placeholder="@account_one, @account_two">
+                    <span class="bl-hint">Optional. The handles already signed in on this phone.</span></label>
+                <label class="bl-field" id="registration-passcode-field"><span>Unlock passcode</span>
+                    <input id="registration-passcode" class="bl-input" name="passcode" type="password" inputmode="numeric" autocomplete="off" pattern="[0-9]{4,}">
+                    <span class="bl-hint">Optional. Kept in the owner-readable devices.json file and never returned by the API.</span></label>
+                <div class="bl-actions"><button class="bl-btn" type="submit">Save details</button>
+                    <span id="registration-ports" class="bl-muted"></span></div>
             </form>
 
-            <div id="registration-checks" class="registration-checks" aria-live="polite"></div>
+            <div id="registration-checks" class="bl-steps" aria-live="polite"></div>
 
-            <section class="registration-guidance" id="guidance-ios">
-                <h3>Manual steps when requested</h3>
+            <section class="bl-guidance" id="guidance-ios">
+                <h3>If a step asks for something</h3>
                 <ol>
-                    <li>Sign in at Xcode → Settings → Accounts and ensure the shared development team has an Apple Development certificate.</li>
-                    <li>Enable Settings → Privacy &amp; Security → Developer Mode, restart, then confirm Enable with the phone passcode.</li>
-                    <li>If iOS blocks WDA, trust its profile under Settings → General → VPN &amp; Device Management.</li>
-                    <li>Install TikTok from the App Store and sign in to every handle entered above.</li>
+                    <li>Sign in at Xcode, Settings, Accounts, and make sure the development team has an Apple Development certificate.</li>
+                    <li>Turn on Settings, Privacy and Security, Developer Mode, restart, then confirm with the phone's passcode.</li>
+                    <li>If iOS blocks WebDriverAgent, trust its profile under Settings, General, VPN and Device Management.</li>
+                    <li>Install TikTok and sign in to every handle entered above.</li>
                 </ol>
             </section>
 
-            <section class="registration-guidance" id="guidance-android" hidden>
-                <h3>Manual steps when requested</h3>
+            <section class="bl-guidance" id="guidance-android" hidden>
+                <h3>If a step asks for something</h3>
                 <ol>
-                    <li>Install Android platform-tools so <code>adb</code> is on the PATH of the process running this dashboard.</li>
-                    <li>On the phone: Settings &rarr; About phone &rarr; tap Build number seven times, then Developer options &rarr; USB debugging.</li>
-                    <li>Tap <strong>Allow</strong> on the &ldquo;Allow USB debugging?&rdquo; prompt and tick &ldquo;Always allow from this computer&rdquo;.</li>
-                    <li>For the accessibility bridge: install the bridge APK, enable it under Settings &rarr; Accessibility, then press <em>Set up the driver</em> here to read its token and forward the port.</li>
-                    <li>Install TikTok from Play and sign in to every handle entered above.</li>
+                    <li>Install Android platform-tools so <code>adb</code> is on the PATH of the process running Backline.</li>
+                    <li>On the phone: Settings, About phone, tap Build number seven times, then Developer options, USB debugging.</li>
+                    <li>Tap Allow on the "Allow USB debugging?" prompt and tick "Always allow from this computer".</li>
+                    <li>For the accessibility bridge: install the bridge APK, turn it on under Settings, Accessibility, then press Set up the driver here.</li>
+                    <li>Install TikTok and sign in to every handle entered above.</li>
                 </ol>
             </section>
 
-            <label class="authorization" id="authorization-field"><input id="authorize-registration" type="checkbox"> I am authorized to let Xcode register this UDID with the configured Apple Developer team.</label>
-            <div class="inline-actions registration-actions">
-                <button class="button secondary" id="action-refresh" type="button">Recheck state</button>
-                <button class="button primary" id="action-prepare" type="button">Register and prepare WDA</button>
-                <button class="button primary" id="action-verify" type="button">Verify Appium, video, touch, and accounts</button>
-                <button class="button primary" id="action-finalize" type="button" disabled>Finish registration</button>
-                <button class="button danger" id="action-cancel" type="button">Cancel</button>
+            <label class="bl-check" id="authorization-field"><input id="authorize-registration" type="checkbox">
+                <span>I am allowed to let Xcode register this UDID with the configured Apple Developer team.</span></label>
+
+            <div class="bl-actions">
+                <button class="bl-btn" id="action-refresh" type="button">Check again</button>
+                <button class="bl-btn" id="action-prepare" type="button">Register and prepare WDA</button>
+                <button class="bl-btn" id="action-verify" type="button">Verify Appium, video, touch and accounts</button>
+                <button class="bl-btn bl-btn-primary" id="action-finalize" type="button" disabled>Finish</button>
+                <span class="bl-spacer"></span>
+                <button class="bl-btn bl-btn-danger" id="action-cancel" type="button">Cancel</button>
             </div>
-            <details class="registration-log"><summary>Sanitized setup log</summary><pre id="registration-logs">No setup output yet.</pre></details>
-        </section>
-    </main>
-    <footer class="app-footer">__FOOTER__</footer>
-</body>
-</html>
+            <details><summary class="bl-muted">Setup log</summary><pre id="registration-logs" class="bl-log-block">No setup output yet.</pre></details>
+        </div>
+    </section>
+</div>

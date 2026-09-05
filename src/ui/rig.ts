@@ -67,7 +67,7 @@ export function rigServices(facts: RigFacts): RigService[] {
             docs: '/docs/getting-started',
         },
         {
-            name: 'Worker', state: facts.running > 0 ? 'running' : facts.database ? 'idle' : 'stopped',
+            name: 'Worker', state: !facts.database ? 'stopped' : facts.running > 0 ? 'running' : 'idle',
             detail: facts.database
                 ? `Runs scheduled tasks · ${plural(facts.running, 'running')}, ${plural(facts.queued, 'queued')}`
                 : 'Needs the database before it can pick up work',

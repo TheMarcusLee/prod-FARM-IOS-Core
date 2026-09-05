@@ -1,6 +1,6 @@
 import { remote, type Browser } from 'webdriverio';
 
-import { loadRegisteredDevices, resolveDeviceCoordinates, WdaRemoteControl } from '@git-agni/phone-farm-core';
+import { loadRegisteredDevices, resolveDeviceCoordinates, WdaRemoteControl } from '@git-agni/backline';
 import { coordinateProfile, registeredAccounts } from './runtime-settings.js';
 import { switchTikTokAccount, tapCoordinate } from './actions.js';
 import { detectEngagementControls } from './engagement-controls.js';
