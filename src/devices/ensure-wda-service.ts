@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { requestWdaService } from './wda-service-client.js';
+import { farmEntryArgs } from '../runtime/farm-entry.js';
 import { wdaServiceSocketPath } from './wda-service-protocol.js';
 
 function delay(milliseconds: number): Promise<void> {
@@ -42,11 +43,7 @@ export async function ensureWdaService(): Promise<void> {
         const logFd = openSync(logPath, 'a');
         const script = fileURLToPath(new URL('./wda-service.ts', import.meta.url));
         try {
-            const child = spawn(process.execPath, [
-                '--env-file-if-exists=.env',
-                '--import', 'tsx',
-                script,
-            ], {
+            const child = spawn(process.execPath, farmEntryArgs(script, { envFiles: ['.env'] }), {
                 cwd: process.cwd(),
                 detached: true,
                 env: process.env,

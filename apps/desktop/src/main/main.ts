@@ -2,8 +2,11 @@ import { app, dialog, ipcMain, Menu, shell } from 'electron';
 import path from 'node:path';
 
 import { createFleet, type Fleet } from './fleet.ts';
+import { buildDiagnostics, writeDiagnosticsZip } from './diagnostics.ts';
 import { resetEmbeddedPostgres } from './embedded-postgres.ts';
+import { JobRunner } from './jobs.ts';
 import { appPaths, resolveRepoRoot, type AppPaths } from './paths.ts';
+import { WDA_PREPARE_JOB_ID, wdaPrepareJob, type WdaPrepareTarget } from './services/wda-prepare.ts';
 import { SettingsStore, type Settings } from './settings.ts';
 import { runSmoke } from './smoke.ts';
 import { FleetTray } from './tray.ts';
@@ -24,13 +27,14 @@ if (!smokeMode && !app.requestSingleInstanceLock()) {
 let paths: AppPaths;
 let settingsStore: SettingsStore;
 let fleet: Fleet;
+let jobs: JobRunner;
 let windows: WindowManager | null = null;
 let tray: FleetTray | null = null;
 let quitting = false;
 let dashboardUrl: string | null = null;
 
 function currentSnapshot(): FleetSnapshot {
-    return fleet.supervisor.snapshot(dashboardUrl);
+    return fleet.supervisor.snapshot(dashboardUrl, jobs.list());
 }
 
 function onFleetChanged(): void {
@@ -65,6 +69,7 @@ function registerIpc(): void {
     ipcMain.handle('fleet:restart', (_event, id: string) => fleet.supervisor.restart(String(id)).catch(noop));
     ipcMain.handle('fleet:start-all', () => fleet.supervisor.startAll().catch(noop));
     ipcMain.handle('fleet:stop-all', () => fleet.supervisor.stopAll().catch(noop));
+    ipcMain.handle('fleet:restart-all', () => fleet.supervisor.restartAll().catch(noop));
     ipcMain.handle('fleet:open-logs', async (_event, id: string) => {
         const logPath = fleet.logs.pathFor(String(id));
         await shell.openPath(logPath);
@@ -83,6 +88,13 @@ function registerIpc(): void {
     });
     ipcMain.handle('app:open-services', () => { windows?.showServices(); });
     ipcMain.handle('app:open-settings', () => { windows?.showSettings(); });
+    ipcMain.handle('app:open-data-folder', () => shell.openPath(paths.userData));
+    ipcMain.handle('app:export-diagnostics', () => exportDiagnostics());
+
+    ipcMain.handle('job:run-wda-prepare', (_event, udid: unknown) => runWdaPrepare(udid));
+    ipcMain.handle('job:cancel', (_event, id: string) => jobs.cancel(String(id)));
+    ipcMain.handle('job:dismiss', (_event, id: string) => { jobs.dismiss(String(id)); });
+    ipcMain.handle('job:open', (_event, id: string) => { windows?.showJob(String(id)); });
 
     ipcMain.handle('settings:get', () => settingsStore.get());
     ipcMain.handle('settings:save', async (_event, patch: Partial<Settings>) => {
@@ -115,6 +127,50 @@ function registerIpc(): void {
         rebuildFleet(settingsStore.get());
         return { ok: true, message: 'The embedded database was deleted. Start the fleet to recreate it.' };
     });
+}
+
+/**
+ * Runs the one-off WebDriverAgent build as a supervised job and opens its window
+ * so the operator watches the xcodebuild output rather than a spinner.
+ */
+async function runWdaPrepare(udid: unknown): Promise<{ ok: boolean; message: string }> {
+    const trimmed = typeof udid === 'string' ? udid.trim() : '';
+    const target: WdaPrepareTarget = trimmed ? { kind: 'udid', udid: trimmed } : { kind: 'all' };
+    if (jobs.isRunning(WDA_PREPARE_JOB_ID)) {
+        windows?.showJob(WDA_PREPARE_JOB_ID);
+        return { ok: false, message: 'The WebDriverAgent build is already running.' };
+    }
+    windows?.showJob(WDA_PREPARE_JOB_ID);
+    const result = await jobs.run(wdaPrepareJob(fleet.context, target));
+    return { ok: result?.state === 'succeeded', message: result?.detail ?? 'The job did not start.' };
+}
+
+async function exportDiagnostics(): Promise<{ ok: boolean; message: string }> {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const chosen = await dialog.showSaveDialog({
+        title: 'Export diagnostics',
+        defaultPath: path.join(app.getPath('desktop'), `phone-farm-diagnostics-${stamp}.zip`),
+        filters: [{ name: 'Zip archive', extensions: ['zip'] }],
+    });
+    if (chosen.canceled || !chosen.filePath) return { ok: false, message: 'Cancelled.' };
+    try {
+        await writeDiagnosticsZip(
+            chosen.filePath,
+            buildDiagnostics({
+                settings: settingsStore.get(),
+                snapshot: currentSnapshot(),
+                appVersion: app.getVersion(),
+                repoRoot: paths.repoRoot,
+                userData: paths.userData,
+                compiled: paths.compiled,
+            }),
+            fleet.logs,
+            fleet.supervisor.ids(),
+        );
+        return { ok: true, message: `Wrote ${chosen.filePath}` };
+    } catch (error) {
+        return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    }
 }
 
 /** Only settings that change how children are spawned need a fleet restart. */
@@ -161,6 +217,12 @@ function buildMenu(): void {
                 { type: 'separator' },
                 { label: 'Start all', click: () => void fleet.supervisor.startAll().catch(noop) },
                 { label: 'Stop all', click: () => void fleet.supervisor.stopAll().catch(noop) },
+                { label: 'Restart all', click: () => void fleet.supervisor.restartAll().catch(noop) },
+                { type: 'separator' },
+                { label: 'Prepare WebDriverAgent…', click: () => void runWdaPrepare(null) },
+                { type: 'separator' },
+                { label: 'Open data folder', click: () => void shell.openPath(paths.userData) },
+                { label: 'Export diagnostics…', click: () => void exportDiagnostics() },
             ],
         },
         { role: 'editMenu' },
@@ -207,6 +269,9 @@ async function bootstrap(): Promise<void> {
     const repoRoot = resolveRepoRoot(app.getAppPath(), process.resourcesPath, app.isPackaged);
     paths = appPaths(repoRoot, app.getPath('userData'));
     settingsStore = new SettingsStore(paths.userData);
+    // Jobs outlive a fleet rebuild on purpose: a running WebDriverAgent build must
+    // not be forgotten because the operator saved Settings.
+    jobs = new JobRunner();
     fleet = createFleet(paths, settingsStore.get());
 
     if (smokeMode) {
@@ -218,6 +283,7 @@ async function bootstrap(): Promise<void> {
     }
 
     windows = new WindowManager();
+    jobs.on('change', onFleetChanged);
     fleet.supervisor.on('change', onFleetChanged);
     fleet.supervisor.on('log', () => windows?.broadcast('fleet:changed', currentSnapshot()));
 
@@ -229,6 +295,8 @@ async function bootstrap(): Promise<void> {
         openSettings: () => windows?.showSettings(),
         startAll: () => void fleet.supervisor.startAll().catch(noop),
         stopAll: () => void fleet.supervisor.stopAll().catch(noop),
+        restartAll: () => void fleet.supervisor.restartAll().catch(noop),
+        openDataFolder: () => void shell.openPath(paths.userData),
         quit: () => app.quit(),
     });
     tray.attach();

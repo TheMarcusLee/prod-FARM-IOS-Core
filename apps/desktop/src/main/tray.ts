@@ -8,6 +8,8 @@ export interface TrayActions {
     openSettings(): void;
     startAll(): void;
     stopAll(): void;
+    restartAll(): void;
+    openDataFolder(): void;
     quit(): void;
 }
 
@@ -28,7 +30,7 @@ export class FleetTray {
         if (this.tray) return;
         this.tray = new Tray(trayIcon());
         this.tray.setToolTip('Phone Farm');
-        this.render({ services: [], dashboardUrl: null, shuttingDown: false });
+        this.render({ services: [], jobs: [], dashboardUrl: null, shuttingDown: false });
     }
 
     render(snapshot: FleetSnapshot): void {
@@ -50,6 +52,9 @@ export class FleetTray {
             { type: 'separator' },
             { label: 'Start all', click: () => this.actions.startAll(), enabled: !snapshot.shuttingDown },
             { label: 'Stop all', click: () => this.actions.stopAll(), enabled: !snapshot.shuttingDown },
+            { label: 'Restart all', click: () => this.actions.restartAll(), enabled: !snapshot.shuttingDown },
+            { type: 'separator' },
+            { label: 'Open data folder', click: () => this.actions.openDataFolder() },
             { type: 'separator' },
             { label: 'Quit Phone Farm', click: () => this.actions.quit() },
         ]));

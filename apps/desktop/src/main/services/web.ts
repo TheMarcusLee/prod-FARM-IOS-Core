@@ -1,7 +1,7 @@
 import { httpOk } from '../health.ts';
 import { spawnService } from '../process.ts';
 import type { ServiceDefinition } from '../types.ts';
-import { farmNodeSpawn, tsxArgs, type ServiceContext } from './context.ts';
+import { farmEntryArgs, farmNodeSpawn, type ServiceContext } from './context.ts';
 
 /** The Fastify dashboard the main window loads once `/health` answers. */
 export function webService(context: ServiceContext): ServiceDefinition {
@@ -13,7 +13,7 @@ export function webService(context: ServiceContext): ServiceDefinition {
         dependsOn: ['migrations'],
         healthTimeoutMs: 90_000,
         launch: (runContext) => Promise.resolve(
-            spawnService(farmNodeSpawn(context, tsxArgs('src/api/server.ts')), runContext),
+            spawnService(farmNodeSpawn(context, farmEntryArgs(context, 'src/api/server.ts')), runContext),
         ),
         health: () => httpOk('/health', { port }),
     };

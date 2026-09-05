@@ -46,6 +46,7 @@ await build({
         path.join(root, 'src/renderer/starting.ts'),
         path.join(root, 'src/renderer/services.ts'),
         path.join(root, 'src/renderer/settings.ts'),
+        path.join(root, 'src/renderer/job.ts'),
     ],
     outdir: path.join(out, 'renderer'),
     format: 'esm',
@@ -53,7 +54,7 @@ await build({
     target: 'es2022',
 });
 
-for (const asset of ['app.css', 'starting.html', 'services.html', 'settings.html']) {
+for (const asset of ['app.css', 'starting.html', 'services.html', 'settings.html', 'job.html']) {
     await cp(path.join(root, 'src/renderer', asset), path.join(out, 'renderer', asset));
 }
 

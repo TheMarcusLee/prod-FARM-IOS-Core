@@ -107,6 +107,49 @@ export class FakeClock implements SupervisorClock {
     }
 }
 
+/**
+ * A clock whose timers only fire when the test says so.
+ *
+ * `FakeClock` runs every timer on the next tick, which is exactly wrong for the
+ * periodic health sweep: it would re-arm itself for ever inside one test.
+ */
+export class ManualClock implements SupervisorClock {
+    time = 0;
+    private sequence = 0;
+    private readonly timers = new Map<number, { at: number; fn: () => void }>();
+
+    now(): number { return this.time; }
+
+    setTimeout(fn: () => void, ms: number): unknown {
+        const handle = (this.sequence += 1);
+        this.timers.set(handle, { at: this.time + ms, fn });
+        return handle;
+    }
+
+    clearTimeout(handle: unknown): void {
+        this.timers.delete(handle as number);
+    }
+
+    get pending(): number { return this.timers.size; }
+
+    /** Fires everything due within `ms`, letting each callback's promises settle. */
+    async advance(ms: number): Promise<void> {
+        const target = this.time + ms;
+        for (;;) {
+            const due = [...this.timers.entries()]
+                .filter(([, timer]) => timer.at <= target)
+                .sort((left, right) => left[1].at - right[1].at)[0];
+            if (!due) break;
+            this.timers.delete(due[0]);
+            this.time = Math.max(this.time, due[1].at);
+            due[1].fn();
+            await settle(10);
+        }
+        this.time = target;
+        await settle(10);
+    }
+}
+
 export function settle(times = 20): Promise<void> {
     let chain = Promise.resolve();
     for (let index = 0; index < times; index += 1) {

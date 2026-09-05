@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { bridgePingUrl } from '../drivers/a11y-bridge.js';
+import { farmEntryArgs } from '../runtime/farm-entry.js';
 import { driverKindOf, platformOf } from '../drivers/select.js';
 import { discoverConnectedDeviceUdids } from './discovery.js';
 import { activeDevices, loadRegisteredDevices, type RegisteredDevice } from './registry.js';
@@ -77,7 +78,7 @@ async function defaultEndpointReady(url: string): Promise<boolean> {
 
 function defaultSpawnSupervisor(device: RegisteredDevice): ChildProcess {
     const script = fileURLToPath(new URL('./wda/start.ts', import.meta.url));
-    return spawn(process.execPath, ['--env-file-if-exists=.env', '--env-file-if-exists=.env.devices', '--import', 'tsx', script], {
+    return spawn(process.execPath, farmEntryArgs(script, { envFiles: ['.env', '.env.devices'] }), {
         cwd: process.cwd(),
         env: {
             ...process.env,

@@ -29,6 +29,18 @@ export function farmNodeSpawn(context: ServiceContext, args: readonly string[]) 
     };
 }
 
-export function tsxArgs(script: string): string[] {
-    return ['--import', 'tsx', script];
+/**
+ * Node arguments that run one farm entry point.
+ *
+ * A checkout is TypeScript and needs the `tsx` loader; the packaged app ships
+ * `farm-dist`, which is plain JavaScript compiled ahead of time and carries no
+ * TypeScript toolchain at all, so there the same script is spawned with nothing
+ * but its `.js` path. `src/runtime/farm-entry.ts` does the same for the farm's
+ * own child processes.
+ */
+export function farmEntryArgs(context: ServiceContext, script: string): string[] {
+    const entry = context.paths.compiled && script.endsWith('.ts')
+        ? `${script.slice(0, -'.ts'.length)}.js`
+        : script;
+    return entry.endsWith('.ts') ? ['--import', 'tsx', entry] : [entry];
 }

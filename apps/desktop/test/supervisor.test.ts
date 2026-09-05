@@ -8,6 +8,8 @@ function build(services: ReturnType<typeof fakeService>[], clock = new FakeClock
     const supervisor = new Supervisor(services.map((service) => service.definition), {
         clock,
         maxRestarts: 3,
+        // The periodic sweep has its own test file; FakeClock would spin on it.
+        reprobeIntervalMs: 0,
     });
     return { supervisor, clock };
 }
@@ -153,6 +155,7 @@ test('logs are kept per service and surfaced in the snapshot', async () => {
     const worker = fakeService({ id: 'worker' });
     const supervisor = new Supervisor([worker.definition], {
         clock: new FakeClock(),
+        reprobeIntervalMs: 0,
         onLog: (id, line) => seen.push(`${id}:${line.text}`),
         logPathFor: (id) => `/tmp/${id}.log`,
     });

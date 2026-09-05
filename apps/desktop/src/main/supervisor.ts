@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 
 import type {
-    FleetSnapshot, LaunchContext, LogLine, RunHandle,
+    FleetSnapshot, JobSnapshot, LaunchContext, LogLine, RunHandle,
     ServiceDefinition, ServiceSnapshot, ServiceState,
 } from './types.ts';
 
@@ -12,6 +12,8 @@ const MAX_BACKOFF_MS = 30_000;
 const BASE_BACKOFF_MS = 1_000;
 /** A crash after this long counts as a fresh failure, not part of a restart storm. */
 const BACKOFF_RESET_MS = 60_000;
+/** How often a `healthy` service is asked again whether it is still there. */
+export const DEFAULT_REPROBE_INTERVAL_MS = 15_000;
 
 export interface SupervisorClock {
     now(): number;
@@ -32,6 +34,11 @@ export interface SupervisorOptions {
     logPathFor?(serviceId: string): string | null;
     /** Cap on automatic restarts before a service is parked in `failed`. */
     maxRestarts?: number;
+    /**
+     * How often `healthy` services are re-probed. 0 disables the sweep entirely.
+     * Defaults to 15s.
+     */
+    reprobeIntervalMs?: number;
 }
 
 interface Runtime {
@@ -62,6 +69,8 @@ export class Supervisor extends EventEmitter {
     private readonly clock: SupervisorClock;
     private readonly options: SupervisorOptions;
     private shuttingDown = false;
+    private monitorTimer: unknown = null;
+    private sweeping = false;
 
     constructor(definitions: readonly ServiceDefinition[], options: SupervisorOptions = {}) {
         super();
@@ -93,9 +102,10 @@ export class Supervisor extends EventEmitter {
         return this.runtimeOf(id).state;
     }
 
-    snapshot(dashboardUrl: string | null = null): FleetSnapshot {
+    snapshot(dashboardUrl: string | null = null, jobs: JobSnapshot[] = []): FleetSnapshot {
         return {
             services: this.ids().map((id) => this.snapshotOf(id)),
+            jobs,
             dashboardUrl,
             shuttingDown: this.shuttingDown,
         };
@@ -122,6 +132,83 @@ export class Supervisor extends EventEmitter {
         return [...this.runtimeOf(id).recent];
     }
 
+    /** How often the re-probe sweep runs; 0 when it is switched off. */
+    get reprobeIntervalMs(): number {
+        return this.options.reprobeIntervalMs ?? DEFAULT_REPROBE_INTERVAL_MS;
+    }
+
+    /**
+     * Re-probes services the supervisor believes are healthy.
+     *
+     * Long-lived children announce their own death through `handle.exited`, but
+     * the bundled Postgres never does: `embedded-postgres` gives no exit signal,
+     * so a postmaster that dies on its own would sit in `healthy` for ever. One
+     * failed probe is treated exactly like a crash — the handle is stopped and
+     * the service goes back through the existing backoff.
+     */
+    async probeHealthy(): Promise<void> {
+        if (this.shuttingDown) return;
+        for (const runtime of this.runtimes.values()) {
+            if (this.shuttingDown) return;
+            const probe = runtime.definition.health;
+            if (!probe || runtime.definition.oneshot) continue;
+            if (runtime.state !== 'healthy' || !runtime.desired || !runtime.handle) continue;
+            const generation = runtime.generation;
+            let ok = false;
+            try {
+                ok = await probe();
+            } catch {
+                ok = false;
+            }
+            if (ok || generation !== runtime.generation || runtime.state !== 'healthy') continue;
+            await this.onHealthLost(runtime);
+        }
+    }
+
+    /** Begin the periodic sweep. Safe to call repeatedly. */
+    startHealthMonitor(): void {
+        if (this.monitorTimer !== null || this.reprobeIntervalMs <= 0) return;
+        this.scheduleSweep();
+    }
+
+    stopHealthMonitor(): void {
+        if (this.monitorTimer === null) return;
+        this.clock.clearTimeout(this.monitorTimer);
+        this.monitorTimer = null;
+    }
+
+    private scheduleSweep(): void {
+        this.monitorTimer = this.clock.setTimeout(() => {
+            this.monitorTimer = null;
+            if (this.sweeping) { this.scheduleSweep(); return; }
+            this.sweeping = true;
+            void this.probeHealthy()
+                .catch(() => undefined)
+                .finally(() => {
+                    this.sweeping = false;
+                    // Re-armed only after the sweep finishes, so a slow probe can
+                    // never stack sweeps on top of each other.
+                    if (!this.shuttingDown && this.reprobeIntervalMs > 0) this.scheduleSweep();
+                });
+        }, this.reprobeIntervalMs);
+    }
+
+    private async onHealthLost(runtime: Runtime): Promise<void> {
+        const handle = runtime.handle;
+        runtime.handle = null;
+        // Retire the handle's own exit listener: this path already owns the restart.
+        runtime.generation += 1;
+        this.appendLog(runtime.definition.id, 'app', 'health probe stopped answering; restarting');
+        if (handle) await handle.stop().catch(() => undefined);
+        this.onUnexpectedExit(runtime, null, 'stopped answering its health probe');
+    }
+
+    /** Stop everything, then bring it all back up. */
+    async restartAll(): Promise<void> {
+        await this.stopAll();
+        await this.startAll();
+    }
+
     /** Start every service in dependency order. Optional failures never abort the run. */
     async startAll(): Promise<void> {
         this.shuttingDown = false;
@@ -135,13 +222,18 @@ export class Supervisor extends EventEmitter {
             try {
                 await this.start(id);
             } catch (error) {
-                if (!runtime.definition.optional) throw error;
+                if (!runtime.definition.optional) {
+                    this.startHealthMonitor();
+                    throw error;
+                }
             }
         }
+        this.startHealthMonitor();
     }
 
     /** Stop everything in reverse dependency order; never rejects. */
     async stopAll(): Promise<void> {
+        this.stopHealthMonitor();
         this.shuttingDown = true;
         this.emitChange();
         for (const id of this.startOrder().reverse()) {
@@ -159,7 +251,11 @@ export class Supervisor extends EventEmitter {
         const runtime = this.runtimeOf(id);
         runtime.desired = true;
         runtime.restarts = 0;
-        await this.launch(runtime);
+        try {
+            await this.launch(runtime);
+        } finally {
+            this.startHealthMonitor();
+        }
     }
 
     async restart(id: string): Promise<void> {
@@ -277,7 +373,8 @@ export class Supervisor extends EventEmitter {
         }
     }
 
-    private onUnexpectedExit(runtime: Runtime, code: number | null): void {
+    private onUnexpectedExit(runtime: Runtime, code: number | null, why?: string): void {
+        const cause = why ?? `exited with code ${code ?? 'signal'}`;
         if (!runtime.desired || this.shuttingDown) {
             this.transition(runtime, 'stopped', '');
             return;
@@ -288,12 +385,12 @@ export class Supervisor extends EventEmitter {
         runtime.lastExitAt = now;
         const max = this.options.maxRestarts ?? 5;
         if (runtime.restarts >= max) {
-            this.transition(runtime, 'failed', `exited with code ${code ?? 'signal'}; gave up after ${max} restarts`);
+            this.transition(runtime, 'failed', `${cause}; gave up after ${max} restarts`);
             return;
         }
         const delay = backoffMs(runtime.restarts);
         runtime.restarts += 1;
-        this.transition(runtime, 'starting', `exited with code ${code ?? 'signal'}; restarting in ${Math.round(delay / 1000)}s`);
+        this.transition(runtime, 'starting', `${cause}; restarting in ${Math.round(delay / 1000)}s`);
         runtime.backoffTimer = this.clock.setTimeout(() => {
             runtime.backoffTimer = null;
             if (!runtime.desired || this.shuttingDown) return;

@@ -31,8 +31,37 @@ export interface ServiceSnapshot {
     recentLogs: LogLine[];
 }
 
+/** `checking` and `running` are the two live states; the rest are results. */
+export type JobState = 'checking' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'blocked';
+
+/** One precondition of a job, shown whether it passed or not. */
+export interface JobCheck {
+    label: string;
+    ok: boolean;
+    detail: string;
+}
+
+/** A one-shot supervised job (the WebDriverAgent build), as the renderer sees it. */
+export interface JobSnapshot {
+    id: string;
+    label: string;
+    /** The part of the job no software can do for the operator. */
+    note: string;
+    command: string;
+    state: JobState;
+    detail: string;
+    startedAt: number | null;
+    endedAt: number | null;
+    exitCode: number | null;
+    checks: JobCheck[];
+    lines: LogLine[];
+    running: boolean;
+}
+
 export interface FleetSnapshot {
     services: ServiceSnapshot[];
+    /** One-shot jobs, kept until the operator dismisses them. */
+    jobs: JobSnapshot[];
     /** http://127.0.0.1:<port> once `web` is healthy, else null. */
     dashboardUrl: string | null;
     shuttingDown: boolean;
