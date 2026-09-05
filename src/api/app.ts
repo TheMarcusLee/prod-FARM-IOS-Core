@@ -26,6 +26,7 @@ import type { AuthProvider, PluginNavLink } from '../plugin.js';
 import type { PluginRegistry } from '../registry.js';
 import type { CreateTaskInput, JsonObject, ScheduleTiming } from '../types.js';
 import { ScheduleTransitionError, type SchedulerRepository } from '../scheduler/repository.js';
+import { registerFleetRoutes } from './routes/fleet.js';
 
 export interface CreateAppOptions {
     plugins: PluginRegistry;
@@ -351,11 +352,14 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
             return reply.code(201).send(redactDevice(created));
         },
     );
-    app.patch<{ Params: { udid: string }; Body: { name?: string; wdaLocalPort?: number; mjpegLocalPort?: number; passcode?: string; coordinates?: unknown; disabled?: boolean; coordinateProfile?: string; pluginData?: Record<string, JsonObject> } }>(
+    app.patch<{ Params: { udid: string }; Body: { name?: string; wdaLocalPort?: number; mjpegLocalPort?: number; passcode?: string; coordinates?: unknown; disabled?: boolean; coordinateProfile?: string; pluginData?: Record<string, JsonObject>; tags?: unknown } }>(
         '/api/devices/:udid', async (request, reply) => {
-            const { passcode, coordinates, name, wdaLocalPort, mjpegLocalPort, disabled, coordinateProfile, pluginData } = request.body;
+            const { passcode, coordinates, name, wdaLocalPort, mjpegLocalPort, disabled, coordinateProfile, pluginData, tags } = request.body;
             if (passcode !== undefined && passcode !== '' && !PASSCODE_PATTERN.test(passcode)) {
                 return reply.code(400).send({ error: 'Device passcode must contain at least four digits' });
+            }
+            if (tags !== undefined && (!Array.isArray(tags) || tags.some((tag) => typeof tag !== 'string'))) {
+                return reply.code(400).send({ error: 'tags must be an array of strings' });
             }
             if (disabled === true && await options.scheduler.activeExecution(request.params.udid)) {
                 return reply.code(409).send({ error: 'Stop the running automation before disconnecting this device' });
@@ -368,6 +372,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
                 if (mjpegLocalPort !== undefined) device.mjpegLocalPort = mjpegLocalPort;
                 if (coordinateProfile !== undefined) device.coordinateProfile = coordinateProfile as RegisteredDevice['coordinateProfile'];
                 if (pluginData !== undefined) device.pluginData = pluginData;
+                if (Array.isArray(tags)) device.tags = [...new Set(tags.map((tag) => String(tag).trim()).filter(Boolean))].slice(0, 20);
                 if (disabled === true) device.disabled = true;
                 else if (disabled === false) delete device.disabled;
                 // passcode: a value sets it, '' clears it, omitting it leaves it
@@ -621,6 +626,8 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         await options.scheduler.deleteAssets(request.body.assetIds ?? []);
         return reply.code(204).send();
     });
+
+    await registerFleetRoutes(app, options);
 
     for (const plugin of options.plugins.list()) {
         if (plugin.registerRoutes) await plugin.registerRoutes({
