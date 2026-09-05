@@ -55,4 +55,15 @@ document.querySelector('#reset-db')?.addEventListener('click', () => {
     });
 });
 
+document.querySelector('#prepare-wda')?.addEventListener('click', () => {
+    const status = document.querySelector<HTMLElement>('#wda-status');
+    const udid = document.querySelector<HTMLInputElement>('#wda-udid')?.value.trim() ?? '';
+    if (status) { status.className = 'status'; status.textContent = 'Checking the prerequisites…'; }
+    void window.farm.prepareWda(udid || null).then((result) => {
+        if (!status) return;
+        status.className = `status ${result.ok ? 'ok' : 'error'}`;
+        status.textContent = result.message;
+    });
+});
+
 void window.farm.getSettings().then(fill);

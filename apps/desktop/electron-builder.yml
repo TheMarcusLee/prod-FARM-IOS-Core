@@ -20,34 +20,24 @@ files:
 asar: false
 
 extraResources:
-  - from: ../../
+  # The farm, compiled to JavaScript with production-only dependencies, built by
+  # `npm run build:farm` (apps/desktop/scripts/build-farm.mjs). It carries no
+  # TypeScript sources, no tsx and no TypeScript compiler: the packaged app
+  # spawns plain `node`. See docs/desktop.md.
+  - from: farm-dist
     to: farm
     filter:
-      - src/**
-      - static/**
-      - drizzle/**
-      - Patches/**
-      - package.json
-      - package-lock.json
-      - tsconfig.json
-      - tsconfig.web.json
-      - drizzle.config.ts
-      - docs/**
-      - README.md
-      - LICENSE
-      - NOTICE
+      - "**/*"
       - "!**/.DS_Store"
+      - "!.modules-stamp"
 
-  # node_modules is listed separately: electron-builder's `files`-style filters
-  # skip it inside a directory copy, and the farm services need tsx, drizzle,
-  # appium and the rest at runtime.
-  - from: ../../node_modules
+  # node_modules is a separate entry: electron-builder's `files`-style filters
+  # skip it inside a directory copy.
+  - from: farm-dist/node_modules
     to: farm/node_modules
     filter:
       - "**/*"
-      - "!.cache/**"
       - "!**/.DS_Store"
-      - "!electron/dist/**"
 
 mac:
   category: public.app-category.developer-tools

@@ -1,4 +1,4 @@
-import { tcpReachable } from '../health.ts';
+import { postgresReady } from '../health.ts';
 import { embeddedPostgresAvailable, startEmbeddedPostgres } from '../embedded-postgres.ts';
 import { EMBEDDED_DB_NAME, EMBEDDED_DB_USER } from '../settings.ts';
 import type { ServiceDefinition } from '../types.ts';
@@ -38,7 +38,7 @@ export function postgresService(context: ServiceContext): ServiceDefinition {
                     async stop() { /* not ours to stop */ },
                 };
             },
-            health: async () => (target ? tcpReachable(target.host, target.port) : false),
+            health: async () => (target ? postgresReady(target.host, target.port) : false),
         };
     }
 
@@ -62,7 +62,7 @@ export function postgresService(context: ServiceContext): ServiceDefinition {
             password: context.settings.embeddedPostgresPassword,
             database: EMBEDDED_DB_NAME,
         }, runContext),
-        health: () => tcpReachable('127.0.0.1', context.settings.embeddedPostgresPort),
+        health: () => postgresReady('127.0.0.1', context.settings.embeddedPostgresPort),
     };
 }
 

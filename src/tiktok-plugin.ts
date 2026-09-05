@@ -7,6 +7,7 @@ import { pipeline } from 'node:stream/promises';
 
 import type { PhoneFarmPlugin, TaskDefinition, TaskExecutionContext } from './plugin.js';
 import type { JsonObject, JsonValue, ScheduleTiming } from './types.js';
+import { farmEntryPath } from './runtime/farm-entry.js';
 
 export interface TikTokPluginConfiguration {
     doomscrollEntrypoint?: string;
@@ -61,10 +62,10 @@ function entrypointFor(
 ): string {
     if (isAndroid(context)) {
         const configured = routine === 'post' ? configuration.androidPostEntrypoint : configuration.androidDoomscrollEntrypoint;
-        return configured ?? fileURLToPath(new URL(`./tiktok/android/${routine}.ts`, import.meta.url));
+        return configured ?? farmEntryPath(fileURLToPath(new URL(`./tiktok/android/${routine}.ts`, import.meta.url)));
     }
     const configured = routine === 'post' ? configuration.postEntrypoint : configuration.doomscrollEntrypoint;
-    return configured ?? fileURLToPath(new URL(`./tiktok/${routine}.ts`, import.meta.url));
+    return configured ?? farmEntryPath(fileURLToPath(new URL(`./tiktok/${routine}.ts`, import.meta.url)));
 }
 
 function optionalString(value: JsonValue | undefined, name: string): string | undefined {

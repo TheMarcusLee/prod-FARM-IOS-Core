@@ -1,3 +1,5 @@
 node_modules/
 dist/
 release/
+farm-dist/
+.farm-modules/

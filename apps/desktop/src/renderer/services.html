@@ -7,8 +7,17 @@
     <span class="actions">
         <button id="start-all">Start all</button>
         <button id="stop-all">Stop all</button>
+        <button id="restart-all">Restart all</button>
         <button id="settings">Settings…</button>
     </span>
 </header>
-<main id="list"></main>
+<main>
+    <div class="page-actions">
+        <button id="data-folder">Open data folder</button>
+        <button id="diagnostics">Export diagnostics…</button>
+        <span class="status" id="action-status"></span>
+    </div>
+    <div id="jobs"></div>
+    <div id="list"></div>
+</main>
 <script type="module" src="services.js"></script>

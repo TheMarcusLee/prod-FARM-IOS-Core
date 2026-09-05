@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { httpOk, runCommand } from '../health.ts';
 import { spawnService } from '../process.ts';
 import type { ServiceDefinition } from '../types.ts';
-import { farmNodeSpawn, tsxArgs, type ServiceContext } from './context.ts';
+import { farmEntryArgs, farmNodeSpawn, type ServiceContext } from './context.ts';
 
 export const WDA_HELP = 'docs/getting-started.md';
 
@@ -43,7 +43,7 @@ export function wdaService(context: ServiceContext): ServiceDefinition {
             return { ok: true };
         },
         launch: (runContext) => Promise.resolve(
-            spawnService(farmNodeSpawn(context, tsxArgs('src/devices/wda-service.ts')), runContext),
+            spawnService(farmNodeSpawn(context, farmEntryArgs(context, 'src/devices/wda-service.ts')), runContext),
         ),
         // The service talks HTTP over a Unix socket; existence of the socket alone
         // is not enough because a stale file survives a hard kill.

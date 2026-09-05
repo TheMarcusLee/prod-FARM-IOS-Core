@@ -10,6 +10,7 @@ import { bridgePingUrl } from '../drivers/a11y-bridge.js';
 import { driverForDevice, driverKindOf, platformOf } from '../drivers/select.js';
 import type { DeviceDriver } from '../drivers/types.js';
 import type { ExecutionRow } from '../database/schema.js';
+import { farmEntryArgs } from '../runtime/farm-entry.js';
 import type { PluginRegistry } from '../registry.js';
 import type { TaskExecutionResult } from '../types.js';
 import type { SchedulerRepository } from './repository.js';
@@ -112,8 +113,8 @@ async function runPluginProcess(
     onLines: (lines: string[]) => Promise<void>,
 ): Promise<TaskExecutionResult> {
     const child = spawn(process.execPath, [
-        '--env-file-if-exists=.env', '--env-file-if-exists=.env.devices', '--import', 'tsx',
-        specification.entrypoint, ...(specification.args ?? []),
+        ...farmEntryArgs(specification.entrypoint, { envFiles: ['.env', '.env.devices'] }),
+        ...(specification.args ?? []),
     ], { cwd: process.cwd(), env: { ...environment, ...specification.env }, stdio: ['ignore', 'pipe', 'pipe'] });
     let pending: string[] = [];
     const append = (chunk: Buffer | string) => { pending.push(...chunk.toString().split(/\r?\n/).filter(Boolean)); };

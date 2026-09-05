@@ -1,9 +1,14 @@
 import type { FleetSnapshot, ServiceSnapshot } from './global.d.ts';
+import { button, createJobCard, type JobCard } from './job-card.ts';
 
 const list = document.querySelector<HTMLElement>('#list');
+const jobList = document.querySelector<HTMLElement>('#jobs');
 const summary = document.querySelector<HTMLElement>('#summary');
+const actionStatus = document.querySelector<HTMLElement>('#action-status');
 /** Keeps one row element per service so log scroll position survives updates. */
 const rows = new Map<string, ReturnType<typeof createRow>>();
+/** Job cards persist until the main process drops the job from the snapshot. */
+const jobCards = new Map<string, JobCard>();
 
 function stateSummary(services: readonly ServiceSnapshot[]): string {
     const healthy = services.filter((service) => service.state === 'healthy').length;
@@ -37,22 +42,14 @@ function createRow(service: ServiceSnapshot) {
     const logs = button('Open logs', () => window.farm.openLogs(service.id));
 
     head.append(dot, grow, state, start, stop, restart, logs);
+    // The one-off WebDriverAgent build belongs next to the service it unblocks.
+    if (service.id === 'wda') head.append(button('Prepare WebDriverAgent…', () => window.farm.prepareWda(null)));
 
     const pre = document.createElement('pre');
     pre.className = 'logs';
     root.append(head, pre);
 
     return { root, dot, title, detail, state, start, stop, restart, pre };
-}
-
-function button(label: string, action: () => Promise<unknown>): HTMLButtonElement {
-    const element = document.createElement('button');
-    element.textContent = label;
-    element.addEventListener('click', () => {
-        element.disabled = true;
-        void action().finally(() => { element.disabled = false; });
-    });
-    return element;
 }
 
 function update(row: ReturnType<typeof createRow>, service: ServiceSnapshot): void {
@@ -83,7 +80,33 @@ function update(row: ReturnType<typeof createRow>, service: ServiceSnapshot): vo
     if (stuck) row.pre.scrollTop = row.pre.scrollHeight;
 }
 
+function renderJobs(snapshot: FleetSnapshot): void {
+    if (!jobList) return;
+    const present = new Set(snapshot.jobs.map((job) => job.id));
+    for (const [id, card] of jobCards) {
+        if (present.has(id)) continue;
+        card.root.remove();
+        jobCards.delete(id);
+    }
+    for (const job of snapshot.jobs) {
+        let card = jobCards.get(job.id);
+        if (!card) {
+            card = createJobCard(job.id, { showLogs: false });
+            jobCards.set(job.id, card);
+            jobList.append(card.root);
+        }
+        card.update(job);
+    }
+}
+
+function report(result: { ok: boolean; message: string }): void {
+    if (!actionStatus) return;
+    actionStatus.className = `status ${result.ok ? 'ok' : 'error'}`;
+    actionStatus.textContent = result.message;
+}
+
 function render(snapshot: FleetSnapshot): void {
+    renderJobs(snapshot);
     if (!list) return;
     if (summary) summary.textContent = stateSummary(snapshot.services);
     for (const service of snapshot.services) {
@@ -99,7 +122,13 @@ function render(snapshot: FleetSnapshot): void {
 
 document.querySelector('#start-all')?.addEventListener('click', () => { void window.farm.startAll(); });
 document.querySelector('#stop-all')?.addEventListener('click', () => { void window.farm.stopAll(); });
+document.querySelector('#restart-all')?.addEventListener('click', () => { void window.farm.restartAll(); });
 document.querySelector('#settings')?.addEventListener('click', () => { void window.farm.openSettings(); });
+document.querySelector('#data-folder')?.addEventListener('click', () => { void window.farm.openDataFolder(); });
+document.querySelector('#diagnostics')?.addEventListener('click', () => {
+    if (actionStatus) { actionStatus.className = 'status'; actionStatus.textContent = 'Collecting…'; }
+    void window.farm.exportDiagnostics().then(report);
+});
 
 window.farm.onFleet(render);
 void window.farm.getFleet().then(render);

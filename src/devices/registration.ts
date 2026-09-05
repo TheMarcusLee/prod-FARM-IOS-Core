@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { remote, type Browser } from 'webdriverio';
 
 import { bridgePingUrl } from '../drivers/a11y-bridge.js';
+import { farmEntryArgs } from '../runtime/farm-entry.js';
 import { errorMessage, runCommand, type CommandRunner } from '../drivers/common.js';
 import { driverForDevice } from '../drivers/select.js';
 import type { DeviceDriver, DriverKind, Platform } from '../drivers/types.js';
@@ -829,9 +830,7 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
     private async startSupervisor(session: RegistrationSession): Promise<void> {
         await this.stopSupervisor(session);
         const script = path.join(this.packageRoot, 'src/devices/wda/start.ts');
-        const child = spawn(process.execPath, [
-            '--env-file-if-exists=.env', '--env-file-if-exists=.env.devices', '--import', 'tsx', script,
-        ], {
+        const child = spawn(process.execPath, farmEntryArgs(script, { envFiles: ['.env', '.env.devices'] }), {
             cwd: this.workspaceRoot,
             env: {
                 ...process.env,

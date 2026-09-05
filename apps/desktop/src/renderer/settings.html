@@ -32,6 +32,21 @@
             <label><span>WDA_BUNDLE_ID</span><input type="text" name="wdaBundleId"></label>
             <label><span>IOS_PLATFORM_VERSION</span><input type="text" name="iosPlatformVersion"></label>
             <label><span>TIKTOK_BUNDLE_ID</span><input type="text" name="tiktokBundleId"></label>
+            <p class="hint">
+                Save the signing fields first: the WebDriverAgent build reads them from this file.
+            </p>
+            <div class="actions" style="margin-top:10px">
+                <label style="margin:0;flex:1"><span>Build for (blank = every device in devices.json)</span><input type="text" id="wda-udid" placeholder="--udid, e.g. 00008030-000A1B2C3D4E5F6G"></label>
+            </div>
+            <div class="actions" style="margin-top:8px">
+                <button id="prepare-wda" type="button">Prepare WebDriverAgent…</button>
+                <span class="status" id="wda-status"></span>
+            </div>
+            <p class="hint">
+                Runs <code>npm run wda:prepare</code> as a supervised job in its own window. It needs Xcode,
+                and afterwards each iPhone must trust the developer certificate by hand — the job window
+                spells out exactly where.
+            </p>
         </fieldset>
 
         <fieldset>

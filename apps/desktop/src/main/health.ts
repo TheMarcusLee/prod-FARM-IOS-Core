@@ -17,6 +17,45 @@ export function tcpReachable(host: string, port: number, timeoutMs = 1_500): Pro
     });
 }
 
+/**
+ * A `pg_isready`-equivalent probe: open a socket, send the 8-byte SSLRequest a
+ * client sends first, and require the single-byte `S`/`N` answer only a live
+ * postmaster gives.
+ *
+ * A plain TCP connect is not enough for the bundled cluster. `embedded-postgres`
+ * never reports an exit, so a postmaster that dies has to be noticed by asking
+ * it something; and on macOS a half-dead listener can still accept a connection.
+ * This stops short of authenticating, so it needs no credentials and leaves no
+ * session behind in the server log.
+ */
+export function postgresReady(host: string, port: number, timeoutMs = 2_000): Promise<boolean> {
+    return new Promise((resolve) => {
+        const socket = net.connect({ host, port });
+        let settled = false;
+        const done = (ok: boolean) => {
+            if (settled) return;
+            settled = true;
+            socket.destroy();
+            resolve(ok);
+        };
+        socket.setTimeout(timeoutMs);
+        socket.once('connect', () => {
+            const request = Buffer.alloc(8);
+            request.writeInt32BE(8, 0);
+            // 1234 << 16 | 5679 — the magic "do you speak TLS?" protocol version.
+            request.writeInt32BE(80_877_103, 4);
+            socket.write(request);
+        });
+        socket.once('data', (chunk: Buffer) => {
+            const reply = chunk.toString('latin1', 0, 1);
+            done(reply === 'S' || reply === 'N');
+        });
+        socket.once('timeout', () => done(false));
+        socket.once('error', () => done(false));
+        socket.once('close', () => done(false));
+    });
+}
+
 export interface HttpProbeOptions {
     socketPath?: string;
     host?: string;

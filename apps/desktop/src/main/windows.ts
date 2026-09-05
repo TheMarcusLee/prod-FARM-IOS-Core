@@ -21,6 +21,7 @@ export class WindowManager {
     private main: BrowserWindow | null = null;
     private services: BrowserWindow | null = null;
     private settings: BrowserWindow | null = null;
+    private job: BrowserWindow | null = null;
 
     /** The dashboard window. Shows a local placeholder until `web` is healthy. */
     showMain(): BrowserWindow {
@@ -60,8 +61,14 @@ export class WindowManager {
         return this.settings;
     }
 
+    /** The log window for a one-shot job. The id travels in the URL fragment. */
+    showJob(jobId: string): BrowserWindow {
+        this.job = this.showPanel(this.job, 'job.html', 'Job', 860, 640, jobId);
+        return this.job;
+    }
+
     private showPanel(
-        existing: BrowserWindow | null, file: string, title: string, width: number, height: number,
+        existing: BrowserWindow | null, file: string, title: string, width: number, height: number, hash?: string,
     ): BrowserWindow {
         if (existing && !existing.isDestroyed()) {
             existing.show();
@@ -72,10 +79,11 @@ export class WindowManager {
             width, height, title, backgroundColor: '#101014', webPreferences: webPreferences(),
         });
         this.openExternalLinksInBrowser(window);
-        void window.loadFile(path.join(rendererDir, file));
+        void window.loadFile(path.join(rendererDir, file), hash ? { hash } : undefined);
         window.on('closed', () => {
             if (this.services === window) this.services = null;
             if (this.settings === window) this.settings = null;
+            if (this.job === window) this.job = null;
         });
         return window;
     }

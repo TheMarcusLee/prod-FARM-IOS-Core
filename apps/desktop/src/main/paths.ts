@@ -13,13 +13,25 @@ export function resolveRepoRoot(appPath: string, resourcesPath: string, packaged
         ? [path.join(resourcesPath, 'farm')]
         : [path.resolve(appPath, '..', '..'), path.join(resourcesPath, 'farm')];
     for (const candidate of candidates) {
-        if (existsSync(path.join(candidate, 'src', 'api', 'server.ts'))) return candidate;
+        if (farmEntryExtension(candidate) !== null) return candidate;
     }
     throw new Error(`Could not locate the farm repository (looked in ${candidates.join(', ')})`);
 }
 
+/**
+ * `ts` for a checkout run through tsx, `js` for the compiled `farm-dist` tree the
+ * packaged app ships, `null` when the directory is not a farm at all.
+ */
+export function farmEntryExtension(root: string): 'ts' | 'js' | null {
+    if (existsSync(path.join(root, 'src', 'api', 'server.js'))) return 'js';
+    if (existsSync(path.join(root, 'src', 'api', 'server.ts'))) return 'ts';
+    return null;
+}
+
 export interface AppPaths {
     repoRoot: string;
+    /** True when `repoRoot` holds compiled JavaScript, so children run without tsx. */
+    compiled: boolean;
     userData: string;
     logsDir: string;
     postgresDataDir: string;
@@ -31,6 +43,7 @@ export interface AppPaths {
 export function appPaths(repoRoot: string, userData: string): AppPaths {
     return {
         repoRoot,
+        compiled: farmEntryExtension(repoRoot) === 'js',
         userData,
         logsDir: path.join(userData, 'logs'),
         postgresDataDir: path.join(userData, 'postgres'),

@@ -114,3 +114,27 @@ input[type="text"], input[type="number"], select {
 .status.ok { color: var(--ok); }
 .danger { border-color: #4a2a2a; }
 .center { display: grid; place-items: center; height: 100vh; text-align: center; gap: 10px; }
+
+/* One-shot jobs: same card as a service, with a checklist and a note. */
+.job { border-color: #333349; }
+.job .checks { list-style: none; margin: 0; padding: 8px 12px; display: grid; gap: 4px; border-top: 1px solid var(--line); }
+.job .checks li { display: flex; gap: 8px; align-items: baseline; font-size: 12px; }
+.job .checks .mark { flex: none; width: 1em; }
+.job .checks .ok .mark { color: var(--ok); }
+.job .checks .bad .mark { color: var(--bad); }
+.job .checks .label { color: var(--text); min-width: 130px; }
+.job .checks .why { color: var(--muted); word-break: break-word; }
+.note {
+    margin: 0;
+    padding: 10px 12px;
+    border-top: 1px solid var(--line);
+    background: #14140f;
+    color: #ddd0a8;
+    font: 11.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre-wrap;
+}
+.command { color: var(--muted); font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+.job pre.logs { max-height: 300px; }
+.page-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+header .actions { flex-wrap: wrap; justify-content: flex-end; }
+.job-page pre.logs { max-height: none; height: calc(100vh - 320px); min-height: 180px; }
