@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { discoverConnectedAndroidDevices, parseAndroidProperties, resetAndroidDiscoveryCache } from '../src/devices/discovery.js';
+import {
+    ANDROID_PROPERTY_TTL_MS, discoverConnectedAndroidDevices, parseAndroidProperties, resetAndroidDiscoveryCache,
+} from '../src/devices/discovery.js';
 import type { CommandRunner } from '../src/drivers/common.js';
 
 const LISTING = 'List of devices attached\nR58N1\tdevice usb:1-1 product:a52 model:SM_A525F device:a52q\n192.168.1.40:5555\tdevice product:panther model:Pixel_7\nemu\tunauthorized\n';
@@ -47,4 +49,26 @@ test('Android discovery is empty, not fatal, when adb is missing or switched off
 test('getprop output falls back to the listing model and unknown version', () => {
     assert.deepEqual(parseAndroidProperties('\n\n', { name: 'SM_A525F', osVersion: 'unknown' }), { name: 'SM_A525F', osVersion: 'unknown' });
     assert.deepEqual(parseAndroidProperties('12\r\nPixel 4a\r\n', { name: 'x', osVersion: 'unknown' }), { name: 'Pixel 4a', osVersion: '12', modelName: 'Pixel 4a' });
+});
+
+test('a phone whose OS was upgraded is re-read once the cache entry expires', async (context) => {
+    context.after(resetAndroidDiscoveryCache);
+    resetAndroidDiscoveryCache();
+    let release = '13';
+    const run: CommandRunner = async (_file, args) => {
+        if (args[0] === 'devices') return { stdout: 'List of devices attached\nR58N1\tdevice model:SM_A525F\n', stderr: '' };
+        return { stdout: `${release}\nSM-A525F\n`, stderr: '' };
+    };
+    let clock = 1_000;
+    const now = () => clock;
+    assert.equal((await discoverConnectedAndroidDevices(run, now))[0]?.osVersion, '13');
+    release = '14';
+    assert.equal((await discoverConnectedAndroidDevices(run, now))[0]?.osVersion, '13', 'still cached');
+    clock += ANDROID_PROPERTY_TTL_MS + 1;
+    assert.equal((await discoverConnectedAndroidDevices(run, now))[0]?.osVersion, '14');
+});
+
+test('the adb daemon banner is not mistaken for the OS version', () => {
+    const stdout = '* daemon not running; starting now at tcp:5037 *\n* daemon started successfully *\n14\nPixel 7\n';
+    assert.deepEqual(parseAndroidProperties(stdout, { name: 'x', osVersion: 'unknown' }), { name: 'Pixel 7', osVersion: '14', modelName: 'Pixel 7' });
 });
