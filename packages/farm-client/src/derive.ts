@@ -178,14 +178,6 @@ export function wallSummary(devices: Pick<FleetDevice, 'state' | 'currentExecuti
     return { total: devices.length, live, posting, needsYou };
 }
 
-/** "11 of 12 live · 2 posting · 1 needs you" — the trailing clauses drop out. */
-export function wallSummaryText(summary: WallSummary): string {
-    const parts = [`${summary.live} of ${summary.total} live`];
-    if (summary.posting > 0) parts.push(`${summary.posting} posting`);
-    if (summary.needsYou > 0) parts.push(`${summary.needsYou} needs you`);
-    return parts.join(' · ');
-}
-
 /* --------------------------------------------------------------- timeline */
 
 /** Stable account colour for a device, assigned by its place in the fleet. */

@@ -12,7 +12,7 @@
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import { useColorScheme } from 'react-native';
 import { useOptionalSettings } from '../context/SettingsContext';
-import type { AccountColor, DeviceState, EventSeverity, ExecutionStatus, ScheduleStatus, WallState } from '@farm/client';
+import type { AccountColor, EventSeverity, ExecutionStatus, ScheduleStatus, WallState } from '@farm/client';
 
 export interface Palette {
     /** window / page background */
@@ -194,10 +194,6 @@ export function wallStateColor(state: WallState, colors: Palette): string {
         case 'error':
             return colors.bad;
     }
-}
-
-export function deviceStateColor(state: DeviceState, colors: Palette): string {
-    return wallStateColor(state, colors);
 }
 
 export function severityColor(severity: EventSeverity, colors: Palette): string {

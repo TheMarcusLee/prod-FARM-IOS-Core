@@ -149,9 +149,6 @@ export function Panel({
     );
 }
 
-/** The old name, kept so the detail screens read the same. */
-export const Card = Panel;
-
 /* ----------------------------------------------------------------- Button */
 
 export type ButtonVariant = 'default' | 'primary' | 'danger' | 'ghost';
