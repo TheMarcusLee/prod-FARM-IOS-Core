@@ -17,6 +17,11 @@ export interface AdbDriverOptions {
 
 const ANDROID_KEYCODES: Record<Key, number> = { home: 3, back: 4, enter: 66, delete: 67 };
 
+/** uiautomator writes here, then we `cat` it; OEM builds only ever print a banner on stdout. */
+const DUMP_PATH = '/sdcard/window_dump.xml';
+
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
 /**
  * Android over the Android Debug Bridge: `adb shell input` for touch, `screencap` for pixels,
  * `uiautomator dump` for the tree. Works over USB or wireless debugging (`adb tcpip 5555`).
@@ -34,8 +39,8 @@ export function createAdbDriver(options: AdbDriverOptions): DeviceDriver {
         kind: 'adb',
         platform: 'android',
         udid: serial,
-        launchApp: async (packageName) => { await shell('monkey', '-p', packageName, '-c', 'android.intent.category.LAUNCHER', '1'); },
-        terminateApp: async (packageName) => { await shell('am', 'force-stop', packageName); },
+        launchApp: (packageName) => launchViaAdb(packageName, shell),
+        terminateApp: async (packageName) => { await shell('am', 'force-stop', shellQuote(packageName)); },
         tap: async ({ x, y }: Point) => { await shell('input', 'tap', String(Math.round(x)), String(Math.round(y))); },
         swipe: async ({ from, to, durationMs }: Swipe) => {
             await shell('input', 'swipe', ...[from.x, from.y, to.x, to.y, durationMs].map((v) => String(Math.round(v))));
@@ -50,53 +55,180 @@ export function createAdbDriver(options: AdbDriverOptions): DeviceDriver {
     };
 }
 
-/** `input text` treats space and shell metacharacters specially; %s is its space escape. */
+/**
+ * `adb shell a b c` concatenates the arguments and hands the string to the *device's* shell, so
+ * every argument has to survive a second round of word splitting, globbing and expansion. One
+ * pair of single quotes does that for anything except a single quote, which is spliced in.
+ */
+export function shellQuote(value: string): string {
+    return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * `input text` can only send ASCII: the KeyCharacterMap lookup silently drops anything outside
+ * it, so an emoji or accented caption would post as gibberish. Fail loudly instead, and name the
+ * way out — the a11y-bridge driver types UTF-8 through the on-device keyboard route.
+ */
+export function assertAdbTypeable(text: string): void {
+    const offending = [...text].find((character) => {
+        const code = character.codePointAt(0)!;
+        return code < 0x20 || code > 0x7e;
+    });
+    if (offending === undefined) return;
+    const shown = offending === '\n' ? '\\n' : offending === '\t' ? '\\t' : offending;
+    throw new DriverError(
+        `adb "input text" cannot type ${JSON.stringify(shown)} (only printable ASCII works). `
+        + 'Use the a11y-bridge driver for this device, or remove the non-ASCII characters.',
+    );
+}
+
+/** Rejects what `input text` cannot type, then quotes the rest for the device shell. */
 export function escapeForInputText(text: string): string {
-    return text.replace(/[\\'"`$&|;<>()]/g, (char) => `\\${char}`).replace(/ /g, '%s');
+    assertAdbTypeable(text);
+    return shellQuote(text);
 }
 
 async function screenshotViaScreencap(serial: string, run: CommandRunner): Promise<Buffer> {
-    const result = await run('adb', ['-s', serial, 'exec-out', 'screencap', '-p'], { encoding: 'buffer' });
+    // exec-out keeps the PNG bytes clean: plain `adb shell` would translate 0x0a into 0x0d0a.
+    const result = await run('adb', ['-s', serial, 'exec-out', 'screencap', '-p'], {
+        encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, timeoutMs: 30_000,
+    });
     const stdout = result.stdout;
     if (!Buffer.isBuffer(stdout) || stdout.length === 0) throw new DriverError('screencap returned no data');
+    if (!stdout.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)) {
+        throw new DriverError(`screencap returned ${stdout.length} bytes that are not a PNG: ${stdout.subarray(0, 40).toString('utf8')}`);
+    }
     return stdout;
 }
 
 type Shell = (...args: string[]) => ReturnType<CommandRunner>;
 
+/**
+ * Dump to a file, then read it back. Dumping to `/dev/tty` only works when adb allocated a pty,
+ * which it does not for a one-shot command, and several OEM builds print a "UI hierchary dumped
+ * to" banner either side of the XML. Both cases are handled: use stdout when it happens to carry
+ * the XML, otherwise `cat` the file.
+ */
 async function uiTreeViaUiautomator(shell: Shell): Promise<UiNode> {
-    // Dumping to stdout avoids a second round trip to `cat` the file. Some OEM builds print a
-    // "UI hierchary dumped to" banner before the XML, so slice from the first tag.
-    const { stdout } = await shell('uiautomator', 'dump', '/dev/tty');
-    const xml = String(stdout);
-    const start = xml.indexOf('<?xml');
-    if (start < 0) throw new DriverError(`uiautomator dump returned no XML: ${xml.slice(0, 120)}`);
-    return parseUiautomatorXml(xml.slice(start));
+    const { stdout } = await shell('uiautomator', 'dump', DUMP_PATH);
+    const banner = String(stdout);
+    const inline = banner.indexOf('<?xml');
+    if (inline >= 0) return parseUiautomatorXml(banner.slice(inline));
+    const dumped = String((await shell('cat', DUMP_PATH)).stdout);
+    const start = dumped.indexOf('<?xml');
+    if (start < 0) {
+        throw new DriverError(
+            `uiautomator dump returned no XML (dump said "${banner.trim().slice(0, 120)}", `
+            + `${DUMP_PATH} said "${dumped.trim().slice(0, 120)}")`,
+        );
+    }
+    return parseUiautomatorXml(dumped.slice(start));
+}
+
+/**
+ * `wm size` prints the panel size and, when one is set, an override on a second line. The
+ * override is what `input` coordinates and screenshots are in, so it has to win.
+ */
+export function parseWmSize(stdout: string): ScreenGeometry {
+    const sizes = new Map<string, ScreenGeometry>();
+    for (const match of stdout.matchAll(/(Override|Physical) size:\s*(\d+)x(\d+)/g)) {
+        sizes.set(match[1]!, { width: Number(match[2]), height: Number(match[3]), scale: 1 });
+    }
+    const geometry = sizes.get('Override') ?? sizes.get('Physical');
+    if (!geometry) throw new DriverError(`Could not read screen size from: ${stdout.trim()}`);
+    return geometry;
 }
 
 async function screenViaWm(shell: Shell): Promise<ScreenGeometry> {
     const { stdout } = await shell('wm', 'size');
-    const match = String(stdout).match(/(?:Override|Physical) size:\s*(\d+)x(\d+)/);
-    if (!match) throw new DriverError(`Could not read screen size from: ${String(stdout).trim()}`);
-    return { width: Number(match[1]), height: Number(match[2]), scale: 1 };
+    return parseWmSize(String(stdout));
+}
+
+/** True when monkey actually injected the launch intent rather than printing an error. */
+export function monkeyLaunched(output: string): boolean {
+    if (/No activities found|Error|Exception|aborted/i.test(output)) return false;
+    return /Events injected:\s*[1-9]/.test(output);
+}
+
+/**
+ * monkey is the one-liner everyone reaches for, but it reports success on stdout rather than
+ * through the exit code and gives up on packages whose launcher activity is behind a
+ * disabled-until-used stub. Resolve the launcher component and `am start` it when that happens.
+ */
+async function launchViaAdb(packageName: string, shell: Shell): Promise<void> {
+    const { stdout } = await shell('monkey', '-p', shellQuote(packageName), '-c', 'android.intent.category.LAUNCHER', '1');
+    if (monkeyLaunched(String(stdout))) return;
+    const component = await launcherComponent(packageName, shell);
+    await shell('am', 'start', '-W', '-a', 'android.intent.action.MAIN', '-c', 'android.intent.category.LAUNCHER', '-n', shellQuote(component));
+}
+
+/** `cmd package resolve-activity --brief <pkg>` ends with `<pkg>/<activity>`. */
+export function parseResolvedActivity(stdout: string, packageName: string): string | undefined {
+    return stdout.split(/\r?\n/).map((line) => line.trim()).reverse()
+        .find((line) => line.startsWith(`${packageName}/`));
+}
+
+async function launcherComponent(packageName: string, shell: Shell): Promise<string> {
+    const { stdout } = await shell('cmd', 'package', 'resolve-activity', '--brief', shellQuote(packageName));
+    const component = parseResolvedActivity(String(stdout), packageName);
+    if (!component) throw new DriverError(`Could not resolve a launcher activity for ${packageName}: ${String(stdout).trim().slice(0, 200)}`);
+    return component;
 }
 
 async function pushMediaViaAdb(file: MediaFile, mediaDirectory: string, adb: Shell, shell: Shell): Promise<void> {
     const fileName = file.fileName ?? path.basename(file.localPath);
     const remotePath = `${mediaDirectory}/${fileName}`;
+    // `adb push` takes its arguments as argv, so spaces in either path need no quoting here.
     await adb('push', file.localPath, remotePath);
-    // Without a scan the file exists but the gallery (and TikTok's picker) does not list it.
-    await shell('am', 'broadcast', '-a', 'android.intent.action.MEDIA_SCANNER_SCAN_FILE', '-d', `file://${remotePath}`);
+    await scanMedia(remotePath, shell);
+}
+
+/**
+ * Without a scan the file exists but the gallery (and TikTok's picker) does not list it.
+ * Android 10 removed the MEDIA_SCANNER_SCAN_FILE receiver and rejects `file://` URIs, so the
+ * broadcast returns success there while doing nothing; MediaStore's `scan_file` provider method
+ * is the supported route. Try it first and keep the broadcast for pre-10 phones.
+ */
+async function scanMedia(remotePath: string, shell: Shell): Promise<void> {
+    try {
+        await shell('content', 'call', '--uri', 'content://media/external/file', '--method', 'scan_file', '--arg', shellQuote(remotePath));
+        return;
+    } catch {
+        // No scan_file method on this build; fall through to the legacy broadcast.
+    }
+    await shell('am', 'broadcast', '-a', 'android.intent.action.MEDIA_SCANNER_SCAN_FILE', '-d', shellQuote(`file://${remotePath}`));
+}
+
+export interface AdbListedDevice {
+    serial: string;
+    /** `device`, `unauthorized`, `offline`, `recovery`, ... — whatever adb printed. */
+    state: string;
+    model?: string;
+}
+
+/**
+ * `adb devices -l`, minus the header and the `* daemon not running; starting now ... *` banner
+ * the server prints on its first invocation. Wi-Fi serials (`192.168.1.40:5555`) parse like any
+ * other because only whitespace separates the columns.
+ */
+export function parseAdbDevices(stdout: string): AdbListedDevice[] {
+    const lines = stdout.split(/\r?\n/).map((line) => line.trim());
+    const header = lines.findIndex((line) => line.startsWith('List of devices attached'));
+    return lines.slice(header + 1)
+        .filter((line) => line && !line.startsWith('*'))
+        .map((line) => line.split(/\s+/))
+        .flatMap((parts) => {
+            const [serial, state] = parts;
+            if (!serial || !state) return [];
+            const model = parts.find((part) => part.startsWith('model:'))?.slice('model:'.length);
+            return [{ serial, state, ...(model ? { model } : {}) }];
+        });
 }
 
 /** `adb devices -l` → serials in the `device` state, with model when reported. */
 export async function discoverAdbDevices(run: CommandRunner = runCommand): Promise<Array<{ serial: string; model?: string }>> {
     const { stdout } = await run('adb', ['devices', '-l']);
-    return String(stdout).split(/\r?\n/).slice(1)
-        .map((line) => line.trim().split(/\s+/))
-        .filter((parts) => parts.length >= 2 && parts[1] === 'device')
-        .map((parts) => {
-            const model = parts.find((part) => part.startsWith('model:'))?.slice('model:'.length);
-            return { serial: parts[0]!, ...(model ? { model } : {}) };
-        });
+    return parseAdbDevices(String(stdout))
+        .filter(({ state }) => state === 'device')
+        .map(({ serial, model }) => ({ serial, ...(model ? { model } : {}) }));
 }

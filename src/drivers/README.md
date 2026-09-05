@@ -57,6 +57,28 @@ Existing iOS entries need no changes: `platform` defaults to `ios` and `driver` 
    with our Wi-Fi fork of the APK, use `http://<phone-ip>:8080` as `bridgeUrl` and skip the forward.
    The token query prints `Row: 0 result={"status":"success","result":"<uuid>"}`; the uuid is the token.
 
+## What `adb` cannot do
+
+The adb driver shells out, so its arguments are re-parsed by the *device's* shell. Every argument
+that can contain user data is single-quoted (`shellQuote`); do the same for anything new.
+
+- **`type()` is ASCII-only.** `adb shell input text` looks characters up in the KeyCharacterMap and
+  silently drops what it cannot find, so emoji, accented letters, newlines and tabs would post as
+  gibberish. The driver throws a `DriverError` naming the offending character instead. There is no
+  general workaround over adb (the clipboard route needs a helper app of its own), so the answer for
+  a phone that has to type non-ASCII captions is the **`a11y-bridge` driver**, which sends the text
+  base64-encoded as UTF-8 to the on-device keyboard route.
+- **`uiautomator dump` writes to a file.** `/dev/tty` only works when adb allocated a pty, and OEM
+  builds print a `UI hierchary dumped to` banner around the output, so the driver dumps to
+  `/sdcard/window_dump.xml` and `cat`s it back, accepting inline XML when a build provides it.
+- **`launchApp` does not trust monkey.** monkey reports failure on stdout rather than through its
+  exit code, so the driver checks for `Events injected: 1` and otherwise resolves the launcher
+  activity (`cmd package resolve-activity --brief`) and `am start`s it.
+- **Media scanning.** Android 10 removed the `MEDIA_SCANNER_SCAN_FILE` receiver and rejects
+  `file://` URIs, so pushed media is registered through MediaStore's `scan_file` provider method
+  first, with the old broadcast kept as the pre-10 fallback. Pushes land in `/sdcard/DCIM/Camera`,
+  which MediaStore indexes.
+
 ## Writing a routine against the interface
 
 ```ts
