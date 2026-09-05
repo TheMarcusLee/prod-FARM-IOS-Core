@@ -47,6 +47,8 @@ function onFleetChanged(): void {
     } else if (web && web.state !== 'stopping') {
         dashboardUrl = null;
         snapshot.dashboardUrl = null;
+        // The dashboard origin stops being loadable the moment `web` is not there.
+        windows?.forgetDashboard();
     }
     tray?.render(snapshot);
     windows?.broadcast('fleet:changed', snapshot);
@@ -59,6 +61,7 @@ function rebuildFleet(settings: Settings): void {
     fleet.supervisor.on('change', onFleetChanged);
     fleet.supervisor.on('log', () => windows?.broadcast('fleet:changed', currentSnapshot()));
     dashboardUrl = null;
+    windows?.forgetDashboard();
     onFleetChanged();
 }
 
@@ -70,17 +73,21 @@ function registerIpc(): void {
     ipcMain.handle('fleet:start-all', () => fleet.supervisor.startAll().catch(noop));
     ipcMain.handle('fleet:stop-all', () => fleet.supervisor.stopAll().catch(noop));
     ipcMain.handle('fleet:restart-all', () => fleet.supervisor.restartAll().catch(noop));
-    ipcMain.handle('fleet:open-logs', async (_event, id: string) => {
-        const logPath = fleet.logs.pathFor(String(id));
-        await shell.openPath(logPath);
+    ipcMain.handle('fleet:open-logs', async (_event, id: unknown) => {
+        // `pathFor` is a plain join, so an id straight from the renderer would be a
+        // path the renderer chose. Only ids the supervisor actually declares are
+        // ever turned into a path, and shell.openPath then only sees our own dir.
+        const serviceId = knownServiceId(id);
+        if (!serviceId) return;
+        await shell.openPath(fleet.logs.pathFor(serviceId));
     });
-    ipcMain.handle('app:open-help', async (_event, anchor: string) => {
+    ipcMain.handle('app:open-help', async (_event, anchor: unknown) => {
         // Anchors are `<repo-relative path>[#fragment]`; openPath cannot use the
-        // fragment, so only the file is opened. Never leaves the checkout.
-        const file = String(anchor).split('#')[0] ?? '';
-        const target = path.resolve(fleet.context.paths.repoRoot, file);
-        if (!target.startsWith(fleet.context.paths.repoRoot)) return;
-        await shell.openPath(target);
+        // fragment, so only the file is opened. The renderer never picks the path:
+        // only the anchors the service definitions themselves declare are honoured.
+        const file = String(anchor ?? '').split('#')[0] ?? '';
+        if (!helpAnchors().has(file)) return;
+        await shell.openPath(path.join(fleet.context.paths.repoRoot, file));
     });
     ipcMain.handle('app:open-dashboard', () => {
         if (dashboardUrl) windows?.loadDashboard(dashboardUrl);
@@ -92,9 +99,12 @@ function registerIpc(): void {
     ipcMain.handle('app:export-diagnostics', () => exportDiagnostics());
 
     ipcMain.handle('job:run-wda-prepare', (_event, udid: unknown) => runWdaPrepare(udid));
-    ipcMain.handle('job:cancel', (_event, id: string) => jobs.cancel(String(id)));
-    ipcMain.handle('job:dismiss', (_event, id: string) => { jobs.dismiss(String(id)); });
-    ipcMain.handle('job:open', (_event, id: string) => { windows?.showJob(String(id)); });
+    ipcMain.handle('job:cancel', (_event, id: unknown) => jobs.cancel(knownJobId(id) ?? ''));
+    ipcMain.handle('job:dismiss', (_event, id: unknown) => { jobs.dismiss(knownJobId(id) ?? ''); });
+    ipcMain.handle('job:open', (_event, id: unknown) => {
+        const jobId = knownJobId(id);
+        if (jobId) windows?.showJob(jobId);
+    });
 
     ipcMain.handle('settings:get', () => settingsStore.get());
     ipcMain.handle('settings:save', async (_event, patch: Partial<Settings>) => {
@@ -135,6 +145,12 @@ function registerIpc(): void {
  */
 async function runWdaPrepare(udid: unknown): Promise<{ ok: boolean; message: string }> {
     const trimmed = typeof udid === 'string' ? udid.trim() : '';
+    // The udid becomes an argv entry of a spawned build. Anything that is not a
+    // real device identifier — a leading dash above all — is refused rather than
+    // handed to the child as a flag it might act on.
+    if (trimmed && !UDID_PATTERN.test(trimmed)) {
+        return { ok: false, message: `"${trimmed}" is not a device UDID.` };
+    }
     const target: WdaPrepareTarget = trimmed ? { kind: 'udid', udid: trimmed } : { kind: 'all' };
     if (jobs.isRunning(WDA_PREPARE_JOB_ID)) {
         windows?.showJob(WDA_PREPARE_JOB_ID);
@@ -249,6 +265,31 @@ async function shutdown(): Promise<void> {
 }
 
 function noop(): void { /* errors are already reflected in the service state */ }
+
+/** iOS UDIDs are hex, or the 24-character `<8>-<16>` form; nothing else is accepted. */
+export const UDID_PATTERN = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}$|^[0-9a-f]{25,40}$/;
+
+/** The id, when the supervisor really declares it; null otherwise. */
+function knownServiceId(id: unknown): string | null {
+    const wanted = String(id ?? '');
+    return fleet.supervisor.ids().includes(wanted) ? wanted : null;
+}
+
+/** Only jobs this app knows how to run are addressable from the renderer. */
+function knownJobId(id: unknown): string | null {
+    return String(id ?? '') === WDA_PREPARE_JOB_ID ? WDA_PREPARE_JOB_ID : null;
+}
+
+/** Every `help` anchor the service definitions declare, plus the app's own docs. */
+function helpAnchors(): Set<string> {
+    const anchors = new Set(['docs/desktop.md']);
+    for (const id of fleet.supervisor.ids()) {
+        const help = fleet.supervisor.definitionOf(id).help;
+        if (help) anchors.add(help.split('#')[0] ?? '');
+    }
+    anchors.delete('');
+    return anchors;
+}
 
 /**
  * An unsigned development build cannot register a login item, and macOS reports

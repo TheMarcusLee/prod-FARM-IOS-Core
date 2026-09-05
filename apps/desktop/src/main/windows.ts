@@ -6,6 +6,25 @@ const distDir = path.join(app.getAppPath(), 'dist');
 const preloadPath = path.join(distDir, 'preload', 'preload.cjs');
 const rendererDir = path.join(distDir, 'renderer');
 
+/**
+ * Everything a window is allowed to load: the packaged renderer files, and — once
+ * `web` is healthy — the loopback dashboard. Anything else (an `<a href>` inside
+ * the dashboard, a redirect, a `window.open`) is refused and handed to the system
+ * browser instead, so an app window can never end up showing remote content with
+ * a preload bridge attached to it.
+ */
+export function isAllowedUrl(url: string, dashboardOrigin: string | null): boolean {
+    let parsed: URL;
+    try {
+        parsed = new URL(url);
+    } catch {
+        return false;
+    }
+    if (parsed.protocol === 'file:') return path.resolve(parsed.pathname).startsWith(`${rendererDir}${path.sep}`);
+    if (!dashboardOrigin) return false;
+    return parsed.origin === dashboardOrigin;
+}
+
 /** Same hardening on every window: no node in the renderer, no remote code. */
 function webPreferences() {
     return {
@@ -18,6 +37,9 @@ function webPreferences() {
 }
 
 export class WindowManager {
+    /** `http://127.0.0.1:<port>` while the dashboard is up; null otherwise. */
+    private dashboardOrigin: string | null = null;
+
     private main: BrowserWindow | null = null;
     private services: BrowserWindow | null = null;
     private settings: BrowserWindow | null = null;
@@ -46,6 +68,7 @@ export class WindowManager {
 
     /** Point the main window at the dashboard once it answers /health. */
     loadDashboard(url: string): void {
+        this.dashboardOrigin = new URL(url).origin;
         const window = this.showMain();
         if (window.webContents.getURL().startsWith(url)) return;
         void window.loadURL(url);
@@ -94,11 +117,36 @@ export class WindowManager {
         }
     }
 
-    /** Never let a click inside the dashboard navigate an app window off-origin. */
+    /** The dashboard went away; stop treating its origin as loadable. */
+    forgetDashboard(): void {
+        this.dashboardOrigin = null;
+    }
+
+    /**
+     * Never let a click inside the dashboard navigate an app window off-origin.
+     *
+     * `setWindowOpenHandler` alone only covers `window.open`/`target=_blank`: a
+     * plain link, a `location =` or a redirect is a same-window navigation and
+     * needs `will-navigate`. `will-frame-navigate` covers the same for iframes,
+     * and `webContents-created` denies attaching anything else.
+     */
     private openExternalLinksInBrowser(window: BrowserWindow): void {
         window.webContents.setWindowOpenHandler(({ url }) => {
-            if (/^https?:/.test(url)) void shell.openExternal(url);
+            openExternally(url);
             return { action: 'deny' };
         });
+        const guard = (event: { preventDefault(): void }, url: string): void => {
+            if (isAllowedUrl(url, this.dashboardOrigin)) return;
+            event.preventDefault();
+            openExternally(url);
+        };
+        window.webContents.on('will-navigate', (event, url) => { guard(event, url); });
+        window.webContents.on('will-frame-navigate', (event) => { guard(event, event.url); });
+        window.webContents.on('will-attach-webview', (event) => { event.preventDefault(); });
     }
+}
+
+/** Only ever hand http(s) to the system browser: never file:, never a custom scheme. */
+function openExternally(url: string): void {
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
 }
