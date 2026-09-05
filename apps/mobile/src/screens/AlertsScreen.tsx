@@ -107,7 +107,7 @@ export function AlertsScreen() {
 
             <FlatList
                 data={visible}
-                keyExtractor={(event) => event.id}
+                keyExtractor={(event) => String(event.id)}
                 contentContainerStyle={{ padding: spacing.lg, gap: spacing.sm, paddingBottom: spacing.xxl }}
                 refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />}
                 onEndReached={() => void loadMore()}

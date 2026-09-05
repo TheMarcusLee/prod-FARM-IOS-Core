@@ -255,12 +255,12 @@ export const EVENT_KINDS: EventKind[] = [
 ];
 
 /**
- * `docs/mobile-api.md` shows ULID string ids; `docs/fleet-and-alerts.md` shows
- * numeric ones. The client normalises both to a string and compares cursors as
- * opaque tokens, so either serialisation works.
+ * Event ids are the farm's `scheduler.events.id` bigint identity, serialised as
+ * a JSON number. Cursors (`before`, `upToId`) and the last-rendered id compare
+ * numerically; only the SSE `Last-Event-ID` header carries it as a string.
  */
 export interface FarmEvent {
-    id: string;
+    id: number;
     kind: EventKind | (string & {});
     severity: EventSeverity;
     deviceUdid?: string | null;
@@ -281,14 +281,14 @@ export interface EventQuery {
     deviceUdid?: string;
     severity?: EventSeverity;
     limit?: number;
-    before?: string;
+    before?: number;
     acknowledged?: boolean;
 }
 
 export interface EventPage {
     events: FarmEvent[];
     /** Absent on the last page. */
-    nextBefore?: string;
+    nextBefore?: number;
 }
 
 export interface AckResult {

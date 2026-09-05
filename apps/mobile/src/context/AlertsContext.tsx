@@ -34,18 +34,18 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<FarmError | null>(null);
     const [streamStatus, setStreamStatus] = useState<SseStatus>('idle');
-    const [nextBefore, setNextBefore] = useState<string | undefined>();
-    const lastRenderedId = useRef<string | undefined>(undefined);
+    const [nextBefore, setNextBefore] = useState<number | undefined>();
+    const lastRenderedId = useRef<number | undefined>(undefined);
 
     useEffect(() => {
         void (async () => {
-            const stored = await readJson<{ id: string }>(StorageKeys.lastEventId);
-            if (stored?.id) lastRenderedId.current = stored.id;
+            const stored = await readJson<{ id: number }>(StorageKeys.lastEventId);
+            if (typeof stored?.id === 'number') lastRenderedId.current = stored.id;
         })();
     }, []);
 
-    const remember = useCallback((id: string) => {
-        if (lastRenderedId.current && id <= lastRenderedId.current) return;
+    const remember = useCallback((id: number) => {
+        if (lastRenderedId.current !== undefined && id <= lastRenderedId.current) return;
         lastRenderedId.current = id;
         void writeJson(StorageKeys.lastEventId, { id });
     }, []);
@@ -101,7 +101,8 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
         const open = () => {
             if (unsubscribe) return;
             unsubscribe = client.subscribeEvents({
-                lastEventId: lastRenderedId.current,
+                // The SSE resume header is a string on the wire.
+                lastEventId: lastRenderedId.current === undefined ? undefined : String(lastRenderedId.current),
                 onStatus: (status) => setStreamStatus(status),
                 onEvent: (event) => {
                     setEvents((previous) => {

@@ -70,5 +70,5 @@ export async function removeKey(key: string): Promise<void> {
 export const StorageKeys = {
     settings: 'farm.settings.v1',
     snapshot: 'farm.snapshot.v1',
-    lastEventId: 'farm.lastRenderedEventId.v1',
+    lastEventId: 'farm.lastRenderedEventId.v2',
 } as const;

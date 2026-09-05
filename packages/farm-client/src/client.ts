@@ -106,7 +106,7 @@ export interface FarmClient {
     retryExecution(id: string): Promise<ExecutionRow>;
 
     listEvents(query?: EventQuery): Promise<EventPage>;
-    ackEvents(upToId: string): Promise<AckResult>;
+    ackEvents(upToId: number): Promise<AckResult>;
     subscribeEvents(subscription: EventSubscription): () => void;
 
     registerPush(input: PushRegistrationInput): Promise<PushRegistration>;
@@ -255,7 +255,7 @@ export class FarmHttpClient implements FarmClient {
         return this.get<EventPage>('/api/events', { query: { ...query } });
     }
 
-    ackEvents(upToId: string): Promise<AckResult> {
+    ackEvents(upToId: number): Promise<AckResult> {
         return this.send<AckResult>('POST', '/api/events/ack', { upToId });
     }
 

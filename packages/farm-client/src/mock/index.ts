@@ -81,7 +81,6 @@ export interface MockFarm extends FarmClient {
     dispose(): void;
 }
 
-const EVENT_ID_PREFIX = '01J9Z3M8QF';
 
 export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
     const t0 = options.now ?? Date.now();
@@ -100,16 +99,16 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
     let eventCounter = 0;
     // Above every seeded id, so a new run sorts newest and the cursor holds.
     let executionSeq = executions.length;
-    let acknowledgedUpTo: string | null = null;
+    let acknowledgedUpTo: number | null = null;
 
     const listeners = new Set<(event: FarmEvent) => void>();
     let ticker: ReturnType<typeof setInterval> | null = null;
 
     /* --------------------------------------------------------- helpers */
 
-    const nextEventId = (): string => {
+    const nextEventId = (): number => {
         eventCounter += 1;
-        return `${EVENT_ID_PREFIX}${String(eventCounter).padStart(6, '0')}`;
+        return eventCounter;
     };
 
     const delay = <T>(value: T): Promise<T> =>
@@ -642,7 +641,8 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
         subscribeEvents: (subscription: EventSubscription) => {
             // Replay whatever happened after the id the app last rendered.
             if (subscription.lastEventId) {
-                const missed = events.filter((event) => event.id > subscription.lastEventId!).reverse();
+                const resumeFrom = Number(subscription.lastEventId);
+                const missed = events.filter((event) => event.id > resumeFrom).reverse();
                 for (const event of missed) subscription.onEvent(event);
             }
             const listener = (event: FarmEvent) => subscription.onEvent(event);
