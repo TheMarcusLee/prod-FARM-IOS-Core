@@ -21,6 +21,8 @@ const api = {
     openSettings: () => ipcRenderer.invoke('app:open-settings'),
     openDataFolder: () => ipcRenderer.invoke('app:open-data-folder'),
     exportDiagnostics: () => ipcRenderer.invoke('app:export-diagnostics'),
+    copyMcpConfig: () => ipcRenderer.invoke('app:copy-mcp-config'),
+    copyDashboardUrl: () => ipcRenderer.invoke('app:copy-dashboard-url'),
 
     prepareWda: (udid: string | null) => ipcRenderer.invoke('job:run-wda-prepare', udid),
     cancelJob: (id: string) => ipcRenderer.invoke('job:cancel', id),

@@ -1,10 +1,11 @@
-import { app, dialog, ipcMain, Menu, shell } from 'electron';
+import { app, clipboard, dialog, ipcMain, Menu, shell } from 'electron';
 import path from 'node:path';
 
 import { createFleet, type Fleet } from './fleet.ts';
 import { buildDiagnostics, secretScrubber, secretsOf, writeDiagnosticsZip } from './diagnostics.ts';
 import { resetEmbeddedPostgres } from './embedded-postgres.ts';
 import { JobRunner } from './jobs.ts';
+import { MCP_TOKEN_PLACEHOLDER, mcpConfig } from './mcp-config.ts';
 import { MIGRATION_STAMP_FILE } from './services/migrations.ts';
 import { clearStamp } from './migration-stamp.ts';
 import { ChildRegistry } from './orphans.ts';
@@ -102,6 +103,12 @@ function registerIpc(): void {
     ipcMain.handle('app:open-settings', () => { windows?.showSettings(); });
     ipcMain.handle('app:open-data-folder', () => shell.openPath(paths.userData));
     ipcMain.handle('app:export-diagnostics', () => exportDiagnostics());
+    ipcMain.handle('app:copy-mcp-config', () => copyMcpConfig());
+    ipcMain.handle('app:copy-dashboard-url', () => {
+        if (!dashboardUrl) return { ok: false, message: 'The dashboard is not running yet.' };
+        clipboard.writeText(dashboardUrl);
+        return { ok: true, message: `Copied ${dashboardUrl}` };
+    });
 
     ipcMain.handle('job:run-wda-prepare', (_event, udid: unknown) => runWdaPrepare(udid));
     ipcMain.handle('job:cancel', (_event, id: unknown) => jobs.cancel(knownJobId(id) ?? ''));
@@ -183,6 +190,16 @@ async function runWdaPrepare(udid: unknown): Promise<{ ok: boolean; message: str
     return { ok: result?.state === 'succeeded', message: result?.detail ?? 'The job did not start.' };
 }
 
+/** Puts a ready-to-paste MCP client entry on the clipboard. */
+function copyMcpConfig(): { ok: boolean; message: string } {
+    const url = dashboardUrl ?? `http://127.0.0.1:${settingsStore.get().webPort}`;
+    clipboard.writeText(mcpConfig(url));
+    return {
+        ok: true,
+        message: `Copied the MCP entry for ${url}/mcp — replace ${MCP_TOKEN_PLACEHOLDER} with an API token.`,
+    };
+}
+
 async function exportDiagnostics(): Promise<{ ok: boolean; message: string }> {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const chosen = await dialog.showSaveDialog({
@@ -261,6 +278,8 @@ function buildMenu(): void {
                 { label: 'Restart all', click: () => void fleet.supervisor.restartAll().catch(noop) },
                 { type: 'separator' },
                 { label: 'Prepare WebDriverAgent…', click: () => void runWdaPrepare(null) },
+                { type: 'separator' },
+                { label: 'Copy MCP config', click: () => { copyMcpConfig(); } },
                 { type: 'separator' },
                 { label: 'Open data folder', click: () => void shell.openPath(paths.userData) },
                 { label: 'Export diagnostics…', click: () => void exportDiagnostics() },

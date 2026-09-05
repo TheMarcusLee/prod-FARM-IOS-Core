@@ -1,10 +1,16 @@
 import type { FleetSnapshot, ServiceSnapshot } from './global.d.ts';
 import { button, createJobCard, type JobCard } from './job-card.ts';
+import { pausedReason } from './paused.ts';
 
 const list = document.querySelector<HTMLElement>('#list');
 const jobList = document.querySelector<HTMLElement>('#jobs');
 const summary = document.querySelector<HTMLElement>('#summary');
 const actionStatus = document.querySelector<HTMLElement>('#action-status');
+const dashboardUrlText = document.querySelector<HTMLElement>('#dashboard-url');
+const copyDashboard = document.querySelector<HTMLButtonElement>('#copy-dashboard');
+const openDashboard = document.querySelector<HTMLButtonElement>('#open-dashboard');
+const pausedBanner = document.querySelector<HTMLElement>('#paused-banner');
+const pausedDetail = document.querySelector<HTMLElement>('#paused-detail');
 /** Keeps one row element per service so log scroll position survives updates. */
 const rows = new Map<string, ReturnType<typeof createRow>>();
 /** Job cards persist until the main process drops the job from the snapshot. */
@@ -105,7 +111,20 @@ function report(result: { ok: boolean; message: string }): void {
     actionStatus.textContent = result.message;
 }
 
+function renderBanners(snapshot: FleetSnapshot): void {
+    if (dashboardUrlText) {
+        dashboardUrlText.textContent = snapshot.dashboardUrl ?? 'not running yet — start the fleet';
+    }
+    if (copyDashboard) copyDashboard.disabled = snapshot.dashboardUrl === null;
+    if (openDashboard) openDashboard.disabled = snapshot.dashboardUrl === null;
+
+    const paused = pausedReason(snapshot);
+    if (pausedBanner) pausedBanner.hidden = paused === null;
+    if (pausedDetail) pausedDetail.textContent = paused ?? '';
+}
+
 function render(snapshot: FleetSnapshot): void {
+    renderBanners(snapshot);
     renderJobs(snapshot);
     if (!list) return;
     if (summary) summary.textContent = stateSummary(snapshot.services);
@@ -125,6 +144,13 @@ document.querySelector('#stop-all')?.addEventListener('click', () => { void wind
 document.querySelector('#restart-all')?.addEventListener('click', () => { void window.farm.restartAll(); });
 document.querySelector('#settings')?.addEventListener('click', () => { void window.farm.openSettings(); });
 document.querySelector('#data-folder')?.addEventListener('click', () => { void window.farm.openDataFolder(); });
+document.querySelector('#open-dashboard')?.addEventListener('click', () => { void window.farm.openDashboard(); });
+document.querySelector('#copy-dashboard')?.addEventListener('click', () => {
+    void window.farm.copyDashboardUrl().then(report);
+});
+document.querySelector('#copy-mcp')?.addEventListener('click', () => {
+    void window.farm.copyMcpConfig().then(report);
+});
 document.querySelector('#diagnostics')?.addEventListener('click', () => {
     if (actionStatus) { actionStatus.className = 'status'; actionStatus.textContent = 'Collecting…'; }
     void window.farm.exportDiagnostics().then(report);
