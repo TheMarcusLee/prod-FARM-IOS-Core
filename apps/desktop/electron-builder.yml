@@ -1,0 +1,68 @@
+appId: ai.gethandler.phonefarm.desktop
+productName: Phone Farm
+copyright: Apache-2.0
+directories:
+  output: release
+  buildResources: build
+
+# The bundled app is only the Electron shell; the farm itself is a plain copy of
+# the checkout (with node_modules), spawned with the Electron binary in
+# ELECTRON_RUN_AS_NODE mode. See docs/desktop.md.
+files:
+  - dist/**
+  - package.json
+  - "!**/*.map"
+
+# asar is off on purpose: the bundled Postgres binaries are located from the
+# package's own __dirname, which inside an archive is a path that cannot be
+# spawned (ENOTDIR). asarUnpack does not help because the resolved path still
+# points at app.asar.
+asar: false
+
+extraResources:
+  - from: ../../
+    to: farm
+    filter:
+      - src/**
+      - static/**
+      - drizzle/**
+      - Patches/**
+      - package.json
+      - package-lock.json
+      - tsconfig.json
+      - tsconfig.web.json
+      - drizzle.config.ts
+      - docs/**
+      - README.md
+      - LICENSE
+      - NOTICE
+      - "!**/.DS_Store"
+
+  # node_modules is listed separately: electron-builder's `files`-style filters
+  # skip it inside a directory copy, and the farm services need tsx, drizzle,
+  # appium and the rest at runtime.
+  - from: ../../node_modules
+    to: farm/node_modules
+    filter:
+      - "**/*"
+      - "!.cache/**"
+      - "!**/.DS_Store"
+      - "!electron/dist/**"
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch:
+        - arm64
+  darkModeSupport: true
+  # Unsigned by default. To sign and notarise, set CSC_LINK / CSC_KEY_PASSWORD and
+  # APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID, then flip these to
+  # `identity: <Developer ID Application: …>` and `notarize: true`.
+  identity: null
+  notarize: false
+  hardenedRuntime: false
+  gatekeeperAssess: false
+
+dmg:
+  title: Phone Farm

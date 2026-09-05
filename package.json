@@ -43,7 +43,9 @@
     "preweb": "npm run build:web",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.web.json --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test",
+    "desktop:dev": "npm --prefix apps/desktop run dev",
+    "desktop:build": "npm --prefix apps/desktop run dist"
   },
   "engines": {
     "node": ">=22"

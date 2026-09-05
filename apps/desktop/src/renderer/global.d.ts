@@ -1,0 +1,26 @@
+import type { FleetSnapshot, ServiceSnapshot } from '../main/types.ts';
+import type { Settings } from '../main/settings.ts';
+
+export interface FarmBridge {
+    getFleet(): Promise<FleetSnapshot>;
+    startService(id: string): Promise<void>;
+    stopService(id: string): Promise<void>;
+    restartService(id: string): Promise<void>;
+    startAll(): Promise<void>;
+    stopAll(): Promise<void>;
+    openLogs(id: string): Promise<void>;
+    openHelp(anchor: string): Promise<void>;
+    openDashboard(): Promise<void>;
+    openServices(): Promise<void>;
+    openSettings(): Promise<void>;
+    getSettings(): Promise<Settings>;
+    saveSettings(patch: Partial<Settings>): Promise<{ settings: Settings; restartRequired: boolean }>;
+    resetDatabase(): Promise<{ ok: boolean; message: string }>;
+    onFleet(listener: (snapshot: FleetSnapshot) => void): () => void;
+}
+
+declare global {
+    interface Window { farm: FarmBridge }
+}
+
+export type { FleetSnapshot, ServiceSnapshot, Settings };
