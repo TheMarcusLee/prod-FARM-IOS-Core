@@ -151,9 +151,15 @@ Indexed on `created_at` and on `device_udid`. Migration: `drizzle/0003_events.sq
 ### Kinds
 
 `execution.started`, `execution.succeeded`, `execution.failed`,
-`execution.stopped`, `execution.stuck` (still running five minutes past its
+`execution.stopped`, `execution.cancelled` (the run was cancelled before it
+started — an operator stopped a queued execution, or its schedule was
+cancelled), `execution.stuck` (still running five minutes past its
 run-window deadline), `device.connected`, `device.disconnected`, `device.error`,
 `schedule.created`, `schedule.paused`, `schedule.cancelled`, `digest.daily`.
+
+Every terminal execution status produces a row, cancellation included: a run
+that disappeared from the queue with no timeline entry used to be
+indistinguishable from one that was never created.
 
 Execution and schedule events come from the optional `onEvent` hook on
 `SchedulerRepository` (wired in `src/scheduler/runtime.ts` and

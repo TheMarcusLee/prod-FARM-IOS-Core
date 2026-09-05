@@ -434,6 +434,16 @@ test('scheduler lifecycle signals map onto the event contract', () => {
     assert.equal(lifecycleEventInput({ kind: 'execution.started', execution: executionRow() }).severity, 'info');
     assert.equal(lifecycleEventInput({ kind: 'execution.stopped', execution: executionRow() }).severity, 'warning');
 
+    // A cancelled run is not an error, but it still has to leave a trace.
+    const cancelled = lifecycleEventInput({
+        kind: 'execution.cancelled',
+        execution: executionRow({ status: 'cancelled', error: 'Cancelled before execution' }),
+    });
+    assert.equal(cancelled.kind, 'execution.cancelled');
+    assert.equal(cancelled.severity, 'info');
+    assert.equal(cancelled.executionId, 'exec-1');
+    assert.match(cancelled.title, /com\.git-agni\.tiktok\/doomscroll@1 was cancelled on udid-a/);
+
     const paused = lifecycleEventInput({ kind: 'schedule.paused', schedule: scheduleRow({ status: 'paused' }) });
     assert.equal(paused.kind, 'schedule.paused');
     assert.equal(paused.scheduleId, 'sched-1');

@@ -27,6 +27,7 @@ export const DEFAULT_SEVERITY: Record<EventKind, EventSeverity> = {
     'execution.succeeded': 'info',
     'execution.failed': 'error',
     'execution.stopped': 'warning',
+    'execution.cancelled': 'info',
     'execution.stuck': 'warning',
     'device.connected': 'info',
     'device.disconnected': 'warning',
@@ -60,6 +61,7 @@ const KIND_LABELS: Record<EventKind, string> = {
     'execution.succeeded': 'Run finished',
     'execution.failed': 'Run failed',
     'execution.stopped': 'Run stopped',
+    'execution.cancelled': 'Run cancelled',
     'execution.stuck': 'Run stuck',
     'device.connected': 'Device connected',
     'device.disconnected': 'Device disconnected',
@@ -121,6 +123,8 @@ function bodyFor(event: FarmEvent): string {
         }
         case 'execution.stopped':
             return error || 'The run was stopped.';
+        case 'execution.cancelled':
+            return error || 'The run was cancelled before it started.';
         case 'device.error':
             return error || stringOr(detail.message) || 'The device reported an error.';
         case 'device.disconnected':

@@ -8,7 +8,8 @@ export type { EventSeverity };
 
 /** The fixed event vocabulary. A companion mobile app is built against this list. */
 export const EVENT_KINDS = [
-    'execution.started', 'execution.succeeded', 'execution.failed', 'execution.stopped', 'execution.stuck',
+    'execution.started', 'execution.succeeded', 'execution.failed', 'execution.stopped', 'execution.cancelled',
+    'execution.stuck',
     'device.connected', 'device.disconnected', 'device.error',
     'schedule.created', 'schedule.paused', 'schedule.cancelled',
     'digest.daily',

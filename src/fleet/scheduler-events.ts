@@ -4,10 +4,12 @@ import type { EventRecorder } from './recorder.js';
 
 const EXECUTION_SEVERITY: Record<string, EventSeverity> = {
     'execution.started': 'info', 'execution.succeeded': 'info', 'execution.failed': 'error', 'execution.stopped': 'warning',
+    'execution.cancelled': 'info',
 };
 
 const EXECUTION_VERB: Record<string, string> = {
     'execution.started': 'started', 'execution.succeeded': 'succeeded', 'execution.failed': 'failed', 'execution.stopped': 'was stopped',
+    'execution.cancelled': 'was cancelled',
 };
 
 /** Turns a scheduler lifecycle signal into the row the fleet timeline stores. */

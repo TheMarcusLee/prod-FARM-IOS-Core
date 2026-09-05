@@ -258,6 +258,7 @@ export type EventKind =
     | 'execution.succeeded'
     | 'execution.failed'
     | 'execution.stopped'
+    | 'execution.cancelled'
     | 'execution.stuck'
     | 'device.connected'
     | 'device.disconnected'
@@ -272,6 +273,7 @@ export const EVENT_KINDS: EventKind[] = [
     'execution.succeeded',
     'execution.failed',
     'execution.stopped',
+    'execution.cancelled',
     'execution.stuck',
     'device.connected',
     'device.disconnected',

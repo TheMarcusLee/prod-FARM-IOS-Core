@@ -112,6 +112,7 @@ configured. Kinds, their severity, and the response:
 | `execution.succeeded` | info | A task finished cleanly | Nothing |
 | `execution.failed` | error | A task exhausted its retries | Read `GET /api/executions/:id`. A TikTok routine's failure lists the selectors it tried and the texts on screen — usually a UI change or an interstitial |
 | `execution.stopped` | warning | Someone pressed stop, or the run-window deadline passed | If it was the deadline, the device was busy or slow; check whether `SCHEDULER_RUN_WINDOW_MINUTES` is too tight |
+| `execution.cancelled` | info | A queued run was cancelled before it started — an operator stopped it, or its schedule was cancelled | Nothing. The queue job is gone and the media has been reclaimed |
 | `execution.stuck` | **error** | Still running **five minutes past** its deadline | The device is probably wedged. `POST /api/executions/:id/stop`, then reconnect the device. On iOS this is usually a dead WDA session |
 | `device.connected` | info | Discovery sees it again | Nothing |
 | `device.disconnected` | warning | Discovery lost it | Check the cable (iOS/adb) or the phone's Wi-Fi (bridge). One flap is noise; a repeating flap is a cable or a power-saving setting |

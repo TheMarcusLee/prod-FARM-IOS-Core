@@ -121,6 +121,7 @@ export const NTFY_TAGS: Record<EventKind, string> = {
     'execution.succeeded': 'white_check_mark',
     'execution.failed': 'x',
     'execution.stopped': 'octagonal_sign',
+    'execution.cancelled': 'wastebasket',
     'execution.stuck': 'hourglass',
     'device.connected': 'electric_plug',
     'device.disconnected': 'warning',

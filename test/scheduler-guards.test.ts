@@ -84,3 +84,49 @@ test('the newest-first listings order by the same pair the keyset cursor compare
     assert.equal(orderings.length, 2);
     for (const columns of orderings) assert.equal(columns.length, 2, 'createdAt and id, not createdAt alone');
 });
+
+/**
+ * A drizzle-shaped stub: every builder method returns the same chain, and
+ * awaiting the chain yields the next queued result. Enough to drive the small
+ * repository methods that are pure query plus bookkeeping.
+ */
+function fakeDb(results: unknown[][]): { db: unknown; calls: Array<{ method: string; args: unknown[] }> } {
+    const calls: Array<{ method: string; args: unknown[] }> = [];
+    const queue = [...results];
+    const chain: Record<string, unknown> = {
+        then(resolve: (value: unknown) => void) { resolve(queue.shift() ?? []); },
+    };
+    for (const method of [
+        'select', 'from', 'where', 'limit', 'orderBy', 'insert', 'values',
+        'onConflictDoNothing', 'update', 'set', 'delete', 'returning',
+    ]) {
+        chain[method] = (...args: unknown[]) => { calls.push({ method, args }); return chain; };
+    }
+    return { db: chain, calls };
+}
+
+function executionRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+        id: 'exec-1', scheduleId: null, deviceUdid: 'udid-a',
+        pluginId: 'com.git-agni.tiktok', taskType: 'post', taskVersion: 1, payload: {},
+        scheduledFor: new Date('2026-03-01T11:00:00.000Z'), deadlineAt: new Date('2026-03-01T11:30:00.000Z'),
+        status: 'running', queueJobId: 'job-1', startedAt: new Date('2026-03-01T11:00:00.000Z'),
+        finishedAt: null, exitCode: null, error: null, stopRequestedAt: null,
+        createdAt: new Date('2026-03-01T10:00:00.000Z'), updatedAt: new Date('2026-03-01T10:00:00.000Z'),
+        ...overrides,
+    };
+}
+
+test('a cancelled execution still reaches the fleet timeline', async () => {
+    const events: SchedulerLifecycleEvent[] = [];
+    // finishExecution: the update's returning(), then the asset purge's three reads.
+    const { db } = fakeDb([[executionRow({ status: 'cancelled' })], [executionRow({ status: 'cancelled' })], [], []]);
+    const repository = new SchedulerRepository({ db } as never, {} as never, {} as never, (event) => { events.push(event); });
+
+    await repository.finishExecution('exec-1', 'cancelled', null, 'Cancelled before execution');
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Suppressing this left a run that vanished from the queue looking like one
+    // that was never created.
+    assert.deepEqual(events.map(({ kind }) => kind), ['execution.cancelled']);
+});

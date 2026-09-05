@@ -54,7 +54,10 @@ function taskEnvelope(row: Pick<ScheduleRow, 'pluginId' | 'taskType' | 'taskVers
 
 /** Lifecycle signals for the fleet event log. Mapped to `events` rows in src/fleet. */
 export type SchedulerLifecycleEvent =
-    | { kind: 'execution.started' | 'execution.succeeded' | 'execution.failed' | 'execution.stopped'; execution: ExecutionRow }
+    | {
+        kind: 'execution.started' | 'execution.succeeded' | 'execution.failed' | 'execution.stopped' | 'execution.cancelled';
+        execution: ExecutionRow;
+    }
     | { kind: 'schedule.created' | 'schedule.paused' | 'schedule.cancelled'; schedule: ScheduleRow };
 
 export type SchedulerEventHook = (event: SchedulerLifecycleEvent) => void;
@@ -317,7 +320,10 @@ export class SchedulerRepository {
         const [finished] = await this.connection.db.update(executions).set({
             status, exitCode, error, finishedAt: new Date(), updatedAt: new Date(),
         }).where(eq(executions.id, id)).returning();
-        if (finished && status !== 'cancelled') this.emit({ kind: `execution.${status}`, execution: finished });
+        // Every terminal status is emitted, cancellation included: a run that
+        // vanished from the queue with no timeline row is indistinguishable
+        // from one that was never created.
+        if (finished) this.emit({ kind: `execution.${status}`, execution: finished });
         // Keep the media for retryable outcomes — the dashboard Retry button
         // accepts failed/stopped and would otherwise hit "asset is missing".
         // failed/stopped media is reclaimed by cleanup() once it ages out.
