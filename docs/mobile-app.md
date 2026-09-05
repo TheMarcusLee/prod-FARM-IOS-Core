@@ -116,9 +116,8 @@ reverse proxy on a VPS. Tailscale is the transport.
 5. Settings → Token → paste. It goes straight to `expo-secure-store`
    (Keychain, `WHEN_UNLOCKED_THIS_DEVICE_ONLY` — never synced to iCloud, never
    restored to a different phone from a backup) and is never shown again: the UI
-   shows a masked suffix and a **Replace** button. (The screen's placeholder
-   string still reads `pf_live_…`; real tokens are `pf_` plus 43 base64url
-   characters, with no `live` segment.)
+   shows a masked suffix and a **Replace** button. (Tokens are `pf_` plus 43
+   base64url characters, which is what the field's placeholder now shows.)
 6. Turn *Use demo data* off.
 
 A second **LAN** URL is supported as a fallback for when you are at home.

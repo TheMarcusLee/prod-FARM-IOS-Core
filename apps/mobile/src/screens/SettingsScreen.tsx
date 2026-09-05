@@ -137,7 +137,7 @@ export function SettingsScreen() {
                             testID="settings-token-input"
                             value={tokenDraft}
                             onChangeText={setTokenDraft}
-                            placeholder="paste pf_live_…"
+                            placeholder="paste pf_…"
                             placeholderTextColor={colors.textFaint}
                             autoCapitalize="none"
                             autoCorrect={false}
