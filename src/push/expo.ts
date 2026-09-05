@@ -4,6 +4,8 @@ export const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 export const EXPO_RECEIPT_URL = 'https://exp.host/--/api/v2/push/getReceipts';
 /** Expo's documented ceiling for one request. */
 export const EXPO_BATCH_SIZE = 100;
+/** Expo rejects a single message over 4 KiB with `MessageTooBig`. */
+export const EXPO_MESSAGE_LIMIT_BYTES = 4_096;
 
 export interface ExpoMessage {
     to: string;
@@ -59,6 +61,36 @@ export function isRetryableStatus(status: number): boolean {
     return status === 429 || status >= 500;
 }
 
+/**
+ * Per-message error codes Expo documents. `DeviceNotRegistered` is terminal for
+ * the token; `MessageTooBig` is our bug and is prevented by capExpoMessage;
+ * `MessageRateExceeded` and `ProviderError` are transient, so the relay holds
+ * its cursor and the event is pushed again rather than lost.
+ */
+export const RETRYABLE_TICKET_ERRORS = ['MessageRateExceeded', 'ProviderError'] as const;
+
+export function isRetryableTicketError(ticket: ExpoTicket | ExpoReceipt): boolean {
+    const code = ticket.details?.error ?? '';
+    return ticket.status === 'error' && (RETRYABLE_TICKET_ERRORS as readonly string[]).includes(code);
+}
+
+/**
+ * Trims a message to Expo's 4 KiB ceiling — body first, then title. Sending an
+ * oversized message costs a whole round trip and comes back as MessageTooBig
+ * for every recipient in the batch's slot, so it is cheaper to cut here.
+ */
+export function capExpoMessage(message: ExpoMessage, limit = EXPO_MESSAGE_LIMIT_BYTES): ExpoMessage {
+    const size = (candidate: ExpoMessage): number => Buffer.byteLength(JSON.stringify(candidate), 'utf8');
+    let capped = message;
+    while (size(capped) > limit && capped.body.length > 0) {
+        capped = { ...capped, body: capped.body.slice(0, Math.max(0, Math.floor(capped.body.length / 2))) };
+    }
+    while (size(capped) > limit && capped.title.length > 1) {
+        capped = { ...capped, title: capped.title.slice(0, Math.max(1, Math.floor(capped.title.length / 2))) };
+    }
+    return capped;
+}
+
 function headersFor(options: ExpoOptions): Record<string, string> {
     return {
         accept: 'application/json',
@@ -95,7 +127,7 @@ export async function sendExpoMessages(
     messages: readonly ExpoMessage[], options: ExpoOptions,
 ): Promise<ExpoTicket[]> {
     const tickets: ExpoTicket[] = [];
-    for (const batch of chunk(messages)) {
+    for (const batch of chunk(messages.map((message) => capExpoMessage(message)))) {
         try {
             const parsed = await postExpo(EXPO_PUSH_URL, batch, options);
             const data = (parsed as { data?: ExpoTicket[] } | null)?.data;

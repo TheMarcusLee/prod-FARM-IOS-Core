@@ -149,17 +149,34 @@ export function createCoalescer(windowMs = DEFAULT_COALESCE_MS) {
             if (held) held.push(event);
             else pending.set(key, [event]);
         },
-        /** Batches whose window has elapsed. Marks them sent, so the next window starts now. */
-        drain(now: number): CoalescedBatch[] {
+        /**
+         * Batches whose window has elapsed. Marks them sent, so the next window
+         * starts now. `force` ignores the window — the shutdown path, where a
+         * held burst has to go out rather than die with the process.
+         */
+        drain(now: number, force = false): CoalescedBatch[] {
             const due: CoalescedBatch[] = [];
             for (const [key, events] of [...pending]) {
                 const since = lastSentAt.get(key);
-                if (since !== undefined && now - since < windowMs) continue;
+                if (!force && since !== undefined && now - since < windowMs) continue;
                 pending.delete(key);
                 lastSentAt.set(key, now);
                 due.push({ key, events });
             }
+            // A registration deleted from the farm never drains again, so its
+            // send mark would sit in the map for the life of the process.
+            for (const [key, since] of [...lastSentAt]) {
+                if (now - since > windowMs * 10 && !pending.has(key)) lastSentAt.delete(key);
+            }
             return due;
+        },
+        /** The lowest event id still held back, or null when nothing is pending. */
+        lowestPendingId(): number | null {
+            let lowest: number | null = null;
+            for (const events of pending.values()) {
+                for (const event of events) if (lowest === null || event.id < lowest) lowest = event.id;
+            }
+            return lowest;
         },
         get size(): number { return pending.size; },
     };
@@ -181,7 +198,7 @@ export function pushMessage(
     const worst = events.some((event) => event.severity === 'error') ? 'high' : 'default';
     const data: JsonObject = {
         eventId: latest.id, kind: latest.kind, severity: latest.severity,
-        deviceUdid: latest.deviceUdid, executionId: latest.executionId, count: events.length,
+        deviceUdid: latest.deviceUdid?.slice(0, 128) ?? null, executionId: latest.executionId, count: events.length,
         ...(publicBaseUrl ? { url: `${publicBaseUrl}/fleet` } : {}),
     };
     return {
@@ -266,12 +283,22 @@ export function parseStreamEvent(message: SseMessage): FarmEvent | null {
  * Sends one round of coalesced batches and lines the returned tickets up with the
  * registrations they were built for. Exported so a test can drive it without a stream.
  */
+export interface SendOutcome {
+    receipts: PendingReceipt[];
+    /**
+     * The lowest event id in a batch Expo did not take. The relay's cursor may
+     * not move past it: a wedged Expo or a rate limit has to replay on the next
+     * start, not silently swallow the alert.
+     */
+    lowestUndelivered: number | null;
+}
+
 export async function sendBatches(
     batches: ReadonlyArray<{ registration: RelayRegistration; events: FarmEvent[] }>,
     options: Pick<RelayOptions, 'config' | 'client' | 'fetchImpl' | 'sleep' | 'log'>,
     now: number,
-): Promise<PendingReceipt[]> {
-    if (!batches.length) return [];
+): Promise<SendOutcome> {
+    if (!batches.length) return { receipts: [], lowestUndelivered: null };
     const expo: ExpoOptions = {
         fetchImpl: options.fetchImpl,
         ...(options.config.expoAccessToken ? { accessToken: options.config.expoAccessToken } : {}),
@@ -282,22 +309,32 @@ export async function sendBatches(
         pushMessage(registration, events, options.config.publicBaseUrl));
     const tickets = await sendExpoMessages(messages, expo);
     const receipts: PendingReceipt[] = [];
+    let lowestUndelivered: number | null = null;
+    const undelivered = (batch: { events: FarmEvent[] }): void => {
+        for (const event of batch.events) {
+            if (lowestUndelivered === null || event.id < lowestUndelivered) lowestUndelivered = event.id;
+        }
+    };
     for (let index = 0; index < batches.length; index++) {
         const ticket = tickets[index];
-        const registration = batches[index]!.registration;
-        if (!ticket) continue;
+        const batch = batches[index]!;
+        const { registration } = batch;
+        if (!ticket) { undelivered(batch); continue; }
         if (ticket.status === 'ok' && ticket.id) {
             receipts.push({ ticketId: ticket.id, registrationId: registration.id, dueAt: now + options.config.receiptDelayMs });
             continue;
         }
         if (isDeviceNotRegistered(ticket)) {
+            // The phone is gone for good; replaying these events would only push
+            // them at a token that no longer exists.
             await options.client.deleteRegistration(registration.id);
             options.log?.(`Dropped push registration ${registration.name} — Expo says the device is gone`);
             continue;
         }
+        undelivered(batch);
         await options.client.reportError(registration.id, ticket.message ?? 'Expo rejected the message');
     }
-    return receipts;
+    return { receipts, lowestUndelivered };
 }
 
 /**
@@ -337,13 +374,22 @@ export async function runRelay(options: RelayOptions): Promise<void> {
     const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, ms).unref?.(); }));
     const log = options.log ?? ((message: string) => console.error(message));
     const controller = new AbortController();
-    options.signal?.addEventListener('abort', () => controller.abort(), { once: true });
+    // An aborted signal never fires `abort` again, so a relay started with one
+    // already tripped would otherwise run forever.
+    if (options.signal?.aborted) controller.abort();
+    else options.signal?.addEventListener('abort', () => controller.abort(), { once: true });
 
     const coalescer = createCoalescer(config.coalesceWindowMs);
     let registrations: RelayRegistration[] = [];
     let registrationsAt = 0;
     let pendingReceipts: PendingReceipt[] = [];
     let state = await readRelayState(config.statePath);
+    // The newest id the stream has handed us, whether or not anybody wanted it.
+    let highestSeen = state.lastEventId;
+    // The oldest event Expo refused this run. Once something has failed to send,
+    // the cursor may never pass it: the event was drained out of the coalescer
+    // and will not be retried in-process, so only a restart can replay it.
+    let deliveryFloor: number | null = null;
     let attempt = 0;
 
     const refreshRegistrations = async (now: number): Promise<void> => {
@@ -357,25 +403,36 @@ export async function runRelay(options: RelayOptions): Promise<void> {
     };
 
     let flushing = false;
-    const flush = async (): Promise<void> => {
+    const flush = async (force = false): Promise<void> => {
         if (flushing) return;
         flushing = true;
-        try { await flushOnce(); } finally { flushing = false; }
+        try { await flushOnce(force); } finally { flushing = false; }
     };
 
-    const flushOnce = async (): Promise<void> => {
+    const flushOnce = async (force = false): Promise<void> => {
         const now = clock().getTime();
         const byId = new Map(registrations.map((registration) => [registration.id, registration]));
-        const batches = coalescer.drain(now)
+        const batches = coalescer.drain(now, force)
             .map(({ key, events }) => ({ registration: byId.get(key), events }))
             .filter((batch): batch is { registration: RelayRegistration; events: FarmEvent[] } => Boolean(batch.registration));
-        const receipts = await sendBatches(batches, options, now);
+        const { receipts, lowestUndelivered } = await sendBatches(batches, options, now);
         pendingReceipts = [...pendingReceipts, ...receipts];
         pendingReceipts = await settleReceipts(pendingReceipts, options, now);
-        // Only after a send round does the cursor move — a crash replays instead of dropping.
-        const highest = batches.flatMap(({ events }) => events).reduce((top, event) => Math.max(top, event.id), 0);
-        if (highest > state.lastEventId) {
-            state = { lastEventId: highest };
+
+        // The cursor may only move past an event once that event can no longer
+        // need sending. Events nobody subscribed to — and events dropped by
+        // quiet hours — are settled the moment they are seen, otherwise a farm
+        // with no registrations, or a quiet night, would replay its whole
+        // history on every reconnect. Anything still held in the coalescing
+        // window, or that Expo refused, holds the cursor where it is.
+        if (lowestUndelivered !== null) {
+            deliveryFloor = deliveryFloor === null ? lowestUndelivered : Math.min(deliveryFloor, lowestUndelivered);
+        }
+        const blockers = [coalescer.lowestPendingId(), deliveryFloor]
+            .filter((id): id is number => id !== null);
+        const settled = blockers.length ? Math.min(...blockers) - 1 : highestSeen;
+        if (settled > state.lastEventId) {
+            state = { lastEventId: settled };
             await writeRelayState(config.statePath, state).catch((error: unknown) => log(`Unable to persist the relay cursor: ${String(error)}`));
         }
     };
@@ -394,6 +451,7 @@ export async function runRelay(options: RelayOptions): Promise<void> {
                 attempt = 0;
                 const event = parseStreamEvent(message);
                 if (!event) continue;
+                highestSeen = Math.max(highestSeen, event.id);
                 const now = clock();
                 await refreshRegistrations(now.getTime());
                 const quiet = inQuietHours(config.quietHours, now, config.timezone);
@@ -411,6 +469,11 @@ export async function runRelay(options: RelayOptions): Promise<void> {
         await sleep(sseBackoffDelay(attempt++));
     }
     clearInterval(ticker);
+    // Shutdown: whatever is still held in the coalescing window goes out now,
+    // and the cursor is persisted, so SIGTERM does not cost a notification or
+    // replay a night's events into the next start.
+    flushing = false;
+    await flushOnce(true).catch((error: unknown) => log(`Final push flush failed: ${String(error)}`));
 }
 
 async function main(): Promise<void> {
