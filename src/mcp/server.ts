@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { mkdir, open, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import sharp from 'sharp';
 import { z } from 'zod';
 
 import type { CreateTaskInput, JsonObject, ScheduleTiming } from '../types.js';
@@ -12,15 +13,18 @@ export const TIKTOK_PLUGIN_ID = 'com.git-agni.tiktok';
 export const SERVER_NAME = 'phone-farm';
 export const SERVER_VERSION = '0.1.0';
 
+// Strict members: a caller that sends `runAt` on a `now` timing, or misspells
+// `timezone`, is told so instead of having the key silently dropped and the
+// task scheduled at a time nobody asked for.
 const timingSchema = z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('now') }),
-    z.object({ kind: z.literal('once'), runAt: z.string().describe('ISO-8601 instant') }),
-    z.object({
+    z.strictObject({ kind: z.literal('now') }),
+    z.strictObject({ kind: z.literal('once'), runAt: z.string().describe('ISO-8601 instant') }),
+    z.strictObject({
         kind: z.literal('daily'),
         localTime: z.string().describe('HH:MM in the given timezone'),
         timezone: z.string().describe('IANA timezone, e.g. Europe/London'),
     }),
-    z.object({
+    z.strictObject({
         kind: z.literal('weekly'),
         localTime: z.string(),
         timezone: z.string(),
@@ -56,6 +60,27 @@ async function attempt(run: () => Promise<ToolResult>): Promise<ToolResult> {
         return failure(errorMessage(error));
     }
 }
+
+/**
+ * A modern phone screenshot is a 1290×2796 PNG — a couple of megabytes, and
+ * roughly three once base64 has expanded it. Sent whole it costs the caller
+ * most of a context window per screenshot and can exceed a transport's message
+ * limit outright, so the image is scaled to something a model can still read.
+ */
+export const MCP_SCREENSHOT_MAX_WIDTH = 800;
+
+export async function shrinkScreenshot(image: Buffer, maxWidth = MCP_SCREENSHOT_MAX_WIDTH): Promise<Buffer> {
+    try {
+        return await sharp(image).resize({ width: maxWidth, fit: 'inside', withoutEnlargement: true })
+            .png({ compressionLevel: 9 }).toBuffer();
+    } catch {
+        // An unexpected encoding is still worth returning; it is the device's screen.
+        return image;
+    }
+}
+
+/** Inline base64 is held whole in memory, twice, before it reaches the disk. */
+export const MAX_INLINE_UPLOAD_BYTES = 32 * 1024 * 1024;
 
 function dataRoot(dependencies: McpDependencies): string {
     return path.resolve(dependencies.dataDirectory ?? process.env.SCHEDULER_DATA_DIR ?? '.scheduler-data');
@@ -126,7 +151,11 @@ function registerDeviceTools(server: McpServer, dependencies: McpDependencies): 
         description: "The device's current screen as a PNG image.",
         inputSchema: { udid: z.string().min(1) },
     }, async ({ udid }) => attempt(async () => ({
-        content: [{ type: 'image' as const, data: (await dependencies.screenshot(udid)).toString('base64'), mimeType: 'image/png' }],
+        content: [{
+            type: 'image' as const,
+            data: (await shrinkScreenshot(await dependencies.screenshot(udid))).toString('base64'),
+            mimeType: 'image/png',
+        }],
     })));
 }
 
@@ -147,7 +176,9 @@ function registerScheduleTools(server: McpServer, dependencies: McpDependencies)
         description: 'Schedule any plugin task. Prefer create_tiktok_post / create_doomscroll for TikTok work.',
         inputSchema: {
             deviceUdid: z.string().min(1),
-            task: z.object({
+            // The task envelope is strict; only `payload` stays open, because
+            // the plugin's own task definition is what validates it.
+            task: z.strictObject({
                 pluginId: z.string().min(1),
                 taskType: z.string().min(1),
                 taskVersion: z.number().int().min(1),
@@ -310,6 +341,10 @@ function registerAssetTools(server: McpServer, dependencies: McpDependencies): v
         const body = sourcePath === undefined
             ? Buffer.from(base64 ?? '', 'base64')
             : await readFile(await resolveUploadPath(sourcePath, allowedUploadDirectories(dependencies)));
+        if (sourcePath === undefined && body.length > MAX_INLINE_UPLOAD_BYTES) {
+            return failure(`base64 uploads are limited to ${MAX_INLINE_UPLOAD_BYTES} bytes — use path for larger files`);
+        }
+        if (!body.length) return failure('The upload is empty');
         const root = dataRoot(dependencies);
         await mkdir(path.join(root, 'uploads'), { recursive: true });
         const relativePath = path.join('uploads', crypto.randomUUID());
