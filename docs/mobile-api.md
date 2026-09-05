@@ -76,6 +76,7 @@ maps a thrown `statusCode` through, defaulting to `400`.
 | `403` | Cross-origin write blocked (missing `Bearer`) |
 | `404` | Unknown device, schedule, execution, or asset |
 | `409` | State conflict — remote input during a run, disabling a busy device, resuming a completed schedule, retrying a non-retryable execution |
+| `413` | Body over the 50 MB limit (`createApp`'s `bodyLimit`). Only reachable on an upload; the message is Fastify's, not the farm's |
 | `429` | Rate limit spent — see below. Carries `x-ratelimit-limit`, `x-ratelimit-remaining`, `x-ratelimit-reset` and `retry-after` |
 | `503` | Subsystem unavailable — device flapping (screenshot), registration not configured, stream down |
 
@@ -90,7 +91,7 @@ Keyset everywhere, in two dialects:
 | Family | Style |
 | --- | --- |
 | `/api/schedules`, `/api/executions` | Keyset (**implemented**). `?limit=` (default and max 200, newest first) plus `?before=<row id or ISO createdAt>`, and the optional `?deviceUdid=`. The next cursor comes back in the **`X-Next-Before`** response header, not in the body. Omit both parameters and the response is exactly what it always was: 200 newest rows and no header. |
-| `/api/events` (planned) | Keyset. `?limit=` (default 50, max 200) plus `?before=<eventId>` to walk backwards, `?since=`/`?until=` for a time window; the cursor is `nextBefore` in the body. |
+| `/api/events` | Keyset (**implemented**). `?limit=` (default 50, max 200) plus `?before=<eventId>` to walk backwards, `?since=`/`?until=` for a time window; the cursor is `nextBefore` in the body. Ids are JSON **numbers**, not strings. |
 
 Event ids are monotonic, so `before` is a stable cursor across inserts. For
 schedules and executions the cursor is `(createdAt, id)`, so two rows created in
@@ -265,44 +266,40 @@ use it — see the plan's §5 note on battery and background limits.
 
 ---
 
-## Fleet — planned
+## Fleet — implemented
 
 ### `GET /api/fleet/summary`
 
-One request that backs the whole Fleet screen. Shape as agreed with the fleet
-page work:
+**Counters only.** This is `summarizeFleet()` in `src/fleet/summary.ts`, shared
+with the `/fleet` page and the tray app. It does **not** carry a device list,
+and its `devices` object is a four-way registration/USB count, *not* the derived
+per-device badge:
 
 ```json
 {
   "generatedAt": "2026-09-05T09:41:12.004Z",
-  "counts": { "total": 12, "online": 10, "busy": 3, "offline": 1, "disabled": 1, "error": 1 },
-  "devices": [
-    {
-      "udid": "00008030-001A2B3C0E88802E",
-      "name": "iPhone 8 · slot 1",
-      "platform": "ios",
-      "tags": ["warm-up"],
-      "state": "busy",
-      "connection": { "physical": "connected", "wda": "ready", "message": "WDA is ready" },
-      "currentExecution": {
-        "id": "0b6d…",
-        "taskType": "doomscroll",
-        "status": "running",
-        "startedAt": "2026-09-05T09:38:02.110Z",
-        "summary": "Doomscroll for 12 minutes"
-      },
-      "nextRunAt": "2026-09-05T14:00:00.000Z",
-      "lastError": null
-    }
-  ]
+  "devices": { "total": 12, "online": 10, "offline": 1, "disabled": 1 },
+  "byPlatform": { "ios": 9, "android": 3 },
+  "running": 3,
+  "queued": 2,
+  "stuck": 0,
+  "failedLast24h": 1,
+  "succeededLast24h": 14,
+  "plannedNext24h": 7
 }
 ```
 
-`state` is the single derived badge the app renders: `online | busy | offline |
-disabled | error`. The derivation is one pure function —
+An earlier sketch of this endpoint described `{ counts, devices }` with a card
+per device. That shape exists, but it is the `fleet` half of
+`GET /api/mobile/bootstrap` — which is therefore what a Fleet screen should
+poll. This one is for a header line and a tray badge.
+
+`state` on a bootstrap device is the single derived badge the app renders:
+`online | busy | offline | disabled | error`. The derivation is one pure
+function —
 `derivedDeviceState` in `src/fleet/summary.ts`, precedence
 `disabled → offline → error → busy → online` — and
-`GET /api/mobile/bootstrap` already returns it per device, so the app never
+`GET /api/mobile/bootstrap` returns it per device, so the app never
 re-derives a badge from four fields.
 
 ### `POST /api/schedules/bulk`
@@ -318,14 +315,21 @@ re-derives a badge from four fields.
 ```
 
 `deviceUdids` and `tags` are unioned. Response reports per-device outcome so a
-partial failure is legible:
+partial failure is legible — `created`/`failed` are **counts**, and the rows are
+in `results`:
 
 ```json
 {
-  "created": [{ "deviceUdid": "00008030-…", "scheduleId": "8c1f…" }],
-  "failed":  [{ "deviceUdid": "R58N12ABCDE", "error": "This device is disabled — activate it before scheduling automation" }]
+  "created": 1,
+  "failed": 1,
+  "results": [
+    { "deviceUdid": "00008030-…", "ok": true, "scheduleId": "8c1f…" },
+    { "deviceUdid": "R58N12ABCDE", "ok": false, "error": "This device is disabled — activate it before scheduling automation" }
+  ]
 }
 ```
+
+`201` when anything was created, `400` when nothing was.
 
 ---
 
@@ -464,7 +468,7 @@ Returns the new execution row, or `409` `"Execution is not retryable"`.
 
 ---
 
-## Events — planned
+## Events — implemented
 
 ### `GET /api/events`
 
@@ -472,7 +476,7 @@ Returns the new execution row, or `409` `"Execution is not retryable"`.
 | --- | --- |
 | `since` | ISO timestamp, inclusive lower bound |
 | `until` | ISO timestamp, exclusive upper bound |
-| `kind` | Repeatable; one of the kinds below |
+| `kind` | **One** of the kinds below. Not repeatable — `parseEventQuery` reads a single string, so `?kind=a&kind=b` is a `400`. Filter on more than one client-side. |
 | `deviceUdid` | Filter to one device |
 | `severity` | `info \| warning \| error` |
 | `limit` | Default 50, max 200 |
@@ -482,23 +486,44 @@ Returns the new execution row, or `409` `"Execution is not retryable"`.
 {
   "events": [
     {
-      "id": "01J9Z3M8QF7B0C2S4T6V8XYZAB",
+      "id": 42,
       "kind": "execution.failed",
       "severity": "error",
       "deviceUdid": "00008030-001A2B3C0E88802E",
       "executionId": "0b6d1c77-5e1a-4d33-9b8e-2f5a9c0f7e42",
       "scheduleId": "8c1f6b2e-9c0a-4a5f-9a1e-1f0f4b6d7c11",
-      "title": "Doomscroll failed on iPhone 8 · slot 1",
-      "message": "TikTok did not reach the feed after 3 attempts",
-      "data": { "attempt": 3, "exitCode": 1 },
+      "title": "com.git-agni.tiktok/doomscroll@1 failed on 00008030-001A2B3C0E88802E",
+      "detail": {
+        "task": "com.git-agni.tiktok/doomscroll@1",
+        "status": "failed",
+        "scheduledFor": "2026-09-05T13:30:00.000Z",
+        "deadlineAt": "2026-09-05T14:00:00.000Z",
+        "exitCode": 1,
+        "error": "TikTok did not reach the feed"
+      },
       "createdAt": "2026-09-05T13:44:02.118Z"
     }
   ],
-  "nextBefore": "01J9Z3M8QF7B0C2S4T6V8XYZAB"
+  "nextBefore": 42
 }
 ```
 
 `nextBefore` is absent when the page is the last one.
+
+`serializeEvent` (`src/fleet/events.ts`) sends exactly these nine keys.
+Two corrections to the earlier sketch of this shape, which described a
+`message` string and a `data` object:
+
+- `id` is the `scheduler.events` bigint identity, a JSON **number**. Cursors
+  (`before`, `upToId`) compare numerically; only the SSE `Last-Event-ID`
+  header carries it as a string.
+- There is no `message`. The structured payload is **`detail`**, and it is
+  `null` when the recorder wrote none. `title` is the operator-facing line;
+  a prose body is the client's to compose from `detail` (`eventText()` in
+  `@farm/client` does it). The keys in `detail` are whatever the recorder put
+  there: `task`/`status`/`exitCode`/`error` for an execution
+  (`src/fleet/scheduler-events.ts`), `physical`/`wda`/`message` for a device
+  (`src/fleet/device-monitor.ts`), counters for the daily digest.
 
 **Kinds and their default severity**
 
@@ -506,16 +531,16 @@ Returns the new execution row, or `409` `"Execution is not retryable"`.
 | --- | --- | --- |
 | `execution.started` | info | `deviceUdid`, `executionId`, `scheduleId` |
 | `execution.succeeded` | info | as above |
-| `execution.failed` | error | as above + `data.exitCode` |
+| `execution.failed` | error | as above + `detail.exitCode`, `detail.error` |
 | `execution.stopped` | warning | as above |
-| `execution.stuck` | warning | as above + `data.stuckForSeconds` |
-| `device.connected` | info | `deviceUdid` |
-| `device.disconnected` | warning | `deviceUdid` |
-| `device.error` | error | `deviceUdid` + `data.message` |
+| `execution.stuck` | error | as above + `detail.deadlineAt`, `detail.startedAt` |
+| `device.connected` | info | `deviceUdid` + `detail.message` |
+| `device.disconnected` | warning | `deviceUdid` + `detail.message` |
+| `device.error` | error | `deviceUdid` + `detail.error` |
 | `schedule.created` | info | `scheduleId`, `deviceUdid` |
 | `schedule.paused` | info | `scheduleId` |
 | `schedule.cancelled` | info | `scheduleId` |
-| `digest.daily` | info | `data` = roll-up counters, no device |
+| `digest.daily` | info | `detail` = roll-up counters, no device |
 
 Only `execution.failed`, `device.disconnected`, `device.error` and
 `execution.stuck` should be push-worthy by default.
@@ -525,9 +550,9 @@ Only `execution.failed`, `device.disconnected`, `device.error` and
 Server-Sent Events. `Accept: text/event-stream`, same bearer token.
 
 ```
-id: 01J9Z3M8QF7B0C2S4T6V8XYZAB
+id: 42
 event: execution.failed
-data: {"id":"01J9Z3M8QF7B0C2S4T6V8XYZAB","kind":"execution.failed","severity":"error","deviceUdid":"00008030-…","title":"Doomscroll failed on iPhone 8 · slot 1","message":"TikTok did not reach the feed after 3 attempts","createdAt":"2026-09-05T13:44:02.118Z"}
+data: {"id":42,"kind":"execution.failed","severity":"error","deviceUdid":"00008030-…","executionId":"0b6d…","scheduleId":"8c1f…","title":"com.git-agni.tiktok/doomscroll@1 failed on 00008030-…","detail":{"exitCode":1,"error":"TikTok did not reach the feed"},"createdAt":"2026-09-05T13:44:02.118Z"}
 
 : heartbeat
 
@@ -538,8 +563,10 @@ data: {"id":"01J9Z3M8QF7B0C2S4T6V8XYZAB","kind":"execution.failed","severity":"e
 - A comment line (`: heartbeat`) every **15 s** keeps intermediaries and
   Tailscale's idle handling from dropping the socket. Treat >40 s of silence as
   a dead connection and reconnect.
-- Reconnect with `Last-Event-ID: <id>` to replay everything after that id.
-  Persist the last id the app *rendered*, not the last it received.
+- Reconnect with `Last-Event-ID: <id>` to replay everything after that id, or
+  with `?lastEventId=`. Persist the last id the app *rendered*, not the last it
+  received. `0` is a valid cursor meaning "from the beginning", so do not test
+  it for truthiness.
 
 React Native's `fetch` does not stream. Use `react-native-sse` or an
 `XMLHttpRequest` reader; either way the header must be set manually, since
