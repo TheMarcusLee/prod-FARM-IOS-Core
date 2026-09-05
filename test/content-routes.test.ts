@@ -126,7 +126,7 @@ test('the dashboard links to /content and the page renders', async (context) => 
 
     const index = await inject(app, { method: 'GET', url: '/' });
     assert.equal(index.statusCode, 200);
-    assert.match(index.body, /href="\/content"[^>]*>Content</);
+    assert.match(index.body, /href="\/content"[^>]*>(?:<svg[\s\S]*?<\/svg>)?Content</);
 
     const page = await inject(app, { method: 'GET', url: '/content' });
     assert.equal(page.statusCode, 200);

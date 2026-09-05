@@ -255,60 +255,92 @@ test('the fleet summary counts device states, running work and the 24 hour windo
     assert.equal(response.json().generatedAt, NOW.toISOString());
 });
 
-test('the fleet page renders a card per device with badges, tags, activity and a lazy thumbnail', async (context) => {
-    const store = createMemoryEventStore();
-    await store.record({ kind: 'device.disconnected', severity: 'warning', deviceUdid: 'udid-b', title: 'Device udid-b went offline' });
+test('the wall renders a numbered tile per phone, with its state and a live frame', async (context) => {
+    await writeFile(DEVICES_PATH, JSON.stringify([
+        device({ tags: ['warm', 'uk'], pluginData: { 'com.git-agni.tiktok': { accounts: ['@one', '@two'] } } }),
+        device({ udid: 'udid-b', name: 'Pixel', platform: 'android', tags: ['uk'] }),
+        device({ udid: 'udid-c', name: 'Retired', disabled: true }),
+    ]));
     const scheduler = fakeScheduler({
         async listExecutions() { return [executionRow()]; },
-        async listSchedules() { return [scheduleRow({ deviceUdid: 'udid-b' })]; },
+        async listSchedules() { return [scheduleRow({ deviceUdid: 'udid-a' })]; },
+        async execution() { return { ...executionRow(), logs: ['11:00:04 Tapped Create, then Upload'] }; },
     } as unknown as Partial<SchedulerRepository>);
-    const app = await fleetApp({
-        scheduler, events: store,
-        loadDevices: async () => [
-            device({ tags: ['warm', 'uk'], pluginData: { 'com.git-agni.tiktok': { accounts: ['@one', '@two'] } } }),
-            device({ udid: 'udid-b', name: 'Pixel', platform: 'android', tags: ['uk'] }),
-            device({ udid: 'udid-c', name: 'Retired', disabled: true }),
-        ],
+    const { createApp } = await import('../src/api/app.js');
+    const { PluginRegistry } = await import('../src/registry.js');
+    const { defaultDashboardTheme } = await import('../src/dashboard-theme.js');
+    const app = await createApp({
+        plugins: new PluginRegistry([]), scheduler, dashboardTheme: defaultDashboardTheme,
         connectedUdids: async () => ['udid-a'],
     });
     context.after(() => app.close());
 
-    const page = await inject(app, { method: 'GET', url: '/fleet' });
+    const page = await inject(app, { method: 'GET', url: '/' });
     assert.equal(page.statusCode, 200);
     assert.match(String(page.headers['content-type']), /text\/html/);
 
-    // State, platform and driver badges
-    assert.match(page.body, /data-udid="udid-a" data-state="online" data-platform="ios" data-tags="warm,uk"/);
-    assert.match(page.body, /data-udid="udid-b" data-state="offline" data-platform="android"/);
-    assert.match(page.body, /data-udid="udid-c" data-state="disabled"/);
-    assert.match(page.body, /badge state-online">Online</);
-    assert.match(page.body, /badge state-offline">Offline</);
-    assert.match(page.body, /badge state-disabled">Disabled</);
-    assert.match(page.body, /badge platform-android">Android</);
-    assert.match(page.body, /badge driver">adb</);
-    assert.match(page.body, /badge tag">warm</);
+    // One tile per phone, numbered in registration order, with the derived state.
+    assert.match(page.body, /data-tile data-udid="udid-a" data-slot="01" data-state="busy" data-platform="ios"/);
+    assert.match(page.body, /data-tile data-udid="udid-b" data-slot="02" data-state="offline" data-platform="android"/);
+    assert.match(page.body, /data-tile data-udid="udid-c" data-slot="03" data-state="disabled"/);
+    assert.match(page.body, /<span class="bl-tile-num">01<\/span><span class="bl-tile-name">Phone A<\/span>/);
+    assert.match(page.body, /data-tags="warm,uk"/);
 
-    // Screenshots are wired only for the online device, and lazily (no src attribute).
-    assert.match(page.body, /data-shot="\/api\/devices\/udid-a\/remote\/screenshot"/);
-    assert.doesNotMatch(page.body, /data-shot="\/api\/devices\/udid-c/);
-    assert.doesNotMatch(page.body, /data-shot="\/api\/devices\/udid-b/);
+    // Only a connected, enabled phone gets a frame, and never with a src the page ships.
+    assert.equal((page.body.match(/data-frame/g) ?? []).length, 2, 'one tile frame plus the inspector viewer');
     assert.doesNotMatch(page.body, /<img[^>]+src="\/api\/devices/);
 
-    // Current execution, next run, last event, accounts, tag editor, filters, bulk actions
-    assert.match(page.body, /running · com\.git-agni\.tiktok\/doomscroll/);
-    assert.match(page.body, /next 2026-03-01T18:00:00\.000Z/);
-    assert.match(page.body, /device\.disconnected · Device udid-b went offline/);
-    assert.match(page.body, /<option value="@one">@one<\/option>/);
-    assert.match(page.body, /data-tag-form data-udid="udid-a"/);
-    assert.match(page.body, /id="filter-tag"[\s\S]*<option value="uk">uk<\/option>/);
-    assert.match(page.body, /id="filter-platform"/);
-    assert.match(page.body, /id="filter-state"/);
-    for (const action of ['pause', 'resume', 'disable', 'enable', 'reconnect']) {
-        assert.match(page.body, new RegExp(`data-bulk="${action}"`));
+    // The filter panel: connection segments, group chips from the tags, the numbered picker.
+    for (const filter of ['all', 'usb', 'wifi', 'ios']) {
+        assert.match(page.body, new RegExp(`data-link-filter="${filter}"`));
     }
-    assert.match(page.body, /id="bulk-doomscroll"/);
-    assert.match(page.body, /id="bulk-post"/);
+    assert.match(page.body, /data-group="uk"[^>]*>uk 2</);
+    assert.match(page.body, /data-pick="udid-b"[^>]*>02</);
+    assert.match(page.body, /1 of 3 up/);
+
+    // The toolbar acts on the selection.
+    for (const action of ['select-all', 'schedule-post', 'warm-up', 'push-media', 'run-runbook', 'install-apk', 'reconnect', 'pause']) {
+        assert.match(page.body, new RegExp(`data-wall-action="${action}"`));
+    }
+
+    // The inspector opens on the connected phone, with its viewer, hardware column and log.
+    assert.match(page.body, /id="inspector" data-udid="udid-a"/);
+    assert.match(page.body, /data-viewer data-udid="udid-a" data-platform="ios" data-live="1"/);
+    assert.match(page.body, /data-hw="home"/);
+    // Back and recents are Android keys; an iPhone has neither.
+    assert.doesNotMatch(page.body, /data-hw="recents"/);
+    assert.match(page.body, /Tapped Create, then Upload/);
+    assert.match(page.body, /Next post/);
+    assert.match(page.body, /Today/);
+    assert.match(page.body, /2 needs you/);
+
+    // The old fleet grid's bookmark still works.
+    const moved = await inject(app, { method: 'GET', url: '/fleet' });
+    assert.equal(moved.statusCode, 302);
+    assert.equal(moved.headers.location, '/');
 });
+
+test('the inspector fragment renders one phone, and an Android one gets the Android keys', async (context) => {
+    await writeFile(DEVICES_PATH, JSON.stringify([
+        device({ udid: 'udid-b', name: 'Pixel', platform: 'android', driver: 'adb', android: { serial: 'udid-b' } }),
+    ]));
+    const { createApp } = await import('../src/api/app.js');
+    const { PluginRegistry } = await import('../src/registry.js');
+    const { defaultDashboardTheme } = await import('../src/dashboard-theme.js');
+    const app = await createApp({
+        plugins: new PluginRegistry([]), scheduler: fakeScheduler(), dashboardTheme: defaultDashboardTheme,
+        connectedUdids: async () => ['udid-b'],
+    });
+    context.after(() => app.close());
+
+    const fragment = await inject(app, { method: 'GET', url: '/api/fragments/inspector/udid-b' });
+    assert.equal(fragment.statusCode, 200);
+    assert.match(fragment.body, /id="inspector" data-udid="udid-b"/);
+    assert.match(fragment.body, /data-hw="back"/);
+    assert.match(fragment.body, /data-hw="recents"/);
+    assert.equal((await inject(app, { method: 'GET', url: '/api/fragments/inspector/nope' })).statusCode, 404);
+});
+
 
 test('PATCH /api/devices/:udid stores tags and rejects anything that is not a string array', async (context) => {
     const configPath = DEVICES_PATH;
@@ -463,39 +495,35 @@ test('scheduler lifecycle signals map onto the event contract', () => {
 
 /* ------------------------------------------------- rendering and summary cost */
 
-test('every interpolation on the fleet page is escaped', async (context) => {
-    const store = createMemoryEventStore();
-    await store.record({
-        kind: 'device.error', severity: 'error', deviceUdid: 'udid-x',
-        title: 'Device <script>alert("event")</script> broke',
-        detail: { error: '<img src=x onerror=alert(1)>' },
-    });
+test('every interpolation on the Control Center is escaped', async (context) => {
+    await writeFile(DEVICES_PATH, JSON.stringify([{
+        name: '<script>alert("name")</script>',
+        udid: 'udid-x',
+        tags: ['" onmouseover="alert(2)', "it's fine"],
+        pluginData: { 'com.git-agni.tiktok': { accounts: ['</option><script>alert(3)</script>'] } },
+    }]));
     const scheduler = fakeScheduler({
         async listExecutions() {
             return [executionRow({ deviceUdid: 'udid-x', status: 'running', taskType: '"><script>alert(4)</script>' })];
         },
         async listSchedules() { return []; },
+        async execution() { return { ...executionRow(), logs: ['<img src=x onerror=alert(1)>'] }; },
     } as unknown as Partial<SchedulerRepository>);
-    const app = await fleetApp({
-        scheduler, events: store,
-        loadDevices: async () => [device({
-            udid: 'udid-x',
-            name: '<script>alert("name")</script>',
-            tags: ['" onmouseover="alert(2)', "it's fine"],
-            pluginData: { 'com.git-agni.tiktok': { accounts: ['</option><script>alert(3)</script>'] } },
-        })],
+    const { createApp } = await import('../src/api/app.js');
+    const { PluginRegistry } = await import('../src/registry.js');
+    const { defaultDashboardTheme } = await import('../src/dashboard-theme.js');
+    const app = await createApp({
+        plugins: new PluginRegistry([]), scheduler, dashboardTheme: defaultDashboardTheme,
         connectedUdids: async () => ['udid-x'],
     });
     context.after(() => app.close());
 
-    const page = await inject(app, { method: 'GET', url: '/fleet' });
+    const page = await inject(app, { method: 'GET', url: '/' });
     assert.equal(page.statusCode, 200);
-    // The only <script> element on the page is the one the page ships itself:
-    // every injected one survives as &lt;script&gt; text.
+    // The only <script> elements are the ones the shell ships itself: htmx, the shared
+    // page script and the wall. Every injected one survives as &lt;script&gt; text.
     const scripts = page.body.match(/<script\b/g) ?? [];
-    assert.equal(scripts.length, 1, `found ${scripts.length} script tags`);
-    // None of the injection signatures survive as markup: no raw tag, and no
-    // quote that closes an attribute and opens a handler.
+    assert.equal(scripts.length, 3, `found ${scripts.length} script tags`);
     assert.doesNotMatch(page.body, /<script>alert/);
     assert.doesNotMatch(page.body, /<\/option><script/);
     assert.doesNotMatch(page.body, /"><script/);
@@ -511,6 +539,7 @@ test('every interpolation on the fleet page is escaped', async (context) => {
     assert.equal(escapeHtml(null), '');
     assert.equal(escapeHtml(7), '7');
 });
+
 
 test('twelve pollers on the summary cost one device enumeration, not twelve', async (context) => {
     let enumerations = 0;

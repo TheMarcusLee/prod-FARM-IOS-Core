@@ -65,6 +65,8 @@ export interface CreateAppOptions {
      * the connection manager; a test or the preview script hands over a list.
      */
     connectedUdids?: () => Promise<string[]>;
+    /** The event log behind Alerts and the sidebar's unread count; production builds it from the database. */
+    events?: EventStore;
     logger?: boolean;
 }
 
@@ -385,7 +387,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
     // The event log backs the Alerts page and the sidebar's unread count. A farm
     // with no scheduler database simply has no alerts, which is not an error.
-    let eventLog: EventStore | null = null;
+    let eventLog: EventStore | null = options.events ?? null;
     const events = (): EventStore | null => {
         if (!eventLog) {
             try {
@@ -476,7 +478,10 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         const versions: Record<string, string> = {};
         for (const [name, value] of assets) versions[name] = assetHash(value.body);
         const finalize = (html: string) => {
-            let out = html.replaceAll('__AUTH_NAV__', '').replaceAll('__PLUGIN_NAV__', '').replaceAll('__FOOTER__', '');
+            // The Schedule/Content templates are still whole documents with their own nav
+            // placeholders; the shell-rendered pages carry neither.
+            let out = html.replaceAll('__AUTH_NAV__', authNavHtml)
+                .replaceAll('__PLUGIN_NAV__', pluginNavHtml).replaceAll('__FOOTER__', '');
             for (const [name, v] of Object.entries(versions)) out = out.replaceAll(`/assets/${name}`, `/assets/${name}?v=${v}`);
             return out;
         };
@@ -1164,6 +1169,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
             title: 'Rig', active: 'rig',
             body: renderRigPage(rigServices(context.facts)),
             toolbarRight: `<span>${escapeHtml(context.rig.headline)}</span>`,
+            head: scriptTag('shell.js'),
             rig: context.rig, unreadAlerts: context.unread,
             pluginNav: pluginNavHtml, authNav: authNavHtml, theme: context.theme,
         }));
