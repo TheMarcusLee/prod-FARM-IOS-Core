@@ -12,8 +12,8 @@ import { router } from 'expo-router';
 import { FarmError } from '@farm/client';
 import { ErrorState } from '../src/components';
 import { AlertsScreen } from '../src/screens/AlertsScreen';
-import { FleetScreen } from '../src/screens/FleetScreen';
-import { QueueScreen } from '../src/screens/QueueScreen';
+import { ScheduleScreen } from '../src/screens/ScheduleScreen';
+import { WallScreen } from '../src/screens/WallScreen';
 import { ThemeProvider } from '../src/theme';
 import { StorageKeys } from '../src/lib/storage';
 import { Providers } from './render';
@@ -52,14 +52,14 @@ describe('screens with an unreachable or unhappy farm', () => {
         (globalThis as { fetch: unknown }).fetch = realFetch;
     });
 
-    it('Fleet says it cannot reach the Mac, with nothing cached to fall back on', async () => {
+    it('Wall says it cannot reach the Mac, with nothing cached to fall back on', async () => {
         await configureRealFarm();
         answerWith(() => {
             throw new TypeError('Network request failed');
         });
 
-        await render(<FleetScreen />, { wrapper: Providers });
-        await screen.findByTestId('fleet-error', {}, { timeout: 10_000 });
+        await render(<WallScreen />, { wrapper: Providers });
+        await screen.findByTestId('wall-error', {}, { timeout: 10_000 });
         expect(screen.getByText("Can't reach the Mac")).toBeTruthy();
         expect(screen.getByText(/both on the tailnet/)).toBeTruthy();
     });
@@ -75,12 +75,12 @@ describe('screens with an unreachable or unhappy farm', () => {
         expect(screen.queryByTestId('error-retry')).toBeNull();
     });
 
-    it('Queue shows the farm\'s own countdown for a 429 and offers no immediate retry', async () => {
+    it('Schedule shows the farm\'s own countdown for a 429 and offers no immediate retry', async () => {
         await configureRealFarm();
         answerWith(() => json({ error: 'Rate limit exceeded — retry in 6 seconds' }, 429, { 'retry-after': '6' }));
 
-        await render(<QueueScreen />, { wrapper: Providers });
-        await screen.findByTestId('queue-error', {}, { timeout: 10_000 });
+        await render(<ScheduleScreen />, { wrapper: Providers });
+        await screen.findByTestId('schedule-error', {}, { timeout: 10_000 });
         expect(screen.getByText('Slow down')).toBeTruthy();
         expect(screen.getByText(/Try again in 6s/)).toBeTruthy();
         expect(screen.queryByTestId('error-retry')).toBeNull();

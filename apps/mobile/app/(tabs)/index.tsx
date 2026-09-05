@@ -1,5 +1,5 @@
-import { FleetScreen } from '../../src/screens/FleetScreen';
+import { WallScreen } from '../../src/screens/WallScreen';
 
-export default function FleetRoute() {
-    return <FleetScreen />;
+export default function WallRoute() {
+    return <WallScreen />;
 }
