@@ -92,7 +92,7 @@ export interface DeviceDriver {
 export interface AndroidDeviceConfig {
     /** `adb` serial, e.g. `R58N12ABCDE` or `192.168.1.40:5555` for wireless debugging. */
     serial: string;
-    /** sim-use bridge base URL, e.g. `http://127.0.0.1:18300` (adb forward) or `http://192.168.1.40:18300` (Wi-Fi). */
+    /** sim-use bridge base URL, e.g. `http://127.0.0.1:18300` (adb forward to the phone's 8080) or `http://192.168.1.40:8080` (Wi-Fi). */
     bridgeUrl?: string;
     /** Bearer token minted by the bridge's ContentProvider during bootstrap. */
     bridgeToken?: string;

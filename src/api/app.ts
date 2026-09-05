@@ -8,9 +8,10 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 
-import { discoverConnectedDevices } from '../devices/discovery.js';
+import { discoverConnectedDevices, devicePlatform, type Device } from '../devices/discovery.js';
 import { loadRegisteredDevices, mutateRegisteredDevices, saveRegisteredDevices, redactDevice, PASSCODE_PATTERN, type RegisteredDevice } from '../devices/registry.js';
-import type { AndroidDeviceConfig } from '../drivers/types.js';
+import { driverForDevice, driverKindOf, platformOf } from '../drivers/select.js';
+import type { AndroidDeviceConfig, DeviceDriver } from '../drivers/types.js';
 import {
     CALIBRATABLE_POINTS, POINT_LABELS, coordinatesForProfile, resolveDeviceCoordinates, validateCoordinateOverrides,
 } from '../devices/coordinates.js';
@@ -32,6 +33,8 @@ export interface CreateAppOptions {
     authProvider?: AuthProvider | null;
     dashboardTheme?: DashboardTheme;
     registrations?: DeviceRegistrationManager;
+    /** How an Android device record becomes a live driver; tests inject a fake. iOS never uses it. */
+    createDriver?: (device: RegisteredDevice) => DeviceDriver;
     logger?: boolean;
 }
 
@@ -96,6 +99,35 @@ async function registeredWithStatus() {
     }));
 }
 
+/** "iOS 16.7" / "Android 14" — every status line that used to hard-code iOS goes through here. */
+function osLabel(device: Pick<Device, 'platform' | 'osVersion'>): string {
+    return `${devicePlatform(device) === 'android' ? 'Android' : 'iOS'} ${device.osVersion}`;
+}
+
+/** Small pills on the grid and the device page so a mixed fleet reads at a glance. */
+function platformBadges(device: Pick<RegisteredDevice, 'platform' | 'driver' | 'android'>): string {
+    const platform = platformOf(device);
+    return `<span class="badge platform-${platform}">${platform === 'android' ? 'Android' : 'iOS'}</span>`
+        + `<span class="badge driver">${escapeHtml(driverKindOf(device))}</span>`;
+}
+
+/** The Android remote verbs the dashboard can send; the rest are iOS/WDA-only. */
+type AndroidRemoteAction = RemoteAction | { type: 'back' } | { type: 'text'; text: string };
+
+async function performAndroidAction(driver: DeviceDriver, action: AndroidRemoteAction): Promise<void> {
+    switch (action.type) {
+        case 'tap': return driver.tap({ x: action.x, y: action.y });
+        case 'swipe': return driver.swipe({
+            from: { x: action.startX, y: action.startY }, to: { x: action.endX, y: action.endY },
+            durationMs: action.durationMs,
+        });
+        case 'home': return driver.pressKey('home');
+        case 'back': return driver.pressKey('back');
+        case 'text': return driver.type(action.text);
+        default: throw httpError(400, `"${action.type}" is an iOS-only remote action`);
+    }
+}
+
 export async function createApp(options: CreateAppOptions): Promise<FastifyInstance> {
     const app = Fastify({ logger: options.logger ?? false, bodyLimit: 50 * 1024 * 1024 });
     await app.register(formbody);
@@ -149,6 +181,13 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     }
 
     const remote = new RegistryWdaRemoteControl();
+    const createDriver = options.createDriver ?? ((device: RegisteredDevice) => driverForDevice(device));
+    // Every Android-aware route starts here: iOS (and unknown udids) get undefined and
+    // keep the WDA path they have always had.
+    const androidDevice = async (udid: string): Promise<RegisteredDevice | undefined> => {
+        const device = (await loadRegisteredDevices()).find((entry) => entry.udid === udid);
+        return device && platformOf(device) === 'android' ? device : undefined;
+    };
     const logoutPath = options.authProvider?.logoutPath;
     const authNavHtml = logoutPath
         ? `<a class="button secondary app-logout" href="${escapeHtml(logoutPath)}">Log out</a>` : '';
@@ -399,11 +438,18 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     app.get<{ Params: { udid: string } }>('/api/devices/:udid/remote/info', async (request, reply) => {
         const device = (await discoverConnectedDevices()).find(({ udid }) => udid === request.params.udid);
         if (!device) return reply.code(404).send({ error: 'Device is not connected' });
+        const android = await androidDevice(device.udid);
+        if (android) {
+            const { width, height, scale } = await createDriver(android).screen();
+            return { device, screen: { screenSize: { width, height }, scale } };
+        }
         return { device, screen: await remote.getScreenInfo(device.udid) };
     });
     app.get<{ Params: { udid: string } }>('/api/devices/:udid/remote/screenshot', async (request, reply) => {
         try {
-            return reply.header('cache-control', 'no-store').type('image/png').send(await remote.getScreenshot(request.params.udid));
+            const android = await androidDevice(request.params.udid);
+            const image = android ? await createDriver(android).screenshot() : await remote.getScreenshot(request.params.udid);
+            return reply.header('cache-control', 'no-store').type('image/png').send(image);
         } catch {
             // A flapping device shouldn't spew 500s into the log every 5s from the grid poll.
             return reply.code(503).header('cache-control', 'no-store').send();
@@ -420,11 +466,13 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
             .type(upstream.headers.get('content-type') ?? 'multipart/x-mixed-replace; boundary=--BoundaryString')
             .send(Readable.from(upstream.body as AsyncIterable<Uint8Array>));
     });
-    app.post<{ Params: { udid: string }; Body: RemoteAction }>('/api/devices/:udid/remote/action', async (request, reply) => {
+    app.post<{ Params: { udid: string }; Body: AndroidRemoteAction }>('/api/devices/:udid/remote/action', async (request, reply) => {
         if (await options.scheduler.activeExecution(request.params.udid)) {
             return reply.code(409).send({ error: 'Remote input is disabled while automation is running' });
         }
-        await remote.performAction(request.params.udid, request.body);
+        const android = await androidDevice(request.params.udid);
+        if (android) await performAndroidAction(createDriver(android), request.body);
+        else await remote.performAction(request.params.udid, request.body as RemoteAction);
         return { ok: true };
     });
     app.get<{ Params: { udid: string } }>('/api/devices/:udid/connection', async (request, reply) => {
@@ -441,6 +489,19 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
             }
         } catch { /* supervisor socket unavailable — fall back to a probe */ }
         const connected = (await discoverConnectedDevices()).some(({ udid }) => udid === registered.udid);
+        if (platformOf(registered) === 'android') {
+            // There is no WDA to probe: adb visibility (or the bridge, which the
+            // supervisor above tracks) is the whole connection story.
+            const status: DeviceConnectionStatus = {
+                udid: registered.udid, physical: connected ? 'connected' : 'disconnected',
+                wda: connected ? 'ready' : 'disconnected', appium: 'unavailable', managed: false,
+                message: connected
+                    ? `${driverKindOf(registered)} is connected`
+                    : 'Not visible to adb — check the USB cable or wireless debugging',
+                retryCount: 0, updatedAt: new Date().toISOString(),
+            };
+            return status;
+        }
         let wda = false;
         try {
             wda = (await fetch(`http://127.0.0.1:${registered.wdaLocalPort ?? 8100}/status`, { signal: AbortSignal.timeout(2_000) })).ok;
@@ -604,7 +665,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
                 const preview = device.connected
                     ? `<div class="device-preview-frame"><img class="device-preview" src="/api/devices/${encodeURIComponent(device.udid)}/remote/screenshot?t=${Date.now()}" alt="Screen of ${escapeHtml(device.name)}" draggable="false" onerror="this.style.visibility='hidden'"></div>`
                     : '<div class="device-preview-frame unavailable" aria-hidden="true"><div class="device-icon"></div></div>';
-                return `<article class="device-card">${preview}<div class="device-copy"><h2>${escapeHtml(device.name)}</h2><p>${device.connected ? `iOS ${escapeHtml(device.connected.osVersion)}` : escapeHtml(device.udid)}</p><span class="connected${device.connected ? '' : ' offline'}"><span></span>${device.connected ? 'Online' : 'Offline'}</span>${accounts.length ? `<p class="accounts">${accounts.map(escapeHtml).join(', ')}</p>` : ''}</div><div class="device-card-actions"><a class="button secondary" href="/devices/${encodeURIComponent(device.udid)}">Open device <span aria-hidden="true">→</span></a>${toggleButton(device.udid, 'Disconnect', true)}</div></article>`;
+                return `<article class="device-card">${preview}<div class="device-copy"><h2>${escapeHtml(device.name)}</h2><p class="device-badges">${platformBadges(device)}</p><p>${device.connected ? escapeHtml(osLabel(device.connected)) : escapeHtml(device.udid)}</p><span class="connected${device.connected ? '' : ' offline'}"><span></span>${device.connected ? 'Online' : 'Offline'}</span>${accounts.length ? `<p class="accounts">${accounts.map(escapeHtml).join(', ')}</p>` : ''}</div><div class="device-card-actions"><a class="button secondary" href="/devices/${encodeURIComponent(device.udid)}">Open device <span aria-hidden="true">→</span></a>${toggleButton(device.udid, 'Disconnect', true)}</div></article>`;
             }).join('');
             const disabledPanel = disabled.length
                 ? `<details class="disabled-devices"${disabled.length ? '' : ' hidden'}><summary>Disconnected devices (${disabled.length})</summary><ul>${disabled.map((device) => `<li><span>${escapeHtml(device.name)}</span>${toggleButton(device.udid, 'Reconnect', false)}</li>`).join('')}</ul></details>`
@@ -615,8 +676,15 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         app.get<{ Params: { udid: string } }>('/api/devices/:udid/fragments/summary', async (request, reply) => {
             const device = (await discoverConnectedDevices()).find(({ udid }) => udid === request.params.udid);
             if (!device) return reply.type('text/html').send('<section id="device-summary" class="device-summary error"><div><h2>Device disconnected</h2></div></section>');
-            const screen = await remote.getScreenInfo(device.udid);
-            return reply.type('text/html').send(`<section id="device-summary" class="device-summary" data-screen-width="${screen.screenSize.width}" data-screen-height="${screen.screenSize.height}"><div><span class="eyebrow">Connected device</span><h1>${escapeHtml(device.name)}</h1><p>iOS ${escapeHtml(device.osVersion)} · ${screen.screenSize.width} × ${screen.screenSize.height} points · ${screen.scale}×</p></div><code>${escapeHtml(device.udid)}</code></section>`);
+            const android = await androidDevice(device.udid);
+            // Android has no WebDriverAgent to ask; its screen comes from the device's own driver.
+            const screen = android
+                ? await createDriver(android).screen()
+                : await remote.getScreenInfo(device.udid).then(({ screenSize, scale }) => ({ ...screenSize, scale }));
+            const registered = (await loadRegisteredDevices()).find(({ udid }) => udid === device.udid);
+            const badges = registered ? platformBadges(registered) : platformBadges({ platform: devicePlatform(device) });
+            const units = devicePlatform(device) === 'android' ? 'pixels' : 'points';
+            return reply.type('text/html').send(`<section id="device-summary" class="device-summary" data-screen-width="${screen.width}" data-screen-height="${screen.height}" data-platform="${escapeHtml(devicePlatform(device))}" data-driver="${escapeHtml(registered ? driverKindOf(registered) : 'wda')}"><div><span class="eyebrow">Connected device</span><h1>${escapeHtml(device.name)}</h1><p class="device-badges">${badges}</p><p>${escapeHtml(osLabel(device))} · ${screen.width} × ${screen.height} ${units} · ${screen.scale}×</p></div><code>${escapeHtml(device.udid)}</code></section>`);
         });
         app.get<{ Params: { udid: string } }>('/api/devices/:udid/fragments/activity', async (request, reply) => {
             return reply.type('text/html').send(await renderActivity(request.params.udid));
@@ -626,10 +694,10 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     app.get('/', async (_request, reply) => {
         if (themed) return reply.type('text/html').send(themed.indexHtml);
         const devices = await registeredWithStatus();
-        const cards = devices.map((device) => `<div class="card"><h2>${escapeHtml(device.name)}</h2><p class="muted"><code>${escapeHtml(device.udid)}</code></p><p>${device.disabled ? 'Disconnected' : device.connected ? `Online · iOS ${escapeHtml(device.connected.osVersion)}` : 'Offline'}</p><a class="button" href="/devices/${encodeURIComponent(device.udid)}">Open device</a></div>`).join('');
+        const cards = devices.map((device) => `<div class="card"><h2>${escapeHtml(device.name)}</h2><p class="muted"><code>${escapeHtml(device.udid)}</code></p><p>${device.disabled ? 'Disconnected' : device.connected ? `Online · ${escapeHtml(osLabel(device.connected))}` : 'Offline'}</p><a class="button" href="/devices/${encodeURIComponent(device.udid)}">Open device</a></div>`).join('');
         const connected = await discoverConnectedDevices();
         const registeredIds = new Set(devices.map(({ udid }) => udid));
-        const candidates = connected.filter(({ udid }) => !registeredIds.has(udid)).map((device) => `<option value="${escapeHtml(device.udid)}" data-name="${escapeHtml(device.name)}">${escapeHtml(device.name)} · ${escapeHtml(device.osVersion)}</option>`).join('');
+        const candidates = connected.filter(({ udid }) => !registeredIds.has(udid)).map((device) => `<option value="${escapeHtml(device.udid)}" data-name="${escapeHtml(device.name)}" data-platform="${escapeHtml(devicePlatform(device))}">${escapeHtml(device.name)} · ${escapeHtml(osLabel(device))}</option>`).join('');
         const registration = candidates ? `<section class="card"><h2>Register connected device</h2><form id="register-device"><select name="udid">${candidates}</select> <button>Register</button></form><p id="register-result" class="muted"></p><script>document.getElementById('register-device').addEventListener('submit',async function(e){e.preventDefault();var s=e.currentTarget.udid;var o=s.options[s.selectedIndex];var r=await fetch('/api/devices',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({udid:o.value,name:o.dataset.name,pluginData:{}})});document.getElementById('register-result').textContent=r.ok?'Registered. Reloading…':(await r.json()).error;if(r.ok)setTimeout(function(){location.reload()},500)});</script></section>` : '';
         return reply.type('text/html').send(renderPage('Devices', `<h1>Devices</h1>${registration}<div class="grid">${cards || '<p>No devices registered.</p>'}</div>`));
     });

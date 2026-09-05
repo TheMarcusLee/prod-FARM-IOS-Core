@@ -53,8 +53,9 @@ Existing iOS entries need no changes: `platform` defaults to `ios` and `driver` 
 2. `adb -s <serial> install app/build/outputs/apk/release/app-release.apk`
 3. Enable the accessibility service on the phone (Settings → Accessibility → sim-use bridge).
 4. Read the token: `adb -s <serial> shell content query --uri content://com.linecorp.simuse.devicebridge/auth_token`
-5. Forward the port: `adb -s <serial> forward tcp:18300 tcp:<bridge port>` — or, with our Wi-Fi
-   fork of the APK, use `http://<phone-ip>:<port>` as `bridgeUrl` and skip the forward.
+5. Forward the port: `adb -s <serial> forward tcp:18300 tcp:8080` (the APK listens on 8080) — or,
+   with our Wi-Fi fork of the APK, use `http://<phone-ip>:8080` as `bridgeUrl` and skip the forward.
+   The token query prints `Row: 0 result={"status":"success","result":"<uuid>"}`; the uuid is the token.
 
 ## Writing a routine against the interface
 
@@ -83,8 +84,15 @@ await waitForText(driver, { text: 'Posted' }, { timeoutMs: 60_000, signal });
   natively) plus `A11Y_BRIDGE_URL` / `A11Y_BRIDGE_TOKEN` on Android.
 - `POST /api/devices` accepts `platform`, `driver` and `android` so an Android phone can be
   registered without the iOS registration wizard.
+- The registration wizard (`devices/registration.ts`) runs an Android check set — adb on PATH, the
+  serial's adb state, USB-debugging authorisation, the chosen driver, screencap, one Home key, the
+  TikTok package — and writes `platform`, `driver` and `android` straight into `devices.json`.
+  See `docs/android-dashboard.md`.
+- The device page and the devices grid show platform and driver badges, and for an Android device the
+  screen size, screenshot and remote input all go through `driverForDevice` instead of WDA.
 
 The Android TikTok routines live in `src/tiktok/android/` and drive this interface directly;
-see `docs/android-tiktok.md` for the phone-side prerequisites and the selector table.
-
-Still open: a platform-aware registration wizard and device page in the dashboard.
+see `docs/android-tiktok.md` for the phone-side prerequisites and the selector table. Registering
+an Android phone from the dashboard is covered in `docs/android-dashboard.md`. The Wi-Fi build of
+the bridge APK (bind-all, keep-alive, richer `/ping`) lives in the sibling `sim-use` fork on branch
+`feat/bridge-wifi-bind`; its `FARM-NOTES.md` has the exact bootstrap commands.
