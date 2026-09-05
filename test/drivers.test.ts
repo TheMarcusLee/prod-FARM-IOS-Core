@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createA11yBridgeDriver, normaliseBridgeNode } from '../src/drivers/a11y-bridge.js';
-import { createAdbDriver, discoverAdbDevices, escapeForInputText } from '../src/drivers/adb.js';
+import { bridgePingUrl, createA11yBridgeDriver, decodeScreenshot, normaliseBridgeNode, screenFromTree } from '../src/drivers/a11y-bridge.js';
+import { createAdbDriver, discoverAdbDevices, escapeForInputText, parseAdbDevices, parseWmSize } from '../src/drivers/adb.js';
 import { driverForDevice, driverKindOf, platformOf } from '../src/drivers/select.js';
 import { parseUiautomatorXml } from '../src/drivers/uiautomator-xml.js';
 import { findById, findByText, locateText, tappableBounds, waitForText } from '../src/drivers/verify.js';
 import type { CommandRunner } from '../src/drivers/common.js';
-import type { DeviceDriver, UiNode } from '../src/drivers/types.js';
+import { DriverError, type DeviceDriver, type UiNode } from '../src/drivers/types.js';
+
+const PNG_BYTES = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('body')]);
 
 const SAMPLE_DUMP = `UI hierchary dumped to: /dev/tty
 <?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
@@ -42,9 +44,11 @@ test('adb driver issues the expected shell commands', async () => {
     const calls: string[][] = [];
     const run: CommandRunner = async (file, args, options) => {
         calls.push([file, ...args]);
-        if (args.includes('screencap')) return { stdout: Buffer.from('png'), stderr: Buffer.alloc(0) };
+        if (args.includes('screencap')) return { stdout: PNG_BYTES, stderr: Buffer.alloc(0) };
         if (args.includes('wm')) return { stdout: 'Physical size: 1080x2340\n', stderr: '' };
-        if (args.includes('uiautomator')) return { stdout: SAMPLE_DUMP, stderr: '' };
+        if (args.includes('uiautomator')) return { stdout: 'UI hierchary dumped to: /sdcard/window_dump.xml\n', stderr: '' };
+        if (args.includes('cat')) return { stdout: SAMPLE_DUMP, stderr: '' };
+        if (args.includes('monkey')) return { stdout: 'Events injected: 1\n', stderr: '' };
         void options;
         return { stdout: '', stderr: '' };
     };
@@ -55,19 +59,66 @@ test('adb driver issues the expected shell commands', async () => {
     await driver.launchApp('com.zhiliaoapp.musically');
     await driver.pushMedia({ localPath: '/tmp/clip.mp4' });
     assert.deepEqual(await driver.screen(), { width: 1080, height: 2340, scale: 1 });
-    assert.equal((await driver.screenshot()).toString(), 'png');
+    assert.deepEqual(await driver.screenshot(), PNG_BYTES);
     assert.ok(findByText(await driver.uiTree(), { text: 'Post' }));
 
     assert.deepEqual(calls[0], ['adb', '-s', 'R58N1', 'shell', 'input', 'tap', '10', '21']);
     assert.deepEqual(calls[1], ['adb', '-s', 'R58N1', 'shell', 'input', 'swipe', '0', '0', '100', '200', '300']);
-    assert.deepEqual(calls[2], ['adb', '-s', 'R58N1', 'shell', 'input', 'text', 'hello%sworld']);
+    assert.deepEqual(calls[2], ['adb', '-s', 'R58N1', 'shell', 'input', 'text', "'hello world'"]);
     assert.deepEqual(calls[3]?.slice(3, 6), ['shell', 'monkey', '-p']);
     assert.deepEqual(calls[4], ['adb', '-s', 'R58N1', 'push', '/tmp/clip.mp4', '/sdcard/DCIM/Camera/clip.mp4']);
-    assert.ok(calls[5]?.join(' ').includes('MEDIA_SCANNER_SCAN_FILE'));
+    assert.ok(calls[5]?.join(' ').includes('scan_file'));
+    assert.deepEqual(calls[8]?.slice(3), ['shell', 'uiautomator', 'dump', '/sdcard/window_dump.xml']);
+    assert.deepEqual(calls[9]?.slice(3), ['shell', 'cat', '/sdcard/window_dump.xml']);
 });
 
-test('input text escaping handles spaces and shell metacharacters', () => {
-    assert.equal(escapeForInputText("it's a $test (ok)"), "it\\'s%sa%s\\$test%s\\(ok\\)");
+test('a real screenshot has to be a PNG, not an adb error on stdout', async () => {
+    const run: CommandRunner = async () => ({ stdout: Buffer.from('error: device offline\n'), stderr: Buffer.alloc(0) });
+    await assert.rejects(createAdbDriver({ serial: 'R58N1', run }).screenshot(), /not a PNG/);
+});
+
+test('the media scan falls back to the legacy broadcast when scan_file is missing', async () => {
+    const calls: string[][] = [];
+    const run: CommandRunner = async (file, args) => {
+        calls.push(args);
+        if (args.includes('content')) throw new DriverError('Unknown method scan_file');
+        return { stdout: '', stderr: '' };
+    };
+    await createAdbDriver({ serial: 'R58N1', run }).pushMedia({ localPath: '/tmp/a b.mp4' });
+    assert.deepEqual(calls[1]?.slice(2), ['shell', 'content', 'call', '--uri', 'content://media/external/file', '--method', 'scan_file', '--arg', "'/sdcard/DCIM/Camera/a b.mp4'"]);
+    assert.ok(calls[2]?.join(' ').includes('MEDIA_SCANNER_SCAN_FILE'));
+    // The remote path is quoted so the device shell does not split it on the space.
+    assert.ok(calls[2]?.includes("'file:///sdcard/DCIM/Camera/a b.mp4'"));
+});
+
+test('a flaky monkey launch falls back to resolving the launcher activity', async () => {
+    const calls: string[][] = [];
+    const run: CommandRunner = async (file, args) => {
+        calls.push(args);
+        if (args.includes('monkey')) return { stdout: '** No activities found to run, monkey aborted.\n', stderr: '' };
+        if (args.includes('resolve-activity')) return { stdout: 'priority=0 preferredOrder=0\ncom.zhiliaoapp.musically/.main.MainActivity\n', stderr: '' };
+        return { stdout: '', stderr: '' };
+    };
+    await createAdbDriver({ serial: 'R58N1', run }).launchApp('com.zhiliaoapp.musically');
+    assert.deepEqual(calls[2]?.slice(2), [
+        'shell', 'am', 'start', '-W', '-a', 'android.intent.action.MAIN',
+        '-c', 'android.intent.category.LAUNCHER', '-n', "'com.zhiliaoapp.musically/.main.MainActivity'",
+    ]);
+});
+
+test('an override display size wins over the physical panel size', () => {
+    assert.deepEqual(parseWmSize('Physical size: 1440x3120\nOverride size: 1080x2340\n'), { width: 1080, height: 2340, scale: 1 });
+    assert.deepEqual(parseWmSize('Physical size: 1080x2340\n'), { width: 1080, height: 2340, scale: 1 });
+    assert.throws(() => parseWmSize('cmd: Failure calling service window\n'), /Could not read screen size/);
+});
+
+test('input text quotes for the device shell and refuses what it cannot type', () => {
+    assert.equal(escapeForInputText("it's a $test (ok)"), "'it'\\''s a $test (ok)'");
+    assert.equal(escapeForInputText('a*b?c;d|e'), "'a*b?c;d|e'");
+    // adb cannot type these at all, so say so instead of posting mojibake.
+    assert.throws(() => escapeForInputText('nice clip 🎉'), /a11y-bridge/);
+    assert.throws(() => escapeForInputText('caf\u00e9'), /only printable ASCII/);
+    assert.throws(() => escapeForInputText('line one\nline two'), /cannot type/);
 });
 
 test('adb device discovery reads serials in the device state', async () => {
@@ -81,6 +132,21 @@ test('adb device discovery reads serials in the device state', async () => {
     ]);
 });
 
+test('the device listing survives the daemon banner and keeps non-device states', () => {
+    const stdout = '* daemon not running; starting now at tcp:5037 *\n* daemon started successfully *\n'
+        + 'List of devices attached\n'
+        + 'R58N1                  unauthorized usb:1-1\n'
+        + '192.168.1.40:5555      device product:raven model:Pixel_6_Pro\n';
+    assert.deepEqual(parseAdbDevices(stdout), [
+        { serial: 'R58N1', state: 'unauthorized' },
+        { serial: '192.168.1.40:5555', state: 'device', model: 'Pixel_6_Pro' },
+    ]);
+});
+
+test('a listing with no header at all still yields the devices', () => {
+    assert.deepEqual(parseAdbDevices('R58N1\tdevice\n'), [{ serial: 'R58N1', state: 'device' }]);
+});
+
 test('a11y-bridge driver sends bearer auth, form bodies, and decodes envelopes', async () => {
     const requests: Array<{ url: string; init: RequestInit }> = [];
     const tree = { className: 'root', boundsInScreen: { left: 0, top: 0, right: 1080, bottom: 2340 }, children: [
@@ -89,7 +155,7 @@ test('a11y-bridge driver sends bearer auth, form bodies, and decodes envelopes',
     const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
         requests.push({ url: String(url), init: init ?? {} });
         const route = new URL(String(url)).pathname;
-        const result = route === '/screenshot' ? Buffer.from('png').toString('base64')
+        const result = route === '/screenshot' ? PNG_BYTES.toString('base64')
             : route === '/a11y_tree_full' ? tree
                 : 'ok';
         return new Response(JSON.stringify({ status: 'success', result }), { status: 200 });
@@ -105,10 +171,42 @@ test('a11y-bridge driver sends bearer auth, form bodies, and decodes envelopes',
     // Form-encoded, so the base64 padding "=" arrives as %3D and the bridge's parser URL-decodes it.
     assert.equal(requests[1]!.init.body, `base64_text=${encodeURIComponent(Buffer.from('hi').toString('base64'))}&clear=false`);
 
-    assert.equal((await driver.screenshot()).toString(), 'png');
+    assert.deepEqual(await driver.screenshot(), PNG_BYTES);
     assert.deepEqual(await driver.screen(), { width: 1080, height: 2340, scale: 1 });
     assert.deepEqual(await locateText(driver, { text: 'post' }), { x: 600, y: 2050 });
     await assert.rejects(driver.launchApp('x'), /without a fallback driver/);
+});
+
+test('a bridge that answers with something other than its envelope is a driver error', async () => {
+    const html = (async () => new Response('<html>Sign in to the hotel Wi-Fi</html>', { status: 200 })) as unknown as typeof fetch;
+    const driver = createA11yBridgeDriver({ serial: 'R58N1', baseUrl: 'http://127.0.0.1:18300', token: 't', fetchImpl: html });
+    await assert.rejects(driver.tap({ x: 1, y: 1 }), /did not return JSON/);
+
+    const failure = (async () => new Response(JSON.stringify({ status: 'error', error: 'service not bound' }), { status: 200 })) as unknown as typeof fetch;
+    await assert.rejects(
+        createA11yBridgeDriver({ serial: 'R58N1', baseUrl: 'http://127.0.0.1:18300', token: 't', fetchImpl: failure }).pressKey('home'),
+        /bridge \/keyboard\/key failed: service not bound/,
+    );
+});
+
+test('a screenshot that is not a PNG is rejected, and a data: prefix is tolerated', () => {
+    assert.deepEqual(decodeScreenshot(`data:image/png;base64,${PNG_BYTES.toString('base64')}`), PNG_BYTES);
+    assert.throws(() => decodeScreenshot(''), /not base64 text/);
+    assert.throws(() => decodeScreenshot({ image: 'x' }), /not base64 text/);
+    assert.throws(() => decodeScreenshot(Buffer.from('nope').toString('base64')), /not a PNG/);
+});
+
+test('screen size comes from the widest node, not a root with empty bounds', () => {
+    const node = (right: number, bottom: number, children: UiNode[] = []): UiNode => ({
+        id: '', type: '', text: '', description: '', bounds: { left: 0, top: 0, right, bottom }, clickable: false, enabled: true, children,
+    });
+    assert.deepEqual(screenFromTree(node(0, 0, [node(1080, 2340), node(1080, 100)])), { width: 1080, height: 2340, scale: 1 });
+    assert.throws(() => screenFromTree(node(0, 0)), /no bounds/);
+});
+
+test('a bridge base URL keeps working with any number of trailing slashes', () => {
+    assert.equal(bridgePingUrl('http://127.0.0.1:18300//'), 'http://127.0.0.1:18300/ping');
+    assert.equal(bridgePingUrl(' http://127.0.0.1:18300 '), 'http://127.0.0.1:18300/ping');
 });
 
 test('bridge node normalisation fills defaults', () => {

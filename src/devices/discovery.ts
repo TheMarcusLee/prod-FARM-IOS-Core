@@ -67,12 +67,21 @@ interface AndroidProperties {
 }
 
 // Model and OS version do not change while a phone stays plugged in, and discovery is polled
-// every couple of seconds by the dashboard and the connection manager. Ask each phone once.
-const androidPropertyCache = new Map<string, AndroidProperties>();
+// every couple of seconds by the dashboard and the connection manager, so each phone is asked
+// once. The entry still expires: a phone that takes an OS update keeps its serial, and a stale
+// "Android 13" would then follow it around the dashboard until the farm restarts.
+export const ANDROID_PROPERTY_TTL_MS = 15 * 60_000;
+
+interface CachedProperties {
+    properties: AndroidProperties;
+    expiresAt: number;
+}
+
+const androidPropertyCache = new Map<string, CachedProperties>();
 let adbProblemReported: string | undefined;
 
 /** `adb devices -l` plus one `getprop` per new serial. Missing adb is reported once, then silent. */
-export async function discoverConnectedAndroidDevices(run: CommandRunner = runCommand): Promise<Device[]> {
+export async function discoverConnectedAndroidDevices(run: CommandRunner = runCommand, now: () => number = Date.now): Promise<Device[]> {
     if ((process.env.ANDROID_DISCOVERY ?? '').toLowerCase() === 'off') return [];
     let listed: Array<{ serial: string; model?: string }>;
     try {
@@ -89,13 +98,15 @@ export async function discoverConnectedAndroidDevices(run: CommandRunner = runCo
     return Promise.all(listed.map(async ({ serial, model }) => ({
         udid: serial,
         platform: 'android' as const,
-        ...(await androidProperties(serial, model, run)),
+        ...(await androidProperties(serial, model, run, now)),
     })));
 }
 
-async function androidProperties(serial: string, listedModel: string | undefined, run: CommandRunner): Promise<AndroidProperties> {
+async function androidProperties(
+    serial: string, listedModel: string | undefined, run: CommandRunner, now: () => number,
+): Promise<AndroidProperties> {
     const cached = androidPropertyCache.get(serial);
-    if (cached) return cached;
+    if (cached && cached.expiresAt > now()) return cached.properties;
     const fallback: AndroidProperties = { name: listedModel ?? serial, osVersion: 'unknown' };
     let stdout: string;
     try {
@@ -105,12 +116,16 @@ async function androidProperties(serial: string, listedModel: string | undefined
         return fallback;
     }
     const properties = parseAndroidProperties(String(stdout), fallback);
-    androidPropertyCache.set(serial, properties);
+    androidPropertyCache.set(serial, { properties, expiresAt: now() + ANDROID_PROPERTY_TTL_MS });
     return properties;
 }
 
 export function parseAndroidProperties(stdout: string, fallback: AndroidProperties): AndroidProperties {
-    const [release = '', model = ''] = stdout.split(/\r?\n/).map((line) => line.trim());
+    // `* daemon not running; starting now ... *` lands on stdout ahead of the getprop output the
+    // first time the adb server is started, and would otherwise be read as the OS version.
+    const lines = stdout.split(/\r?\n/).map((line) => line.trim());
+    while (lines[0]?.startsWith('*')) lines.shift();
+    const [release = '', model = ''] = lines;
     return {
         name: model || fallback.name,
         osVersion: release || fallback.osVersion,

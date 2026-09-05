@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { remote, type Browser } from 'webdriverio';
 
-import { bridgePingUrl } from '../drivers/a11y-bridge.js';
+import { bridgePingUrl, normaliseBridgeUrl } from '../drivers/a11y-bridge.js';
 import { farmEntryArgs } from '../runtime/farm-entry.js';
 import { errorMessage, runCommand, type CommandRunner } from '../drivers/common.js';
 import { driverForDevice } from '../drivers/select.js';
@@ -15,7 +15,8 @@ import { switchTikTokAccount, tapCoordinate } from '../tiktok/actions.js';
 import { coordinateProfiles, coordinatesForProfile, profileForProductType, type CoordinateProfile } from './coordinates.js';
 import { devicePlatform, discoverConnectedDevices, type Device } from './discovery.js';
 import {
-    BRIDGE_DEVICE_PORT, BRIDGE_LOCAL_PORT, BRIDGE_PACKAGE, createAndroidProbe, type AndroidProbe,
+    BRIDGE_DEVICE_PORT, BRIDGE_LOCAL_PORT, BRIDGE_PACKAGE, createAndroidProbe, localBridgePort,
+    type AndroidProbe,
 } from './registration-android.js';
 import { loadRegisteredDevices, mutateRegisteredDevices, type RegisteredDevice } from './registry.js';
 import { passcodeForDevice, setDevicePasscode } from './secrets.js';
@@ -144,11 +145,21 @@ function normalizeAccounts(accounts: string[]): string[] {
     return Array.from(new Set(normalized));
 }
 
-function sanitizedLine(line: string): string {
-    return line
+/**
+ * Log lines end up in the public snapshot and on disk, so anything that looks like a credential
+ * is removed. The bridge token is the Android one: it reaches the wizard through `content query`
+ * and would otherwise ride along in an adb error message.
+ */
+export function sanitizedLine(line: string, secrets: Array<string | undefined> = []): string {
+    let value = line
         .replace(/IOS_PASSCODE[^\s=]*=\S+/gi, 'IOS_PASSCODE=<redacted>')
         .replace(/(-?password\s*[=:]\s*)\S+/gi, '$1<redacted>')
-        .slice(0, 1_000);
+        .replace(/(Bearer\s+)\S+/gi, '$1<redacted>')
+        .replace(/((?:auth_)?token"?\s*[=:]\s*"?)[^\s,"}]{6,}/gi, '$1<redacted>');
+    for (const secret of secrets) {
+        if (secret && secret.length >= 6) value = value.split(secret).join('<redacted>');
+    }
+    return value.slice(0, 1_000);
 }
 
 async function portAvailable(port: number): Promise<boolean> {
@@ -274,7 +285,7 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
             name: candidate.name,
             platform,
             checkNames: names,
-            ...(platform === 'android' ? { driver: 'adb' as DriverKind, bridgePort: BRIDGE_LOCAL_PORT } : {}),
+            ...(platform === 'android' ? { driver: 'adb' as DriverKind, bridgePort: await this.allocateBridgePort() } : {}),
             availableProfiles: coordinateProfiles().map(({ name, displayName, screenSize }) => ({ name, displayName, screenSize })),
             ...(platform === 'android' ? {} : {
                 recommendedProfile: profileForProductType(candidate.productType),
@@ -332,9 +343,16 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
         }
         if (input.bridgeUrl !== undefined) {
             if (session.platform !== 'android') throw new Error('Only Android devices use a bridge URL');
-            const value = input.bridgeUrl.trim();
-            if (value && !/^https?:\/\/\S+$/.test(value)) throw new Error('Bridge URL must be an http(s) URL');
+            const value = normaliseBridgeUrl(input.bridgeUrl);
+            if (value && !/^https?:\/\/[^\s/]+$/.test(value)) {
+                throw new Error('Bridge URL must be an http(s) origin such as http://192.168.1.40:8080');
+            }
             session.bridgeUrl = value || undefined;
+            // A different endpoint means a different token and a different reachability answer.
+            if (session.driver === 'a11y-bridge') {
+                session.bridgeToken = undefined;
+                session.checks.driver = check('pending', 'Bootstrap the accessibility bridge');
+            }
         }
         if (input.tiktokAccounts !== undefined) session.tiktokAccounts = normalizeAccounts(input.tiktokAccounts);
         if (input.passcode !== undefined) {
@@ -616,6 +634,27 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
         return session.bridgeUrl ?? `http://127.0.0.1:${session.bridgePort ?? BRIDGE_LOCAL_PORT}`;
     }
 
+    /**
+     * One local forward port per phone. `adb forward tcp:18300` silently rebinds the port to the
+     * newest device, so ten phones all defaulting to 18300 would each steal the previous one's
+     * bridge — and every routine would then drive whichever phone registered last.
+     */
+    private async allocateBridgePort(): Promise<number> {
+        const used = new Set<number>();
+        for (const device of await this.loadDevices()) {
+            const port = localBridgePort(device.android?.bridgeUrl);
+            if (port) used.add(port);
+        }
+        for (const session of this.sessions.values()) {
+            if (session.bridgePort) used.add(session.bridgePort);
+        }
+        for (let offset = 0; offset < 1_000; offset += 1) {
+            const port = BRIDGE_LOCAL_PORT + offset;
+            if (!used.has(port) && await portAvailable(port)) return port;
+        }
+        throw new Error('No free local port is available for the bridge forward');
+    }
+
     private async refreshAndroid(session: RegistrationSession): Promise<void> {
         session.checks.host = check('checking', 'Looking for adb on PATH');
         session.checks.connection = check('checking', 'Asking adb about this serial');
@@ -694,7 +733,8 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
                 await this.android.forwardBridgePort(serial, session.bridgePort ?? BRIDGE_LOCAL_PORT, BRIDGE_DEVICE_PORT);
             }
         } catch (error) {
-            session.checks.driver = check('blocked', errorMessage(error));
+            // The probe that fails here is the token query; its output must not reach the snapshot.
+            session.checks.driver = check('blocked', sanitizedLine(errorMessage(error), [session.bridgeToken]));
             return;
         }
         const url = this.bridgeBaseUrl(session);
@@ -903,7 +943,7 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
     }
 
     private log(session: RegistrationSession, value: string): void {
-        const line = sanitizedLine(value.trim());
+        const line = sanitizedLine(value.trim(), [session.bridgeToken, session.passcode]);
         if (!line) return;
         session.logs.push(line);
         session.logs = session.logs.slice(-100);
