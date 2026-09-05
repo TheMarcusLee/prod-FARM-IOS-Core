@@ -1,4 +1,7 @@
 import type { Settings } from './global.d.ts';
+import { icon } from './icons.ts';
+
+document.querySelector('#mark')?.append(icon('signal'));
 
 const form = document.querySelector<HTMLFormElement>('#settings');
 const saveStatus = document.querySelector<HTMLElement>('#save-status');
@@ -31,26 +34,26 @@ function collect(): Partial<Settings> {
 
 form?.addEventListener('submit', (event) => {
     event.preventDefault();
-    if (saveStatus) { saveStatus.className = 'status'; saveStatus.textContent = 'Saving…'; }
+    if (saveStatus) { saveStatus.className = 'bl-status'; saveStatus.textContent = 'Saving…'; }
     void window.farm.saveSettings(collect()).then((result) => {
         fill(result.settings);
         if (!saveStatus) return;
-        saveStatus.className = 'status ok';
+        saveStatus.className = 'bl-status ok';
         saveStatus.textContent = result.restartRequired
-            ? 'Saved. The services were stopped — start them again from the Services panel.'
+            ? 'Saved. The services were stopped — start them again from the Rig window.'
             : 'Saved.';
     }).catch((error: unknown) => {
         if (!saveStatus) return;
-        saveStatus.className = 'status error';
+        saveStatus.className = 'bl-status error';
         saveStatus.textContent = error instanceof Error ? error.message : String(error);
     });
 });
 
 document.querySelector('#reset-db')?.addEventListener('click', () => {
-    if (resetStatus) { resetStatus.className = 'status'; resetStatus.textContent = 'Waiting for confirmation…'; }
+    if (resetStatus) { resetStatus.className = 'bl-status'; resetStatus.textContent = 'Waiting for confirmation…'; }
     void window.farm.resetDatabase().then((result) => {
         if (!resetStatus) return;
-        resetStatus.className = `status ${result.ok ? 'ok' : 'error'}`;
+        resetStatus.className = `bl-status ${result.ok ? 'ok' : 'error'}`;
         resetStatus.textContent = result.message;
     });
 });
@@ -58,10 +61,10 @@ document.querySelector('#reset-db')?.addEventListener('click', () => {
 document.querySelector('#prepare-wda')?.addEventListener('click', () => {
     const status = document.querySelector<HTMLElement>('#wda-status');
     const udid = document.querySelector<HTMLInputElement>('#wda-udid')?.value.trim() ?? '';
-    if (status) { status.className = 'status'; status.textContent = 'Checking the prerequisites…'; }
+    if (status) { status.className = 'bl-status'; status.textContent = 'Checking the prerequisites…'; }
     void window.farm.prepareWda(udid || null).then((result) => {
         if (!status) return;
-        status.className = `status ${result.ok ? 'ok' : 'error'}`;
+        status.className = `bl-status ${result.ok ? 'ok' : 'error'}`;
         status.textContent = result.message;
     });
 });

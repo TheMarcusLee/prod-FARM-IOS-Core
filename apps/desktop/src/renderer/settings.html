@@ -6,72 +6,133 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data:; font-src 'self' file:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'; object-src 'none'">
 <title>Settings</title>
 <link rel="stylesheet" href="app.css">
-<header>
-    <h1>Settings</h1>
-    <span class="status" id="status"></span>
-</header>
-<main>
-    <form id="settings">
-        <fieldset>
-            <legend>Dashboard</legend>
-            <label><span>WEB_PORT</span><input type="number" name="webPort" min="1" max="65535" required></label>
-            <label><span>PHONE_FARM_PLUGINS (comma-separated ESM packages)</span><input type="text" name="plugins" placeholder="empty is a valid fleet-only install"></label>
-            <label><span>PHONE_FARM_AUTH_PLUGIN</span><input type="text" name="authPlugin" placeholder="only needed off loopback"></label>
-            <p class="hint">The dashboard is always bound to 127.0.0.1 by this app.</p>
-        </fieldset>
-
-        <fieldset>
-            <legend>Database</legend>
-            <label><span>External DATABASE_URL (leave empty to use the bundled Postgres)</span><input type="text" name="databaseUrl" placeholder="postgresql://user:password@host:5432/phone_farm"></label>
-            <label><span>Bundled Postgres port</span><input type="number" name="embeddedPostgresPort" min="1" max="65535" required></label>
-        </fieldset>
-
-        <fieldset>
-            <legend>Devices</legend>
-            <label><span>APPIUM_PORT</span><input type="number" name="appiumPort" min="1" max="65535" required></label>
-            <label><span>ANDROID_DISCOVERY</span>
-                <select name="androidDiscovery"><option value="on">on</option><option value="off">off (iOS-only host)</option></select>
-            </label>
-            <label><span>XCODE_ORG_ID</span><input type="text" name="xcodeOrgId" placeholder="required for WebDriverAgent signing"></label>
-            <label><span>XCODE_SIGNING_ID</span><input type="text" name="xcodeSigningId"></label>
-            <label><span>WDA_BUNDLE_ID</span><input type="text" name="wdaBundleId"></label>
-            <label><span>IOS_PLATFORM_VERSION</span><input type="text" name="iosPlatformVersion"></label>
-            <label><span>TIKTOK_BUNDLE_ID</span><input type="text" name="tiktokBundleId"></label>
-            <p class="hint">
-                Save the signing fields first: the WebDriverAgent build reads them from this file.
-            </p>
-            <div class="actions" style="margin-top:10px">
-                <label style="margin:0;flex:1"><span>Build for (blank = every device in devices.json)</span><input type="text" id="wda-udid" placeholder="--udid, e.g. 00008030-000A1B2C3D4E5F6G"></label>
+<div class="bl-window">
+    <header class="bl-head">
+        <span class="bl-mark" id="mark"></span>
+        <h1>Settings</h1>
+    </header>
+    <form class="bl-form" id="settings">
+        <div class="bl-form-body">
+        <section class="bl-panel">
+            <div class="bl-panel-head">Dashboard</div>
+            <div class="bl-panel-body">
+                <label class="bl-field">
+                    <span>Port</span>
+                    <input class="bl-input" type="number" name="webPort" min="1" max="65535" required>
+                </label>
+                <label class="bl-field">
+                    <span>Plugins</span>
+                    <input class="bl-input" type="text" name="plugins" placeholder="Comma-separated packages; empty is a valid fleet-only install">
+                </label>
+                <label class="bl-field">
+                    <span>Authentication plugin</span>
+                    <input class="bl-input" type="text" name="authPlugin" placeholder="Only needed off loopback">
+                </label>
+                <p class="bl-hint">The dashboard is always bound to 127.0.0.1 by this app.</p>
             </div>
-            <div class="actions" style="margin-top:8px">
-                <button id="prepare-wda" type="button">Prepare WebDriverAgent…</button>
-                <span class="status" id="wda-status"></span>
+        </section>
+
+        <section class="bl-panel">
+            <div class="bl-panel-head">Database</div>
+            <div class="bl-panel-body">
+                <label class="bl-field">
+                    <span>Your own Postgres</span>
+                    <input class="bl-input" type="text" name="databaseUrl" placeholder="postgresql://user:password@host:5432/phone_farm">
+                </label>
+                <label class="bl-field">
+                    <span>Embedded Postgres port</span>
+                    <input class="bl-input" type="number" name="embeddedPostgresPort" min="1" max="65535" required>
+                </label>
+                <p class="bl-hint">Leave the first field empty to keep using the embedded Postgres 17 this app runs for you.</p>
             </div>
-            <p class="hint">
-                Runs <code>npm run wda:prepare</code> as a supervised job in its own window. It needs Xcode,
-                and afterwards each iPhone must trust the developer certificate by hand — the job window
-                spells out exactly where.
-            </p>
-        </fieldset>
+        </section>
 
-        <fieldset>
-            <legend>Application</legend>
-            <label class="inline"><input type="checkbox" name="launchAtLogin"><span>Launch at login</span></label>
-        </fieldset>
+        <section class="bl-panel">
+            <div class="bl-panel-head">iPhone signing</div>
+            <div class="bl-panel-body">
+                <label class="bl-field">
+                    <span>Apple team ID</span>
+                    <input class="bl-input" type="text" name="xcodeOrgId" placeholder="Required before WebDriverAgent can be signed">
+                </label>
+                <label class="bl-field">
+                    <span>Signing certificate</span>
+                    <input class="bl-input" type="text" name="xcodeSigningId">
+                </label>
+                <label class="bl-field">
+                    <span>WebDriverAgent bundle id</span>
+                    <input class="bl-input" type="text" name="wdaBundleId">
+                </label>
+                <label class="bl-field">
+                    <span>iOS version on the phones</span>
+                    <input class="bl-input" type="text" name="iosPlatformVersion">
+                </label>
+                <label class="bl-field">
+                    <span>TikTok bundle id</span>
+                    <input class="bl-input" type="text" name="tiktokBundleId">
+                </label>
+                <label class="bl-field">
+                    <span>Build for one phone only</span>
+                    <input class="bl-input" type="text" id="wda-udid" placeholder="A UDID; empty builds for every phone in devices.json">
+                </label>
+                <div class="bl-row-actions">
+                    <button class="bl-btn" id="prepare-wda" type="button">Prepare iPhones…</button>
+                    <span class="bl-status" id="wda-status"></span>
+                </div>
+                <p class="bl-hint">
+                    Save the signing fields first: the build reads them from this file. It needs Xcode, and
+                    afterwards each iPhone must trust the developer certificate by hand — the job window
+                    spells out exactly where.
+                </p>
+            </div>
+        </section>
 
-        <div class="actions">
-            <button type="submit" class="primary">Save</button>
-            <span class="status" id="save-status"></span>
+        <section class="bl-panel">
+            <div class="bl-panel-head">Android</div>
+            <div class="bl-panel-body">
+                <label class="bl-field">
+                    <span>Look for Android phones</span>
+                    <select class="bl-select" name="androidDiscovery">
+                        <option value="on">Yes, run adb</option>
+                        <option value="off">No, this host is iPhone only</option>
+                    </select>
+                </label>
+                <label class="bl-field">
+                    <span>Appium port</span>
+                    <input class="bl-input" type="number" name="appiumPort" min="1" max="65535" required>
+                </label>
+                <p class="bl-hint">Appium drives both Android and iPhone; it listens on 127.0.0.1 only.</p>
+            </div>
+        </section>
+
+        <section class="bl-panel">
+            <div class="bl-panel-head">Launch at login</div>
+            <div class="bl-panel-body">
+                <label class="bl-check"><input type="checkbox" name="launchAtLogin"><span>Start Backline when you log in</span></label>
+            </div>
+        </section>
+
+        <section class="bl-panel">
+            <div class="bl-panel-head">Danger zone</div>
+            <div class="bl-panel-body">
+                <div class="bl-callout bl-callout-bad">
+                    <strong>Reset the embedded database</strong>
+                    <span>
+                        Every device, schedule and execution goes. The old cluster is moved aside to a dated
+                        backup folder next to it, so you can put it back. You will be asked to confirm twice.
+                    </span>
+                </div>
+                <div class="bl-row-actions">
+                    <button class="bl-btn bl-btn-danger" id="reset-db" type="button">Reset the database…</button>
+                    <span class="bl-status" id="reset-status"></span>
+                </div>
+            </div>
+        </section>
+
+        </div>
+        <div class="bl-form-foot">
+            <button type="submit" class="bl-btn bl-btn-primary">Save</button>
+            <span class="bl-status" id="save-status"></span>
         </div>
     </form>
-
-    <fieldset class="danger" style="margin-top:18px;max-width:560px">
-        <legend>Danger zone</legend>
-        <p class="hint">Deletes the bundled Postgres cluster: every device, schedule and execution. You will be asked to confirm.</p>
-        <div class="actions">
-            <button id="reset-db" type="button">Reset the embedded database…</button>
-            <span class="status" id="reset-status"></span>
-        </div>
-    </fieldset>
-</main>
+</div>
 <script type="module" src="settings.js"></script>

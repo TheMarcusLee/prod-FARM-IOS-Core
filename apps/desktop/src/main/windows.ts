@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, nativeTheme, shell } from 'electron';
 import path from 'node:path';
 
 // `getAppPath()` is the checkout in dev and app.asar once packaged; both contain dist/.
@@ -24,6 +24,14 @@ export function isAllowedUrl(url: string, dashboardOrigin: string | null): boole
     if (!dashboardOrigin) return false;
     return parsed.origin === dashboardOrigin;
 }
+
+/** The window ground, so a cold window never flashes the wrong appearance. */
+function backgroundColor(): string {
+    return nativeTheme.shouldUseDarkColors ? '#0f1115' : '#f4f5f7';
+}
+
+/** The title a job window opens with, before the renderer names it from the job. */
+const JOB_TITLES: Record<string, string> = { 'wda-prepare': 'Prepare iPhones' };
 
 /** Same hardening on every window: no node in the renderer, no remote code. */
 function webPreferences() {
@@ -55,8 +63,8 @@ export class WindowManager {
         const window = new BrowserWindow({
             width: 1280,
             height: 860,
-            title: 'Phone Farm',
-            backgroundColor: '#101014',
+            title: 'Backline',
+            backgroundColor: backgroundColor(),
             webPreferences: webPreferences(),
         });
         this.openExternalLinksInBrowser(window);
@@ -74,19 +82,20 @@ export class WindowManager {
         void window.loadURL(url);
     }
 
+    /** The Rig window: every service in plain words, and the worker's live log. */
     showServices(): BrowserWindow {
-        this.services = this.showPanel(this.services, 'services.html', 'Services', 620, 760);
+        this.services = this.showPanel(this.services, 'rig.html', 'Rig', 880, 620);
         return this.services;
     }
 
     showSettings(): BrowserWindow {
-        this.settings = this.showPanel(this.settings, 'settings.html', 'Settings', 640, 760);
+        this.settings = this.showPanel(this.settings, 'settings.html', 'Settings', 660, 760);
         return this.settings;
     }
 
     /** The log window for a one-shot job. The id travels in the URL fragment. */
     showJob(jobId: string): BrowserWindow {
-        this.job = this.showPanel(this.job, 'job.html', 'Job', 860, 640, jobId);
+        this.job = this.showPanel(this.job, 'job.html', JOB_TITLES[jobId] ?? 'Job', 880, 660, jobId);
         return this.job;
     }
 
@@ -99,7 +108,7 @@ export class WindowManager {
             return existing;
         }
         const window = new BrowserWindow({
-            width, height, title, backgroundColor: '#101014', webPreferences: webPreferences(),
+            width, height, title, backgroundColor: backgroundColor(), webPreferences: webPreferences(),
         });
         this.openExternalLinksInBrowser(window);
         void window.loadFile(path.join(rendererDir, file), hash ? { hash } : undefined);

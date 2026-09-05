@@ -137,7 +137,7 @@ export function buildDiagnostics(input: DiagnosticsInput): Record<string, string
     const scrub = secretScrubber(secretsOf(input.settings, input.databaseUrl));
     const files: Record<string, string> = {
         'README.txt': [
-            'Phone Farm diagnostics',
+            'Backline diagnostics',
             `Collected: ${new Date().toISOString()}`,
             `App version: ${input.appVersion}`,
             `Platform: ${process.platform} ${process.arch} (${os.release()})`,

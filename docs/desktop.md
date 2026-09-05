@@ -10,15 +10,54 @@ any farm logic: it spawns the repository's own entry points, with an environment
 it builds from its settings file.
 
 ```
-   Phone Farm.app
+   Backline.app
    ├── main window ──────────▶ http://127.0.0.1:<WEB_PORT>   (the real dashboard)
-   ├── Services window ──────▶ start/stop/restart/restart all, state, logs, jobs
+   ├── Rig window ───────────▶ every service in plain words, the worker's live log
    ├── Settings window ──────▶ userData/settings.json (0600)
    ├── Job window ───────────▶ a one-shot job's checklist and streamed output
    └── menu-bar item ────────▶ fleet summary, start / stop / restart all
             │
             └── supervises: postgres → migrations → adb, appium, wda → worker, web
 ```
+
+## The windows
+
+Everything an operator sees follows [docs/design/backline.md](design/backline.md):
+the same tokens as the dashboard, the system font (the renderer's CSP forbids
+Google Fonts), the icons of `src/ui/icons.ts` copied into
+`src/renderer/icons.ts`, and the OS appearance honoured through
+`prefers-color-scheme`. These are real screenshots of the running app.
+
+**Rig** — the window the app is for. Left: every part of the farm as a row in
+plain words, with its state as a dot and a word (Running, Starting, Idle, Not
+configured, Failed) and a menu, revealed on hover, carrying Start, Stop, Restart
+and the log files. The database migrations are folded into the Database row, and
+a one-shot job (Prepare iPhones) appears as a row of the same kind with its
+checklist in a disclosure. Right: the worker's live log — the last 200 lines,
+following the newest until you scroll up — and the three things worth doing to
+the whole rig. The header carries what used to be two banners: whether Backline
+is working, and where the dashboard is.
+
+![The Rig window](../apps/desktop/docs/screenshots/rig.png)
+
+The same window in the dark appearance:
+
+![The Rig window in dark mode](../apps/desktop/docs/screenshots/rig-dark.png)
+
+**Settings** — one panel per decision.
+
+![The Settings window](../apps/desktop/docs/screenshots/settings.png)
+
+**Starting** — the brand mark and a checklist that fills in while the fleet comes
+up. The main window shows this until `web` answers `/health`, then loads the
+dashboard.
+
+![The starting window](../apps/desktop/docs/screenshots/starting.png)
+
+**A job window** — the checklist, the command, the part no tool can do, and the
+streamed build output.
+
+![The Prepare iPhones job window](../apps/desktop/docs/screenshots/job.png)
 
 ## Run it in development
 
@@ -62,7 +101,7 @@ npm run desktop:build
 ```
 
 The output lands in `apps/desktop/release/`:
-`Phone Farm-<version>-arm64.dmg` and `release/mac-arm64/Phone Farm.app`.
+`Backline-<version>-arm64.dmg` and `release/mac-arm64/Backline.app`.
 
 `dist` runs `npm run build:farm` first (`apps/desktop/scripts/build-farm.mjs`),
 which produces `apps/desktop/farm-dist` — see [What is bundled](#what-is-bundled).
@@ -78,9 +117,12 @@ The build is **unsigned and un‑notarised**. To sign it, set `CSC_LINK` and
 `Developer ID Application: …` name, set `notarize: true` and
 `hardenedRuntime: true`. Everything else in that file already works.
 
-`apps/desktop/build/icon.png` is a generated placeholder
-(`node scripts/make-icon.mjs` regenerates it). Drop real artwork at that path
-before shipping.
+The artwork is generated, so no binary asset lives in git:
+`node apps/desktop/scripts/make-icon.mjs` draws the brand mark of
+[docs/design/backline.md](design/backline.md) — the ink rounded square carrying
+the `signal` glyph — into `build/icon.png` (the app and .dmg icon) and
+`build/tray/trayTemplate.png` (+`@2x`), the menu-bar template image that
+`scripts/build.mjs` copies into `dist/tray`.
 
 ## What is bundled
 
@@ -114,8 +156,8 @@ The result, measured on this machine:
 
 | | before | after |
 |---|---|---|
-| `Phone Farm-0.1.0-arm64.dmg` | 443,165,411 B (423 MiB) | 303,018,046 B (289 MiB) |
-| `Phone Farm.app` | 1.2 GB | 877 MB |
+| `Backline-0.1.0-arm64.dmg` | 443,165,411 B (423 MiB) | 303,018,046 B (289 MiB) |
+| `Backline.app` | 1.2 GB | 877 MB |
 | `Contents/Resources/farm` | 823 MB | 449 MB |
 
 `asar` is deliberately disabled: the Postgres binaries are located from their own
@@ -135,7 +177,9 @@ through `src/runtime/farm-entry.ts`, which makes the same decision from its own
 
 ## Where data lives
 
-Everything is under `~/Library/Application Support/Phone Farm`:
+Everything is under `~/Library/Application Support/Backline`. An install from
+before the rename keeps its data in `~/Library/Application Support/Phone Farm`;
+move the folder across, or start again empty.
 
 | Path | Contents |
 |---|---|
@@ -160,6 +204,8 @@ code signature and be lost on the next update.
 The Settings window (⌘,) writes `settings.json` and nothing else. Each field maps
 to one environment variable given to the children:
 
+The panels are Dashboard, Database, iPhone signing, Android, Launch at login and
+a Danger zone; the fields are named in plain words and map onto
 `WEB_PORT`, `APPIUM_PORT`, `PHONE_FARM_PLUGINS`, `PHONE_FARM_AUTH_PLUGIN`,
 `TIKTOK_BUNDLE_ID`, `IOS_PLATFORM_VERSION`, `XCODE_ORG_ID`, `XCODE_SIGNING_ID`,
 `WDA_BUNDLE_ID`, `ANDROID_DISCOVERY`, plus the database fields below.
@@ -261,16 +307,17 @@ has since recycled is never touched. A clean quit empties the file.
 ## Jobs
 
 Some work is a one‑shot with an interesting log rather than a service. The
-Services panel shows those as job cards above the service list; a card stays
+Rig window shows those as a row above the services; the row stays
 after the job ends, with its result, until it is dismissed, and every job is
 re‑runnable.
 
-### Prepare WebDriverAgent
+### Prepare iPhones
 
 The one‑off WebDriverAgent build, previously a terminal‑only step. It is on the
-`wda` service card, in **Settings → Devices** (where a single `--udid` can be
-typed instead of building for every registered device) and under **Farm → Prepare
-WebDriverAgent…**. It runs the repository's own `src/devices/wda/prepare.ts`,
+Rig window's **Prepare iPhones** button, in **Settings → iPhone signing** (where
+a single `--udid` can be typed instead of building for every registered device)
+and under **Rig → Prepare iPhones…**. It runs the repository's own
+`src/devices/wda/prepare.ts`,
 the same code `npm run wda:prepare -- --all` runs, with the environment the app
 already builds from Settings — a packaged app has no npm, and the signing values
 live in `settings.json` rather than in a `.env`.
@@ -295,11 +342,11 @@ WebDriverAgent is installed but iOS refuses to launch it.
 
 | Action | Where |
 |---|---|
-| Start all / Stop all / **Restart all** | Services panel, the Farm menu, the menu‑bar item |
-| **Open data folder** | Services panel, the Farm menu, the menu‑bar item — opens `~/Library/Application Support/Phone Farm` |
-| **Export diagnostics…** | Services panel and the Farm menu |
-| **Copy MCP config** | Services panel and the Farm menu — a ready client entry with the configured port already in it. `/mcp` is always token‑protected, even on loopback ([docs/mcp.md](mcp.md)), and the app cannot mint a token, so the `Authorization` value is a placeholder |
-| **Copy link / Open** (the dashboard address) | the banner at the top of the Services panel; it says so plainly when the dashboard is not running |
+| Start all / Stop all / **Restart all** | Rig window, the Rig menu, the menu‑bar item |
+| **Open data folder** | Rig window, the Rig menu, the menu‑bar item — opens `~/Library/Application Support/Backline` |
+| **Export diagnostics…** | Rig window and the Rig menu |
+| **Copy MCP config** | Rig window and the Rig menu — a ready client entry with the configured port already in it. `/mcp` is always token‑protected, even on loopback ([docs/mcp.md](mcp.md)), and the app cannot mint a token, so the `Authorization` value is a placeholder |
+| **Open dashboard** / **Copy dashboard link** | the Rig window's header, which also says plainly when the dashboard is not running |
 
 "Export diagnostics" writes a zip: `settings.json`, the service table as text and
 as JSON, the job list, and the last 2 MB of every service log including its

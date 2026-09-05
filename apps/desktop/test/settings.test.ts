@@ -142,7 +142,7 @@ test('childEnvironment passes the signing and auth values once they are set', ()
 });
 
 test('the WDA unix socket path stays inside the platform length limit', () => {
-    const paths = appPaths('/repo', '/Users/someone/Library/Application Support/Phone Farm');
+    const paths = appPaths('/repo', '/Users/someone/Library/Application Support/Backline');
 
     assert.ok(Buffer.byteLength(paths.wdaServiceSocket) < 104, paths.wdaServiceSocket);
 });

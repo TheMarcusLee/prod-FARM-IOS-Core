@@ -1,5 +1,7 @@
-import { Menu, Tray, nativeImage, type NativeImage } from 'electron';
+import { app, Menu, Tray, nativeImage, type NativeImage } from 'electron';
+import path from 'node:path';
 
+import { serviceWord } from './state-words.ts';
 import type { FleetSnapshot, ServiceSnapshot } from './types.ts';
 
 export interface TrayActions {
@@ -29,25 +31,25 @@ export class FleetTray {
     attach(): void {
         if (this.tray) return;
         this.tray = new Tray(trayIcon());
-        this.tray.setToolTip('Phone Farm');
+        this.tray.setToolTip('Backline');
         this.render({ services: [], jobs: [], dashboardUrl: null, shuttingDown: false });
     }
 
     render(snapshot: FleetSnapshot): void {
         if (!this.tray) return;
         const summary = summarize(snapshot.services);
-        this.tray.setToolTip(`Phone Farm — ${summary}`);
+        this.tray.setToolTip(`Backline — ${summary}`);
         this.tray.setTitle(snapshot.services.length ? indicator(snapshot.services) : '');
         this.tray.setContextMenu(Menu.buildFromTemplate([
             { label: summary, enabled: false },
             { type: 'separator' },
             ...snapshot.services.map((service) => ({
-                label: `${stateGlyph(service)}  ${service.label} — ${service.state}`,
+                label: `${stateGlyph(service)}  ${service.label} — ${serviceWord(service.state)}`,
                 enabled: false,
             })),
             { type: 'separator' },
             { label: 'Open dashboard', click: () => this.actions.openDashboard(), enabled: snapshot.dashboardUrl !== null },
-            { label: 'Services…', click: () => this.actions.openServices() },
+            { label: 'Rig', click: () => this.actions.openServices() },
             { label: 'Settings…', click: () => this.actions.openSettings() },
             { type: 'separator' },
             { label: 'Start all', click: () => this.actions.startAll(), enabled: !snapshot.shuttingDown },
@@ -56,7 +58,7 @@ export class FleetTray {
             { type: 'separator' },
             { label: 'Open data folder', click: () => this.actions.openDataFolder() },
             { type: 'separator' },
-            { label: 'Quit Phone Farm', click: () => this.actions.quit() },
+            { label: 'Quit Backline', click: () => this.actions.quit() },
         ]));
     }
 
@@ -93,12 +95,20 @@ function stateGlyph(service: ServiceSnapshot): string {
     }
 }
 
-/** A 16pt template circle, so no binary asset is needed for the menu bar. */
+/**
+ * The Backline mark for the menu bar: the `signal` glyph as a template image, so
+ * macOS recolours it for a light or dark menu bar. `scripts/make-icon.mjs` draws
+ * it and `scripts/build.mjs` copies it into dist/; the inline copy below is the
+ * same three bars, and only ever runs if that file went missing.
+ */
 function trayIcon(): NativeImage {
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
-        <rect x="3" y="1" width="10" height="14" rx="2.5" fill="none" stroke="black" stroke-width="1.5"/>
-        <circle cx="8" cy="12" r="1" fill="black"/></svg>`;
-    const image = nativeImage.createFromDataURL(`data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`);
+    const file = path.join(app.getAppPath(), 'dist', 'tray', 'trayTemplate.png');
+    const fromDisk = nativeImage.createFromPath(file);
+    const image = fromDisk.isEmpty() ? nativeImage.createFromDataURL(
+        `data:image/svg+xml;base64,${Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" `
+            + `viewBox="0 0 16 16" fill="none" stroke="black" stroke-width="1.6" stroke-linecap="round" `
+            + `stroke-linejoin="round"><path d="M3 12V6M8 12V3M13 12V8"/></svg>`).toString('base64')}`,
+    ) : fromDisk;
     image.setTemplateImage(true);
     return image;
 }

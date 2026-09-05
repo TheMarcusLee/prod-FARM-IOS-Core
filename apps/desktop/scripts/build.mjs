@@ -44,7 +44,7 @@ await build({
     ...shared,
     entryPoints: [
         path.join(root, 'src/renderer/starting.ts'),
-        path.join(root, 'src/renderer/services.ts'),
+        path.join(root, 'src/renderer/rig.ts'),
         path.join(root, 'src/renderer/settings.ts'),
         path.join(root, 'src/renderer/job.ts'),
     ],
@@ -54,8 +54,13 @@ await build({
     target: 'es2022',
 });
 
-for (const asset of ['app.css', 'starting.html', 'services.html', 'settings.html', 'job.html']) {
+for (const asset of ['app.css', 'starting.html', 'rig.html', 'settings.html', 'job.html']) {
     await cp(path.join(root, 'src/renderer', asset), path.join(out, 'renderer', asset));
 }
+
+// The menu-bar template image, drawn by scripts/make-icon.mjs. It travels in
+// dist/ rather than build/ because build/ is electron-builder's resources
+// directory and is not copied into the packaged app.
+await cp(path.join(root, 'build/tray'), path.join(out, 'tray'), { recursive: true });
 
 console.log('desktop: build complete');

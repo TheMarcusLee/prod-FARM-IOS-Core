@@ -34,7 +34,7 @@ const COPIED = [
     'drizzle',
     // WebDriverAgent patches, read by src/devices/wda/prepare.ts via packageRoot.
     'Patches',
-    // The Help links in the Services panel open these.
+    // The Help links in the Rig window open these.
     'docs',
     'package.json',
     'README.md',
