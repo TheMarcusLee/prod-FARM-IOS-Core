@@ -155,3 +155,92 @@ svg.bl-icon { width: 16px; height: 16px; flex: none; stroke: currentColor; fill:
 .bl-playhead { position: absolute; top: -24px; bottom: 0; width: 2px; background: var(--bl-bad); }
 .bl-playhead::before { content: ""; position: absolute; top: -2px; left: -5px; width: 12px; height: 12px; border-radius: 50%; background: var(--bl-bad); }
 .bl-playhead-label { position: absolute; top: -22px; left: 10px; font-size: 11px; font-weight: 600; color: var(--bl-bad); white-space: nowrap; }
+
+/* ---- layout helpers ------------------------------------------------- */
+.bl-spacer { flex: 1; }
+.bl-page-narrow { max-width: 720px; }
+.bl-btn-row { display: flex; gap: 6px; }
+.bl-btn-row > * { flex: 1; }
+.bl-chip-sm { padding: 2px 7px; font-size: 11.5px; margin: 0 4px 4px 0; }
+.bl-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.bl-code { margin: 0 0 10px; padding: 10px 12px; border-radius: 10px; background: var(--bl-panel-2); color: var(--bl-text-2); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; font-family: var(--bl-font); }
+.bl-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 4px; margin-right: 8px; vertical-align: -1px; }
+.bl-row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.bl-avatar { width: 32px; height: 32px; border-radius: 50%; background: var(--bl-ink); color: var(--bl-ink-text); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; }
+.bl-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+
+/* ---- control center extras ------------------------------------------ */
+.bl-cc-group { display: flex; flex-direction: column; gap: 8px; }
+.bl-cc-callout { margin-top: auto; }
+.bl-cc-callout .bl-btn { align-self: flex-start; }
+.bl-callout-bad .bl-btn { background: var(--bl-panel); border-color: var(--bl-bad-line); color: inherit; }
+.bl-wall-empty { display: block; }
+.bl-tile-screen[data-screen] { background: var(--bl-panel-2); }
+.bl-tile:focus-visible { outline: none; box-shadow: var(--bl-ring); border-color: var(--bl-accent); }
+.bl-tile[hidden] { display: none; }
+.bl-inspector-foot { padding: 0 14px 14px; display: flex; flex-direction: column; gap: 10px; font-size: 12.5px; }
+.bl-inspector-head .bl-tile-num { font-size: 12px; }
+.bl-viewer-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--bl-text-4); font-size: 12px; text-align: center; padding: 12px; }
+.bl-viewer-screen[data-live="1"] { cursor: crosshair; }
+
+/* ---- rig ------------------------------------------------------------- */
+.bl-services { display: flex; flex-direction: column; gap: 8px; }
+.bl-service { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--bl-panel); border: 1px solid var(--bl-line); border-radius: 10px; }
+.bl-service > div:first-child { flex: 1; min-width: 0; }
+.bl-service-name { font-size: 13px; font-weight: 600; }
+.bl-service-detail { font-size: 11.5px; color: var(--bl-text-3); }
+
+/* ---- alerts ---------------------------------------------------------- */
+.bl-alerts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.bl-alert { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; background: var(--bl-panel); border: 1px solid var(--bl-line); border-radius: 10px; }
+.bl-alert .bl-dot { margin-top: 6px; }
+.bl-alert-copy { min-width: 0; }
+.bl-alert-title { font-weight: 500; }
+.bl-alert-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; font-size: 11.5px; color: var(--bl-text-4); }
+.bl-alert-meta .bl-chip-sm { margin: 0; }
+
+/* ---- device page ----------------------------------------------------- */
+.bl-device { display: grid; grid-template-columns: 380px 1fr; gap: 16px; align-items: start; }
+.bl-device .bl-viewer { padding: 0; }
+.bl-device-screen { display: flex; gap: 10px; }
+.bl-device-screen .bl-viewer-screen { width: 260px; }
+.bl-device-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.bl-hint { font-size: 12px; color: var(--bl-text-3); }
+.bl-danger { border-color: var(--bl-line); }
+.bl-danger .bl-panel-head { color: var(--bl-text-3); font-weight: 500; }
+.bl-form { display: flex; flex-direction: column; gap: 12px; }
+.bl-form-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.bl-form-row > .bl-field { flex: 1; min-width: 160px; }
+.bl-actions { display: flex; gap: 6px; align-items: center; }
+dialog.bl-dialog { border: 1px solid var(--bl-line); border-radius: 12px; background: var(--bl-panel); color: var(--bl-text); padding: 0; max-width: 560px; width: calc(100vw - 48px); box-shadow: 0 12px 40px rgba(30, 36, 48, .18); }
+dialog.bl-dialog::backdrop { background: rgba(30, 36, 48, .28); }
+dialog.bl-dialog .bl-dialog-body { padding: 16px; display: flex; flex-direction: column; gap: 12px; max-height: 78vh; overflow: auto; }
+dialog.bl-dialog .bl-dialog-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--bl-line); font-weight: 600; }
+.bl-dialog-wide { max-width: 860px; }
+.bl-cal { display: grid; grid-template-columns: 260px 1fr; gap: 14px; }
+.bl-cal-screen { position: relative; border-radius: 12px; border: 4px solid var(--bl-ink); overflow: hidden; background: var(--bl-panel-2); aspect-ratio: 9 / 19; }
+.bl-cal-screen img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.bl-cal-points { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 420px; overflow: auto; font-size: 12.5px; }
+.bl-cal-points li { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; }
+.bl-cal-points li[aria-selected="true"] { background: var(--bl-accent-soft); }
+.bl-marker { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; border: 1.5px solid var(--bl-accent); background: rgba(47, 111, 228, .35); }
+
+/* ---- registration wizard --------------------------------------------- */
+.bl-candidates { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.bl-candidate { display: flex; align-items: center; gap: 12px; padding: 14px; background: var(--bl-panel); border: 1px solid var(--bl-line); border-radius: 12px; }
+.bl-candidate > div:first-child { flex: 1; min-width: 0; }
+.bl-candidate h3 { font-size: 13.5px; font-weight: 600; margin: 0 0 2px; }
+.bl-candidate p { font-size: 11.5px; color: var(--bl-text-3); }
+.bl-steps { display: flex; flex-direction: column; gap: 6px; }
+.bl-step { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--bl-line); border-radius: 10px; background: var(--bl-panel); }
+.bl-step h3 { font-size: 12.5px; font-weight: 600; margin: 0; }
+.bl-step p { font-size: 12px; color: var(--bl-text-3); }
+.bl-step-mark { width: 18px; height: 18px; flex: none; border-radius: 50%; border: 1.5px solid var(--bl-line-strong); color: var(--bl-text-4); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; margin-top: 1px; }
+.bl-step.passed .bl-step-mark { border-color: var(--bl-ok); background: var(--bl-ok); color: #fff; }
+.bl-step.checking .bl-step-mark { border-color: var(--bl-accent); color: var(--bl-accent); }
+.bl-step.blocked .bl-step-mark, .bl-step.failed .bl-step-mark { border-color: var(--bl-bad); background: var(--bl-bad); color: #fff; }
+.bl-step.blocked, .bl-step.failed { border-color: var(--bl-bad-line); background: var(--bl-bad-soft); }
+.bl-guidance { font-size: 12.5px; color: var(--bl-text-2); }
+.bl-guidance ol { margin: 8px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.bl-log-block { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--bl-panel-2); color: var(--bl-text-2); font-size: 12px; white-space: pre-wrap; max-height: 220px; overflow: auto; font-family: var(--bl-font); }
+.bl-error { padding: 10px 12px; border-radius: 10px; background: var(--bl-bad-soft); border: 1px solid var(--bl-bad-line); color: #8a2f22; font-size: 12.5px; }
