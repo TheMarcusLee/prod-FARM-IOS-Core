@@ -21,9 +21,13 @@ export async function loadPlugins(moduleNames: readonly string[]): Promise<Phone
     }));
 }
 
+/** `PHONE_FARM_AUTH_PLUGIN=local` selects the built-in provider; anything else is an ESM package. */
+const BUILT_IN_AUTH_PROVIDERS: Record<string, string> = { local: './auth/local.js' };
+
 export async function loadAuthProvider(moduleName: string | undefined): Promise<AuthProvider | null> {
     if (!moduleName) return null;
-    const loaded = await import(moduleName) as AuthModule;
+    const specifier = BUILT_IN_AUTH_PROVIDERS[moduleName] ?? moduleName;
+    const loaded = await import(specifier) as AuthModule;
     const provider = loaded.default ?? loaded.authProvider;
     if (!provider?.id || typeof provider.authenticate !== 'function') {
         throw new Error(`${moduleName} does not export an AuthProvider`);
