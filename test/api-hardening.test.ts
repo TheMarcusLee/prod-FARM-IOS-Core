@@ -315,3 +315,26 @@ test('the MCP screenshot tool shrinks the image instead of sending the whole scr
         .png().toBuffer();
     assert.equal((await sharp(await shrinkScreenshot(small)).metadata()).width, 200);
 });
+
+// ---- password hashing ------------------------------------------------------
+
+test('passwords are hashed with the current scrypt cost, and old parameters still verify', async () => {
+    const { hashPassword, verifyPassword } = await import('../src/auth/state.js');
+
+    const hashed = await hashPassword('correct-horse-battery');
+    const [scheme, n, r, p] = hashed.split('$');
+    assert.equal(scheme, 'scrypt');
+    assert.ok(Number(n) >= 131_072, `N should be at least 2^17, got ${n}`);
+    assert.equal(r, '8');
+    assert.equal(p, '1');
+    assert.equal(await verifyPassword(hashed, 'correct-horse-battery'), true);
+    assert.equal(await verifyPassword(hashed, 'correct-horse-batterz'), false);
+
+    // A password hashed before the cost went up keeps working: the parameters
+    // travel with the hash, so no operator is locked out by the change.
+    const legacy = 'scrypt$16384$8$1$c2FsdHNhbHRzYWx0c2FsdA==$'
+        + (await import('node:crypto')).default.scryptSync('legacy-password',
+            Buffer.from('c2FsdHNhbHRzYWx0c2FsdA==', 'base64'), 32, { N: 16384, r: 8, p: 1 }).toString('base64');
+    assert.equal(await verifyPassword(legacy, 'legacy-password'), true);
+    assert.equal(await verifyPassword(legacy, 'nope'), false);
+});
