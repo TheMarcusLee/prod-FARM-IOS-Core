@@ -333,10 +333,42 @@ test('the routes create a runbook, record enriched steps into it, and serve the 
     const page = await inject(app, { method: 'GET', url: '/runbooks' });
     assert.equal(page.statusCode, 200);
     assert.match(page.body, /Follow flow/);
+    // Both pages render through the Backline shell, and "Run on device" is a real dialog.
+    assert.match(page.body, /<title>Runbooks · Backline<\/title>/);
+    assert.match(page.body, /class="bl-nav"/);
+    assert.match(page.body, new RegExp(`<dialog class="bl-dialog" id="run-${id}"`));
+    assert.match(page.body, /data-dialog="new-runbook"/);
+    assert.doesNotMatch(page.body, /iOS Farm|Phone Farm|Handler|Agniverse|gethandler/);
+
     const editor = await inject(app, { method: 'GET', url: `/runbooks/${id}` });
     assert.match(editor.body, /Save steps/);
+    assert.match(editor.body, /class="bl-steps"/);
+    assert.match(editor.body, /Start recording/, 'the record toggle lives on the editor too');
+    assert.match(editor.body, /\/assets\/pages\.css/);
+
+    const script = await inject(app, { method: 'GET', url: '/assets/runbooks.js' });
+    assert.equal(script.statusCode, 200);
+    assert.match(String(script.headers['content-type']), /javascript/);
+
     const panel = await inject(app, { method: 'GET', url: `/plugins/com.farm.runbook/devices/${SERIAL}/panel` });
     assert.match(panel.body, /Start recording/);
+    assert.match(panel.body, /id="runbook-panel"/);
+    assert.match(panel.body, /class="bl-inline-form"/, 'the panel fragment is on the tokens');
+
+    // Recording started from the editor comes back as the editor, with its banner.
+    const recording = await inject(app, {
+        method: 'POST', url: `/plugins/com.farm.runbook/runbooks/${id}/record/start-form`,
+        payload: `udid=${SERIAL}`, headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    });
+    assert.equal(recording.statusCode, 200);
+    assert.match(recording.body, /id="runbook-editor"/);
+    assert.match(recording.body, /bl-rb-banner/);
+    assert.match(recording.body, /Recording on Pixel 7/);
+    const editorAfterStop = await inject(app, {
+        method: 'POST', url: `/plugins/com.farm.runbook/runbooks/${id}/record/stop-form`, payload: {},
+    });
+    assert.match(editorAfterStop.body, /Start recording/);
+    assert.doesNotMatch(editorAfterStop.body, /bl-rb-banner/);
 
     const run = await inject(app, {
         method: 'POST', url: `/plugins/com.farm.runbook/runbooks/${id}/run`,

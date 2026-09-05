@@ -3,7 +3,11 @@
  * device-page panel. Registered through the plugin's `registerRoutes`, so core routing is untouched.
  */
 
-import type { FastifyReply } from 'fastify';
+import type { FastifyReply, FastifyRequest } from 'fastify';
+import crypto from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import type { RegisteredDevice } from '../devices/registry.js';
 import { driverForDevice, platformOf } from '../drivers/select.js';
@@ -19,6 +23,8 @@ import {
     ROUTE_PREFIX, devicePanelFragment, runbookEditorFragment, runbookListFragment, runbookPage, runbooksPage,
 } from './html.js';
 import { deleteRunbook, listRunbooks, mutateRunbook, readRunbook, writeRunbook } from './store.js';
+
+const STATIC_ROOT = fileURLToPath(new URL('../../static/dashboard/', import.meta.url));
 
 export interface RunbookRoutesOptions {
     /** Overrides SCHEDULER_DATA_DIR/runbooks; tests point it at a temp directory. */
@@ -118,13 +124,25 @@ export async function registerRunbookRoutes(context: PluginRouteContext, options
     const taskType = options.taskType ?? 'run';
     const taskVersion = options.taskVersion ?? 1;
 
+    const pageScript = await readFile(path.join(STATIC_ROOT, 'assets/runbooks.js'), 'utf8')
+        .catch(() => '/* run npm run build:web */');
+    const pageStyles = await readFile(path.join(STATIC_ROOT, 'pages.css'), 'utf8').catch(() => '');
+    const chrome = { assetVersion: `?v=${crypto.createHash('sha1').update(pageScript + pageStyles).digest('base64url').slice(0, 10)}` };
+    app.get('/assets/runbooks.js', async (request: FastifyRequest, reply: FastifyReply) => {
+        const versioned = Boolean((request.query as { v?: string }).v);
+        return reply.header('cache-control', versioned ? 'public, max-age=31536000, immutable' : 'no-cache')
+            .type('text/javascript').send(pageScript);
+    });
+
     const device = async (udid: string): Promise<RegisteredDevice | undefined> =>
         (await context.loadDevices()).find((entry) => entry.udid === udid);
     const html = (reply: FastifyReply, body: string): FastifyReply => reply.type('text/html').send(body);
     const listFragment = async (message?: string): Promise<string> =>
         runbookListFragment(await listRunbooks(directory), await context.loadDevices(), message);
-    const editorFragment = async (runbook: Runbook, message?: string): Promise<string> =>
-        runbookEditorFragment(runbook, await context.loadDevices(), message);
+    const editorFragment = async (runbook: Runbook, message?: string): Promise<string> => {
+        const session = recorder.forRunbook(runbook.id);
+        return runbookEditorFragment(runbook, await context.loadDevices(), message, session?.udid);
+    };
     const panelFragment = async (udid: string, message?: string): Promise<string> => {
         const session = recorder.forDevice(udid);
         const recording = session ? await readRunbook(session.runbookId, directory) : undefined;
@@ -266,12 +284,12 @@ export async function registerRunbookRoutes(context: PluginRouteContext, options
     // ---- Pages and fragments --------------------------------------------------------------
 
     app.get('/runbooks', async (_request, reply) =>
-        html(reply, runbooksPage(await listRunbooks(directory), await context.loadDevices())));
+        html(reply, runbooksPage(await listRunbooks(directory), await context.loadDevices(), chrome)));
 
     app.get<{ Params: { id: string } }>('/runbooks/:id', async (request, reply) => {
         const runbook = await readRunbook(request.params.id, directory);
-        if (!runbook) return reply.code(404).type('text/html').send(runbooksPage(await listRunbooks(directory), await context.loadDevices()));
-        return html(reply, runbookPage(runbook, await context.loadDevices()));
+        if (!runbook) return reply.code(404).type('text/html').send(runbooksPage(await listRunbooks(directory), await context.loadDevices(), chrome));
+        return html(reply, runbookPage(runbook, await context.loadDevices(), chrome, recorder.forRunbook(runbook.id)?.udid));
     });
 
     app.post<{ Body: FormBody }>(`${ROUTE_PREFIX}/runbooks`, async (request, reply) => {
@@ -366,6 +384,36 @@ export async function registerRunbookRoutes(context: PluginRouteContext, options
         } catch (error) {
             return respond(errorMessage(error));
         }
+    });
+
+    // The editor drives recording too, so the operator does not have to find the phone's page to
+    // start one. Same recorder, same runbook lock — only the fragment that comes back differs.
+    app.post<{ Params: { id: string }; Body: FormBody }>(`${ROUTE_PREFIX}/runbooks/:id/record/start-form`, async (request, reply) => {
+        const runbook = await readRunbook(request.params.id, directory);
+        if (!runbook) return reply.code(404).type('text/html').send(await listFragment('Runbook not found'));
+        const found = await device(field(request.body ?? {}, 'udid') ?? '');
+        try {
+            if (!found) throw new Error('Choose a phone to record on');
+            if (recorder.forDevice(found.udid)) throw new Error('This phone is already recording a runbook');
+            const session = await recorder.start(found.udid, runbook.id, createDriver(found));
+            if (runbook.steps.length === 0) {
+                await mutateRunbook(runbook.id, (stored) => {
+                    stored.createdFor = { udid: found.udid, screen: session.screen };
+                    if (stored.platform === 'any') stored.platform = platformOf(found);
+                }, directory);
+            }
+            return html(reply, await editorFragment(await readRunbook(runbook.id, directory) ?? runbook));
+        } catch (error) {
+            return html(reply, await editorFragment(runbook, errorMessage(error)));
+        }
+    });
+
+    app.post<{ Params: { id: string } }>(`${ROUTE_PREFIX}/runbooks/:id/record/stop-form`, async (request, reply) => {
+        const session = recorder.forRunbook(request.params.id);
+        if (session) recorder.stop(session.udid);
+        const runbook = await readRunbook(request.params.id, directory);
+        if (!runbook) return reply.code(404).type('text/html').send(await listFragment('Runbook not found'));
+        return html(reply, await editorFragment(runbook));
     });
 
     app.get<{ Params: { udid: string } }>(`${ROUTE_PREFIX}/devices/:udid/panel`, async (request, reply) =>
