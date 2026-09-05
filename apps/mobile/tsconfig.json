@@ -1,0 +1,30 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noFallthroughCasesInSwitch": true,
+    "jsx": "react-jsx",
+    "types": [
+      "jest",
+      "node"
+    ],
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ],
+      "@farm/client": [
+        "../../packages/farm-client/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    "../../packages/farm-client/src/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
+}
