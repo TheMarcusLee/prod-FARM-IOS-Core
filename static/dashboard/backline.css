@@ -244,3 +244,5 @@ dialog.bl-dialog .bl-dialog-head { display: flex; align-items: center; gap: 10px
 .bl-guidance ol { margin: 8px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
 .bl-log-block { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--bl-panel-2); color: var(--bl-text-2); font-size: 12px; white-space: pre-wrap; max-height: 220px; overflow: auto; font-family: var(--bl-font); }
 .bl-error { padding: 10px 12px; border-radius: 10px; background: var(--bl-bad-soft); border: 1px solid var(--bl-bad-line); color: #8a2f22; font-size: 12.5px; }
+.bl-activity-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 12.5px; }
+.bl-device-summary { font-size: 12.5px; }
