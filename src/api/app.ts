@@ -372,6 +372,11 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         .map((link) => `<a href="${escapeHtml(link.href)}">${icon('layers')}${escapeHtml(link.label)}</a>`)
         .join('');
     const assetHash = (body: string) => crypto.createHash('sha1').update(body).digest('base64url').slice(0, 10);
+    /** A page script, at its content-hashed URL when the theme is loaded. */
+    const scriptTag = (name: string): string => {
+        const version = themed?.versions[name];
+        return `<script type="module" src="/assets/${name}${version ? `?v=${version}` : ''}"></script>`;
+    };
 
     // The event log backs the Alerts page and the sidebar's unread count. A farm
     // with no scheduler database simply has no alerts, which is not an error.
@@ -418,7 +423,8 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     ): Promise<string> => {
         const context = await chrome(request, read);
         return renderShell({
-            ...input, rig: context.rig, unreadAlerts: context.unread,
+            ...input, head: `${scriptTag('shell.js')}${input.head ?? ''}`,
+            rig: context.rig, unreadAlerts: context.unread,
             pluginNav: pluginNavHtml, authNav: authNavHtml, theme: context.theme,
         });
     };
@@ -1004,10 +1010,6 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         });
     }
 
-    const scriptTag = (name: string): string => {
-        const version = themed?.versions[name];
-        return `<script type="module" src="/assets/${name}${version ? `?v=${version}` : ''}"></script>`;
-    };
     const AVATAR = `<span class="bl-avatar" aria-hidden="true">${PRODUCT_NAME.slice(0, 1)}</span>`;
 
     if (themed) {

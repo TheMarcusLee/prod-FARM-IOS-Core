@@ -246,3 +246,4 @@ dialog.bl-dialog .bl-dialog-head { display: flex; align-items: center; gap: 10px
 .bl-error { padding: 10px 12px; border-radius: 10px; background: var(--bl-bad-soft); border: 1px solid var(--bl-bad-line); color: #8a2f22; font-size: 12.5px; }
 .bl-activity-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 12.5px; }
 .bl-device-summary { font-size: 12.5px; }
+.bl-viewer .bl-viewer-screen img, .bl-device-screen .bl-viewer-screen img { object-fit: contain; }
