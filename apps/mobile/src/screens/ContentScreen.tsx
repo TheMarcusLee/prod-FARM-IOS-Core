@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { Alert, FlatList, Image, RefreshControl, Text, View } from 'react-native';
 import { FarmError, formatRelative, type ContentQueueItem } from '@farm/client';
-import { Badge, Button, Card, EmptyState, ErrorBanner, Loading, Muted, Row } from '../components';
+import { Badge, Button, Card, EmptyState, ErrorState, Loading, Muted, Row } from '../components';
 import { useFarm } from '../context/FarmContext';
 import { useAsync } from '../hooks';
 import { useTheme } from '../theme';
@@ -71,7 +71,7 @@ export function ContentScreen() {
 
     return (
         <View style={{ flex: 1 }}>
-            {queue.error ? <ErrorBanner message={queue.error.message} onRetry={() => void queue.reload()} /> : null}
+            {queue.error ? <ErrorState error={queue.error} onRetry={() => void queue.reload()} testID="content-error" /> : null}
             <FlatList
                 data={items}
                 keyExtractor={(item) => item.id}

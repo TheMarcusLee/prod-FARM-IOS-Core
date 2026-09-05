@@ -36,6 +36,8 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
     const [streamStatus, setStreamStatus] = useState<SseStatus>('idle');
     const [nextBefore, setNextBefore] = useState<number | undefined>();
     const lastRenderedId = useRef<number | undefined>(undefined);
+    /** One "older page" at a time: `onEndReached` fires repeatedly per flick. */
+    const loadingMore = useRef(false);
 
     useEffect(() => {
         void (async () => {
@@ -70,13 +72,21 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
     }, [client, needsSetup, remember]);
 
     const loadMore = useCallback(async () => {
-        if (!nextBefore) return;
+        // `nextBefore` of 0 would mean an empty page, so `!nextBefore` is right
+        // here — but two concurrent calls with the same cursor are not.
+        if (!nextBefore || loadingMore.current) return;
+        loadingMore.current = true;
         try {
             const page = await client.listEvents({ limit: 50, before: nextBefore });
-            setEvents((previous) => [...previous, ...page.events]);
+            setEvents((previous) => {
+                const seen = new Set(previous.map((row) => row.id));
+                return [...previous, ...page.events.filter((row) => !seen.has(row.id))];
+            });
             setNextBefore(page.nextBefore);
         } catch {
             // A failed "older" page is not worth replacing the list for.
+        } finally {
+            loadingMore.current = false;
         }
     }, [client, nextBefore]);
 

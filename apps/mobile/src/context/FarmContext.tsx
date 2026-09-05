@@ -29,6 +29,7 @@ import {
     type FleetView,
     type MockFarm,
 } from '@farm/client';
+import { registerPushToken, requestExpoPushToken, resetPushRegistration } from '../lib/push';
 import { StorageKeys, readJson, writeJson } from '../lib/storage';
 import { useSettings } from './SettingsContext';
 
@@ -97,6 +98,40 @@ export function FarmProvider({ children }: { children: ReactNode }) {
     }, [settings.demoMode, baseUrl, token]);
 
     useEffect(() => () => mockRef.current?.dispose(), []);
+
+    /**
+     * Re-register on every launch and whenever the client, the label or the
+     * preferences change — an Expo token is not permanent, and a phone whose
+     * token rotated silently stops getting alerts otherwise. The farm upserts
+     * on the token, so this is safe to call as often as it fires; `push.ts`
+     * skips the call when nothing actually changed.
+     */
+    useEffect(() => {
+        resetPushRegistration();
+    }, [client]);
+
+    useEffect(() => {
+        if (!loaded || needsSetup || !settings.notifications.enabled || client.isMock) return;
+        let cancelled = false;
+        void (async () => {
+            const { token: pushToken } = await requestExpoPushToken();
+            if (!pushToken || cancelled) return;
+            try {
+                await registerPushToken(client, {
+                    expoPushToken: pushToken,
+                    name: settings.deviceLabel,
+                    minSeverity: settings.notifications.minSeverity,
+                    kinds: settings.notifications.kinds,
+                });
+            } catch {
+                // Not worth a screen: the next launch tries again, and Settings
+                // reports the failure when the operator asks for it there.
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [client, loaded, needsSetup, settings.deviceLabel, settings.notifications]);
 
     // Last snapshot from disk, so the first frame after a cold start on the
     // train is the fleet as it was, not a spinner.
