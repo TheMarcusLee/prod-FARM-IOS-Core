@@ -1,4 +1,4 @@
-import { httpClient, pause, type HttpClient } from './common.js';
+import { errorMessage, httpClient, pause, type HttpClient } from './common.js';
 import {
     DriverError, UnsupportedOperationError,
     type DeviceDriver, type Key, type Point, type ScreenGeometry, type Swipe, type UiNode,
@@ -12,6 +12,8 @@ export interface A11yBridgeDriverOptions {
     /** Bearer token read from the bridge ContentProvider at bootstrap. */
     token: string;
     fetchImpl?: typeof fetch;
+    /** Deadline for a tap/swipe/key call. Screenshots and tree reads get four times this. */
+    timeoutMs?: number;
     /**
      * The bridge has no launch/terminate/push verbs (an AccessibilityService cannot start apps).
      * Hand it an adb driver for those, or leave undefined to have them throw. Launching by
@@ -22,9 +24,14 @@ export interface A11yBridgeDriverOptions {
 
 const ANDROID_KEYCODES: Record<Key, number> = { home: 3, back: 4, enter: 66, delete: 67 };
 
+/** Trailing slashes are what a copy-pasted base URL usually arrives with. */
+export function normaliseBridgeUrl(baseUrl: string): string {
+    return baseUrl.trim().replace(/\/+$/, '');
+}
+
 /** `GET /ping` is the bridge's one unauthenticated route; a 200 means the service is up. */
 export function bridgePingUrl(baseUrl: string): string {
-    return `${baseUrl.replace(/\/$/, '')}/ping`;
+    return `${normaliseBridgeUrl(baseUrl)}/ping`;
 }
 
 interface BridgeEnvelope<T> {
@@ -40,9 +47,14 @@ interface BridgeEnvelope<T> {
  */
 export function createA11yBridgeDriver(options: A11yBridgeDriverOptions): DeviceDriver {
     const { serial, token } = options;
-    const baseUrl = options.baseUrl.replace(/\/$/, '');
-    const http = httpClient(options.fetchImpl);
+    const baseUrl = normaliseBridgeUrl(options.baseUrl);
+    const timeoutMs = options.timeoutMs ?? 10_000;
+    const http = httpClient(options.fetchImpl, timeoutMs);
+    // A full-screen PNG and a deep accessibility tree both take the phone noticeably longer to
+    // produce than a gesture does, and a timeout here reads as "the device is gone".
+    const slowHttp = httpClient(options.fetchImpl, timeoutMs * 4);
     const call = <T>(method: 'GET' | 'POST', route: string, params?: Record<string, string>) => bridgeCall<T>(http, baseUrl, token, method, route, params);
+    const slowCall = <T>(method: 'GET' | 'POST', route: string, params?: Record<string, string>) => bridgeCall<T>(slowHttp, baseUrl, token, method, route, params);
     type FallbackOperation = 'launchApp' | 'terminateApp' | 'pushMedia';
     const fallback = <K extends FallbackOperation>(operation: K): Pick<DeviceDriver, FallbackOperation>[K] => {
         const target = options.fallback?.[operation];
@@ -67,14 +79,11 @@ export function createA11yBridgeDriver(options: A11yBridgeDriverOptions): Device
             await call('POST', '/keyboard/input', { base64_text: Buffer.from(text, 'utf8').toString('base64'), clear: 'false' });
         },
         pressKey: async (key) => { await call('POST', '/keyboard/key', { key_code: String(ANDROID_KEYCODES[key]) }); },
-        screenshot: async () => {
-            const b64 = await call<string>('GET', '/screenshot');
-            return Buffer.from(b64, 'base64');
-        },
-        uiTree: async () => normaliseBridgeNode(await call<BridgeNode>('GET', '/a11y_tree_full', { filter: 'true' })),
+        screenshot: async () => decodeScreenshot(await slowCall<unknown>('GET', '/screenshot')),
+        uiTree: async () => normaliseBridgeNode(await slowCall<BridgeNode>('GET', '/a11y_tree_full', { filter: 'true' })),
         screen: async () => {
-            // The bridge reports no display metrics; the root node's bounds are the screen.
-            cachedScreen ??= screenFromRoot(normaliseBridgeNode(await call<BridgeNode>('GET', '/a11y_tree_full', { filter: 'false' })));
+            // The bridge reports no display metrics; the outermost node bounds are the screen.
+            cachedScreen ??= screenFromTree(normaliseBridgeNode(await slowCall<BridgeNode>('GET', '/a11y_tree_full', { filter: 'false' })));
             return cachedScreen;
         },
         pushMedia: async (file) => fallback('pushMedia')(file),
@@ -95,9 +104,30 @@ async function bridgeCall<T>(
         },
         ...(method === 'POST' ? { body: new URLSearchParams(params).toString() } : {}),
     });
-    const envelope = await response.json() as BridgeEnvelope<T>;
+    let envelope: BridgeEnvelope<T>;
+    try {
+        envelope = await response.json() as BridgeEnvelope<T>;
+    } catch (error) {
+        // A captive portal, a stale `adb forward` pointing at something else, or a crashed
+        // service all answer 200 with something that is not the bridge's envelope.
+        throw new DriverError(`bridge ${route} did not return JSON: ${errorMessage(error)}`);
+    }
+    if (!envelope || typeof envelope !== 'object') throw new DriverError(`bridge ${route} returned ${JSON.stringify(envelope)}, not an envelope`);
     if (envelope.status !== 'success') throw new DriverError(`bridge ${route} failed: ${envelope.error ?? 'unknown error'}`);
     return envelope.result as T;
+}
+
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/** The bridge answers with base64 PNG bytes, sometimes behind a `data:` prefix. */
+export function decodeScreenshot(result: unknown): Buffer {
+    if (typeof result !== 'string' || !result) throw new DriverError(`bridge /screenshot returned ${typeof result}, not base64 text`);
+    const base64 = result.replace(/^data:image\/\w+;base64,/, '').trim();
+    const image = Buffer.from(base64, 'base64');
+    if (!image.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)) {
+        throw new DriverError(`bridge /screenshot decoded to ${image.length} bytes that are not a PNG`);
+    }
+    return image;
 }
 
 export interface BridgeNode {
@@ -124,8 +154,20 @@ export function normaliseBridgeNode(node: BridgeNode): UiNode {
     };
 }
 
-function screenFromRoot(root: UiNode): ScreenGeometry {
-    const { right, bottom } = root.bounds;
-    if (!right || !bottom) throw new DriverError('bridge root node has no bounds; cannot infer screen size');
-    return { width: right, height: bottom, scale: 1 };
+/**
+ * The root of an accessibility tree is not always the window: on some builds it is a wrapper with
+ * empty bounds, and on others the status bar sits in a sibling window. Take the widest and tallest
+ * edge anywhere in the tree rather than trusting the root alone.
+ */
+export function screenFromTree(root: UiNode): ScreenGeometry {
+    let width = 0;
+    let height = 0;
+    const visit = (node: UiNode): void => {
+        width = Math.max(width, node.bounds.right);
+        height = Math.max(height, node.bounds.bottom);
+        for (const child of node.children) visit(child);
+    };
+    visit(root);
+    if (width <= 0 || height <= 0) throw new DriverError('bridge accessibility tree has no bounds; cannot infer screen size');
+    return { width, height, scale: 1 };
 }

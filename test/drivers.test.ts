@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createA11yBridgeDriver, normaliseBridgeNode } from '../src/drivers/a11y-bridge.js';
+import { bridgePingUrl, createA11yBridgeDriver, decodeScreenshot, normaliseBridgeNode, screenFromTree } from '../src/drivers/a11y-bridge.js';
 import { createAdbDriver, discoverAdbDevices, escapeForInputText, parseAdbDevices, parseWmSize } from '../src/drivers/adb.js';
 import { driverForDevice, driverKindOf, platformOf } from '../src/drivers/select.js';
 import { parseUiautomatorXml } from '../src/drivers/uiautomator-xml.js';
@@ -155,7 +155,7 @@ test('a11y-bridge driver sends bearer auth, form bodies, and decodes envelopes',
     const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
         requests.push({ url: String(url), init: init ?? {} });
         const route = new URL(String(url)).pathname;
-        const result = route === '/screenshot' ? Buffer.from('png').toString('base64')
+        const result = route === '/screenshot' ? PNG_BYTES.toString('base64')
             : route === '/a11y_tree_full' ? tree
                 : 'ok';
         return new Response(JSON.stringify({ status: 'success', result }), { status: 200 });
@@ -171,10 +171,42 @@ test('a11y-bridge driver sends bearer auth, form bodies, and decodes envelopes',
     // Form-encoded, so the base64 padding "=" arrives as %3D and the bridge's parser URL-decodes it.
     assert.equal(requests[1]!.init.body, `base64_text=${encodeURIComponent(Buffer.from('hi').toString('base64'))}&clear=false`);
 
-    assert.equal((await driver.screenshot()).toString(), 'png');
+    assert.deepEqual(await driver.screenshot(), PNG_BYTES);
     assert.deepEqual(await driver.screen(), { width: 1080, height: 2340, scale: 1 });
     assert.deepEqual(await locateText(driver, { text: 'post' }), { x: 600, y: 2050 });
     await assert.rejects(driver.launchApp('x'), /without a fallback driver/);
+});
+
+test('a bridge that answers with something other than its envelope is a driver error', async () => {
+    const html = (async () => new Response('<html>Sign in to the hotel Wi-Fi</html>', { status: 200 })) as unknown as typeof fetch;
+    const driver = createA11yBridgeDriver({ serial: 'R58N1', baseUrl: 'http://127.0.0.1:18300', token: 't', fetchImpl: html });
+    await assert.rejects(driver.tap({ x: 1, y: 1 }), /did not return JSON/);
+
+    const failure = (async () => new Response(JSON.stringify({ status: 'error', error: 'service not bound' }), { status: 200 })) as unknown as typeof fetch;
+    await assert.rejects(
+        createA11yBridgeDriver({ serial: 'R58N1', baseUrl: 'http://127.0.0.1:18300', token: 't', fetchImpl: failure }).pressKey('home'),
+        /bridge \/keyboard\/key failed: service not bound/,
+    );
+});
+
+test('a screenshot that is not a PNG is rejected, and a data: prefix is tolerated', () => {
+    assert.deepEqual(decodeScreenshot(`data:image/png;base64,${PNG_BYTES.toString('base64')}`), PNG_BYTES);
+    assert.throws(() => decodeScreenshot(''), /not base64 text/);
+    assert.throws(() => decodeScreenshot({ image: 'x' }), /not base64 text/);
+    assert.throws(() => decodeScreenshot(Buffer.from('nope').toString('base64')), /not a PNG/);
+});
+
+test('screen size comes from the widest node, not a root with empty bounds', () => {
+    const node = (right: number, bottom: number, children: UiNode[] = []): UiNode => ({
+        id: '', type: '', text: '', description: '', bounds: { left: 0, top: 0, right, bottom }, clickable: false, enabled: true, children,
+    });
+    assert.deepEqual(screenFromTree(node(0, 0, [node(1080, 2340), node(1080, 100)])), { width: 1080, height: 2340, scale: 1 });
+    assert.throws(() => screenFromTree(node(0, 0)), /no bounds/);
+});
+
+test('a bridge base URL keeps working with any number of trailing slashes', () => {
+    assert.equal(bridgePingUrl('http://127.0.0.1:18300//'), 'http://127.0.0.1:18300/ping');
+    assert.equal(bridgePingUrl(' http://127.0.0.1:18300 '), 'http://127.0.0.1:18300/ping');
 });
 
 test('bridge node normalisation fills defaults', () => {
