@@ -1,6 +1,6 @@
 # Architecture — what does what
 
-Phone Farm drives physical **iPhones and Android phones** from one local
+Backline drives physical **iPhones and Android phones** from one local
 dashboard. It is a set of cooperating processes over a single PostgreSQL
 database and a few local state files. There is no client framework: the
 dashboard is server-rendered HTML with HTMX, live video is MJPEG, and the event
@@ -13,7 +13,7 @@ terminal per process. Either way they are the same entry points — see
 
 ```
                        ┌──────────────────────────────────────────────────┐
-                       │  Phone Farm.app  (apps/desktop, Electron)        │
+                       │  Backline.app  (apps/desktop, Electron)          │
                        │  supervises, restarts, logs, exports diagnostics │
                        │  postgres → migrations → adb, appium, wda        │
                        │                        → worker, web             │
@@ -24,7 +24,7 @@ terminal per process. Either way they are the same entry points — see
                        ▼                     │                (Expo push)
   companion app ──────▶┌─────────────────────┴──────────────┐
   (apps/mobile,        │  web   Fastify + HTMX        :3000 │◀── stdio ──┐
-   over Tailscale)     │  dashboard, /fleet, /content,      │            │
+   over Tailscale)     │  Control Center, Schedule,         │            │
                        │  JSON API, SSE, POST /mcp,         │      ┌─────┴──────┐
                        │  drip planner tick (in-process)    │      │ MCP stdio  │
                        └──┬──────────────┬──────────────┬───┘      │ npm run mcp│
@@ -81,12 +81,17 @@ one-off schedules — see `docs/content-queue.md`.
 ### `web` — `src/api/server.ts` → `startServer()` → `src/api/app.ts`
 Fastify app on `WEB_PORT` (default 3000).
 
-- Server‑rendered dashboard (`/`, `/devices/:udid`, `/tasks`, `/devices/register`).
+- Server-rendered dashboard, every page through the same shell
+  (`src/ui/shell.ts`): **Control Center** (`/`, the wall of live phone screens),
+  **Schedule** (`/schedule`, the timeline — one track per phone, one clip per
+  post), **Content** (`/content`, the library and the drip rules), **Runbooks**
+  (`/runbooks`), **Accounts**, **Alerts**, **Devices** (`/devices/:udid`,
+  `/devices/register`), **Rig** and **Settings**. `/fleet` is the device list
+  with filters and bulk actions; `/tasks` redirects to Schedule.
 - JSON API under `/api/*` (devices, registrations, schedules, executions,
-  assets, remote control).
-- `/fleet` (one card per device, filters, bulk actions), `/content` (the
-  content library and drip rules), and the event feed at `GET /api/events` /
-  `GET /api/events/stream` (SSE).
+  assets, remote control), plus `GET /api/schedule/timeline?from=&to=`, which is
+  the single read the Schedule page and its 30-second refresh both use.
+- The event feed at `GET /api/events` / `GET /api/events/stream` (SSE).
 - `POST /mcp` mounts the same MCP tool set the stdio server exposes.
 - The **drip planner** timer, which turns drip rules into ordinary one-off
   schedules every `DRIP_PLANNER_INTERVAL_MINUTES` (default 60).
@@ -167,7 +172,7 @@ The MCP server over stdio, for an agent that cannot speak HTTP. The identical
 tool set is already mounted at `POST /mcp` inside `web`, so this process is only
 needed for stdio clients. See `docs/mcp.md`.
 
-### `Phone Farm.app` — `apps/desktop` (optional)
+### `Backline.app` — `apps/desktop` (optional)
 An Electron supervisor around all of the above except the push relay and the
 MCP stdio server. It starts `postgres` (bundled or external) → `migrations` →
 `adb`, `appium`, `wda` → `worker`, `web`, restarts crashes with backoff,
@@ -229,7 +234,7 @@ without the UI, for scripted or bulk (`--all`) setup.
 | `.scheduler-data/push-relay.json` | The push relay's `Last-Event-ID` cursor. |
 
 Under the desktop app all of these live in
-`~/Library/Application Support/Phone Farm` instead — see `docs/desktop.md`.
+`~/Library/Application Support/Backline` instead — see `docs/desktop.md`.
 
 ## The task model
 
@@ -273,6 +278,8 @@ in `src/scheduler/recurrence.ts`; the next occurrence is written to
 | `src/devices/` | discovery (usbmuxd + adb), registry (`devices.json`), registration flow (iOS and Android), WDA remote, wda-service, coordinate profiles, passcode lookup |
 | `src/drivers/` | The `DeviceDriver` interface and one file per control channel: `wda.ts` (iOS), `adb.ts` and `a11y-bridge.ts` (Android), `select.ts` (entry → driver). See `src/drivers/README.md` and ADR 0001. |
 | `src/fleet/` | Event vocabulary and stores, the `/fleet` page, fleet summary, bulk scheduling, device monitor |
+| `src/schedule/` | The Schedule timeline: account colours (`accounts.ts`), the pure timeline model (`timeline.ts`), the page renderer |
+| `src/ui/` | `renderShell` — sidebar, toolbar, nav — and the icon set every page draws from |
 | `src/notifications/` | Webhook / Slack / Discord / ntfy channels and the daily digest |
 | `src/push/` | Expo push registrations, acks, and the relay process |
 | `src/content/` | Content library ingest, FFmpeg normalisation, caption templates, drip planner |

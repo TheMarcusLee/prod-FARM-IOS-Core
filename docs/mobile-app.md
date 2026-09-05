@@ -154,7 +154,7 @@ intent behind the failed tap.
 The last fleet snapshot is cached to AsyncStorage and rendered behind a dimmed
 *"Last updated 12 minutes ago — can't reach the Mac"* banner, with every action
 control disabled. **Nothing is queued for replay**: a stop or a tap that fires
-twenty minutes late on a phone farm is worse than one that never fired.
+twenty minutes late on a rack of phones is worse than one that never fired.
 
 Foregrounded, the app holds one `/api/events/stream` connection and re-polls
 `GET /api/mobile/bootstrap` every 15 s — **not** `/api/fleet/summary`, which
@@ -211,7 +211,7 @@ There is **no `apps/mobile/eas.json` in the repository**, so there are no build
 profiles and no configured update channels yet — `eas init` / `eas build`
 creates them on first use. Decide the profile and channel names then.
 
-- The bundle identifier and package name are `ai.gethandler.farm.companion`.
+- The bundle identifier and package name are set in `apps/mobile/app.json`.
   Change both before the first build if that is not your team's namespace.
 - **`extra.eas.projectId` is not committed.** `eas init` adds it; without it
   `getExpoPushTokenAsync` cannot mint a token, which is the first thing that

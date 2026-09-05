@@ -55,15 +55,22 @@ A tap target is `{ id?, text?, description?, fraction: { x, y } }`, resolved **i
 
 The tap lands on the nearest *clickable* ancestor of the match, not on the label inside it.
 
+![The Runbooks list](design/screenshots/runbooks.png)
+
 ## Recording
 
-1. Create a runbook on **/runbooks** (name, platform, app id, and the device you will record on).
-2. Open that device's page. In the **Runbooks** panel pick the runbook and press
-   **Start recording**.
+1. Create a runbook on **/runbooks** — the **New runbook** dialog takes the name,
+   platform, app id and the phone you will record on.
+2. Start recording either from the runbook's own page (**Recording** → *Record
+   on* → **Start recording**) or from the phone's page, in the **Runbooks**
+   panel. Both take the same lock, so a phone records into one runbook at a time,
+   and whichever surface you started from, the other shows the recording banner.
 3. Drive the phone with the normal remote control — click to tap, drag to swipe, type into the
    text box. Each action appears in the panel's step list as it is recorded.
-4. Press **Stop recording**, then open the runbook to tidy the steps: add `waitForText` where the
-   app is slow, mark flaky steps `optional`, add retries.
+4. Press **Stop recording**, then tidy the steps in the editor's step table: add `waitForText`
+   where the app is slow, mark flaky steps `optional`, add retries.
+
+![The runbook editor](design/screenshots/runbook-editor.png)
 
 While recording, the server enriches every action with the accessibility tree it captured
 **before** that action landed, which is what lets it name the control you tapped. An empty runbook
@@ -91,14 +98,15 @@ Any `type` step may contain `{{name}}` placeholders. Supply the values when the 
   "payload": { "runbookId": "rb-8fj2k1a9x0z1", "vars": { "caption": "hello from the farm" } } }
 ```
 
-The **Run** form on a runbook's page renders one input per variable it finds. A run whose variables
+The **Run on device** dialog renders one input per variable the runbook uses. A run whose variables
 are not all supplied fails immediately with the names it is missing — it never substitutes an empty
 string.
 
 ## Scheduling a run
 
 The plugin registers `com.farm.runbook / run @ 1`. Create it like any task
-(`POST /api/schedules`), or press **Run** on the /runbooks page for an immediate run on a device.
+(`POST /api/schedules`), or press **Run on device** on the Runbooks page or in the editor — it
+opens a dialog with the phone picker and one input per variable, and queues the run straight away.
 The task validates that the runbook exists and that the variables are well-formed; the
 **platform** check happens at execute time, because the validation context has no device, and a
 mismatch fails the execution with a message naming both platforms.

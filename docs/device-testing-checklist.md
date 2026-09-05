@@ -30,7 +30,7 @@ this repository asserts but has never observed.
 - [ ] `adb version` prints a version on the machine running `web`.
 - [ ] Note where the logs are going. Started by hand, every process logs to its
       own terminal's stdout; under the desktop app they are one file per service
-      under `~/Library/Application Support/Phone Farm/logs/`. See
+      under `~/Library/Application Support/Backline/logs/`. See
       [operations.md](operations.md#where-the-logs-are).
 
 ---

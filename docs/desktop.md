@@ -10,7 +10,7 @@ any farm logic: it spawns the repository's own entry points, with an environment
 it builds from its settings file.
 
 ```
-   Phone Farm.app
+   Backline.app
    ├── main window ──────────▶ http://127.0.0.1:<WEB_PORT>   (the real dashboard)
    ├── Services window ──────▶ start/stop/restart/restart all, state, logs, jobs
    ├── Settings window ──────▶ userData/settings.json (0600)
@@ -62,7 +62,7 @@ npm run desktop:build
 ```
 
 The output lands in `apps/desktop/release/`:
-`Phone Farm-<version>-arm64.dmg` and `release/mac-arm64/Phone Farm.app`.
+`Backline-<version>-arm64.dmg` and `release/mac-arm64/Backline.app`.
 
 `dist` runs `npm run build:farm` first (`apps/desktop/scripts/build-farm.mjs`),
 which produces `apps/desktop/farm-dist` — see [What is bundled](#what-is-bundled).
@@ -114,8 +114,8 @@ The result, measured on this machine:
 
 | | before | after |
 |---|---|---|
-| `Phone Farm-0.1.0-arm64.dmg` | 443,165,411 B (423 MiB) | 303,018,046 B (289 MiB) |
-| `Phone Farm.app` | 1.2 GB | 877 MB |
+| `Backline-0.1.0-arm64.dmg` | 443,165,411 B (423 MiB) | 303,018,046 B (289 MiB) |
+| `Backline.app` | 1.2 GB | 877 MB |
 | `Contents/Resources/farm` | 823 MB | 449 MB |
 
 `asar` is deliberately disabled: the Postgres binaries are located from their own
@@ -135,7 +135,9 @@ through `src/runtime/farm-entry.ts`, which makes the same decision from its own
 
 ## Where data lives
 
-Everything is under `~/Library/Application Support/Phone Farm`:
+Everything is under `~/Library/Application Support/Backline`. Installs made
+before the product was renamed keep using the old directory until the desktop
+app is rebuilt, so move that folder across if you are upgrading one:
 
 | Path | Contents |
 |---|---|
@@ -296,7 +298,7 @@ WebDriverAgent is installed but iOS refuses to launch it.
 | Action | Where |
 |---|---|
 | Start all / Stop all / **Restart all** | Services panel, the Farm menu, the menu‑bar item |
-| **Open data folder** | Services panel, the Farm menu, the menu‑bar item — opens `~/Library/Application Support/Phone Farm` |
+| **Open data folder** | Services panel, the Farm menu, the menu‑bar item — opens `~/Library/Application Support/Backline` |
 | **Export diagnostics…** | Services panel and the Farm menu |
 | **Copy MCP config** | Services panel and the Farm menu — a ready client entry with the configured port already in it. `/mcp` is always token‑protected, even on loopback ([docs/mcp.md](mcp.md)), and the app cannot mint a token, so the `Authorization` value is a placeholder |
 | **Copy link / Open** (the dashboard address) | the banner at the top of the Services panel; it says so plainly when the dashboard is not running |

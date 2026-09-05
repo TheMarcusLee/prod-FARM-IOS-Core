@@ -6,12 +6,18 @@ Setup is [getting-started.md](getting-started.md); the first hardware session is
 
 ## The daily loop
 
-1. Open `/fleet`. Every device should be **online**, and `stuck` should be `0`.
-2. Open `/content`. The drip rules should have planned today and tomorrow.
-3. Check the alert channel for anything overnight, and the `digest.daily`
+1. Open the **Control Center** (`/`). Every phone should be **online**, and
+   nothing should be asking for you.
+2. Open **Schedule** (`/schedule`). Read tonight left to right: the playhead is
+   now, a red clip needs you, a dashed clip is a retry already booked. The
+   Planner line under the timeline says when the next planning run is and which
+   rules will under-post.
+3. Open **Content** (`/content`) if the Planner warned, and **Rig** (`/rig`) if a
+   service is down.
+4. Check the alert channel for anything overnight, and the `digest.daily`
    message for the 24-hour roll-up.
 
-Everything below is the detail behind those three lines.
+Everything below is the detail behind those four lines.
 
 ---
 
@@ -19,8 +25,10 @@ Everything below is the detail behind those three lines.
 
 A **drip rule** is "N posts a day for `@handle` on this phone, between 09:00 and
 21:00 local, at least M minutes apart, drawn from the `fitness` tag". The
-planner turns rules into **ordinary one-off schedules**, so anything the Tasks
-page can do to a schedule still works on a dripped post. See
+planner turns rules into **ordinary one-off schedules**, so anything the
+Schedule page can do to a schedule still works on a dripped post — a planned
+post is a clip on the timeline like any other, and Pause, Skip and Stop reach
+it. See
 [content-queue.md](content-queue.md) for the library and the rule fields.
 
 The planner is **not a process**. It is a timer, running every
@@ -221,7 +229,7 @@ STAMP=$(date +%F)
 DEST=~/farm-backups/$STAMP
 mkdir -p "$DEST"
 
-pg_dump "$DATABASE_URL" --format=custom --file="$DEST/phone-farm.dump"
+pg_dump "$DATABASE_URL" --format=custom --file="$DEST/backline.dump"
 cp devices.json "$DEST/"
 cp .auth.json   "$DEST/"          # secrets — encrypt or keep it off shared storage
 tar -czf "$DEST/content.tar.gz" -C .scheduler-data content
@@ -233,7 +241,7 @@ With the bundled `docker compose` database, `pg_dump` still works against
 `DATABASE_URL` because the container publishes on `127.0.0.1:5432`.
 
 Under the **desktop app** the paths differ. Everything is under
-`~/Library/Application Support/Phone Farm`:
+`~/Library/Application Support/Backline`:
 
 ```sh
 APP=~/Library/Application\ Support/Phone\ Farm
@@ -311,11 +319,11 @@ manager's job.
 | `npm run mcp` | stdio — do not log to stdout here; the transport owns it |
 
 Under `launchd`, point `StandardOutPath` / `StandardErrorPath` at
-`~/Library/Logs/phone-farm/<service>.log` — that is what the bundled
-`docs/launchd/co.agniverse.phone-farm.push-relay.plist` does:
+`~/Library/Logs/backline/<service>.log` — that is what the bundled
+`docs/launchd/co.backline.push-relay.plist` does:
 
 ```sh
-tail -f ~/Library/Logs/phone-farm/push-relay.log
+tail -f ~/Library/Logs/backline/push-relay.log
 ```
 
 Durable, per-execution logs are **not** in stdout: they are in the database,
@@ -325,7 +333,7 @@ readable with `GET /api/executions/:id` or on the device page's Activity panel.
 ### Under the desktop app
 
 One rotating file per service, `0600`, under
-`~/Library/Application Support/Phone Farm/logs/`:
+`~/Library/Application Support/Backline/logs/`:
 
 ```
 web.log  worker.log  wda.log  appium.log  postgres.log  migrations.log  adb.log

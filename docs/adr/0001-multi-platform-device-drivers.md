@@ -10,7 +10,7 @@ Date: 2026-09-05
 
 ## Context
 
-We are building a self-hosted phone farm for scheduled TikTok posting, replacing a $599/yr
+We are building a self-hosted rack of phones for scheduled TikTok posting, replacing a $599/yr
 subscription to Ghost Farm. Reading Ghost Farm's own site, the product is four things: a browser
 console, a scheduler that fires each phone at a random time inside a daily window, a queue of
 videos/slideshows with captions, and a pre-recorded "runbook" of taps and swipes replayed on the
