@@ -70,7 +70,7 @@ function summaryTiles(summary: FleetSummary): string {
         ['Failed 24 h', summary.failedLast24h], ['Planned 24 h', summary.plannedNext24h],
     ];
     return `<section class="fleet-summary">${tiles.map(([label, value]) =>
-        `<div class="fleet-tile"><span class="fleet-tile-value">${value}</span><span class="fleet-tile-label">${escapeHtml(label)}</span></div>`).join('')}</section>`;
+        `<div class="fleet-tile"><span class="fleet-tile-value">${escapeHtml(value)}</span><span class="fleet-tile-label">${escapeHtml(label)}</span></div>`).join('')}</section>`;
 }
 
 function filters(tags: readonly string[]): string {

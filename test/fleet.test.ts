@@ -17,7 +17,8 @@ import {
 } from '../src/fleet/bulk.js';
 import { createDeviceMonitorState, diffDeviceStatuses, longOfflineDevices } from '../src/fleet/device-monitor.js';
 import { createMemoryEventStore } from '../src/fleet/events.js';
-import { lifecycleEventInput } from '../src/fleet/scheduler-events.js';
+import { createStartedDeduplicator, lifecycleEventInput, schedulerEventHook } from '../src/fleet/scheduler-events.js';
+import { escapeHtml } from '../src/fleet/page.js';
 import { deviceState, stuckExecutions, summarizeFleet } from '../src/fleet/summary.js';
 import type { CreateTaskInput, ScheduleTiming } from '../src/types.js';
 import type { SchedulerRepository } from '../src/scheduler/repository.js';
@@ -83,12 +84,34 @@ test('a fixed stagger spreads devices evenly and a random one stays inside the w
     assert.deepEqual(staggerOffsets(3, { kind: 'fixed', minutes: 0 }), [0, 0, 0]);
     assert.deepEqual(staggerOffsets(0, { kind: 'fixed', minutes: 5 }), []);
 
-    const values = [0, 0.5, 0.999];
-    let index = 0;
-    assert.deepEqual(staggerOffsets(3, { kind: 'random', windowMinutes: 60 }, () => values[index++]!), [0, 30, 59]);
+    // A random stagger deals distinct minutes: two phones opening TikTok in the
+    // same minute is the lockstep the stagger exists to prevent.
+    const twelve = staggerOffsets(12, { kind: 'random', windowMinutes: 45 });
+    assert.equal(twelve.length, 12);
+    assert.equal(new Set(twelve).size, 12);
+    assert.ok(twelve.every((offset) => Number.isInteger(offset) && offset >= 0 && offset < 45));
 
-    const random = staggerOffsets(50, { kind: 'random', windowMinutes: 45 });
-    assert.ok(random.every((offset) => offset >= 0 && offset < 45));
+    // Independent draws would collide most of the time; this must never collide.
+    for (let trial = 0; trial < 200; trial++) {
+        const offsets = staggerOffsets(12, { kind: 'random', windowMinutes: 45 });
+        assert.equal(new Set(offsets).size, 12, `trial ${trial} produced a duplicate minute`);
+    }
+
+    // Deterministic source: the deal is 0..n-1, shuffled.
+    assert.deepEqual(staggerOffsets(4, { kind: 'random', windowMinutes: 60 }, () => 0).sort((a, b) => a - b),
+        [0, 1, 2, 3]);
+
+    // More devices than minutes: collisions are unavoidable, so they are spread
+    // as evenly as the window allows rather than clumping.
+    const crowded = staggerOffsets(50, { kind: 'random', windowMinutes: 45 });
+    assert.ok(crowded.every((offset) => offset >= 0 && offset < 45));
+    const counts = new Map<number, number>();
+    for (const offset of crowded) counts.set(offset, (counts.get(offset) ?? 0) + 1);
+    assert.equal(new Set(crowded).size, 45);
+    assert.ok(Math.max(...counts.values()) <= 2);
+
+    // A zero-width window is every device at once, as asked.
+    assert.deepEqual(staggerOffsets(3, { kind: 'random', windowMinutes: 0 }), [0, 0, 0]);
 
     assert.deepEqual(parseStagger(undefined), { kind: 'fixed', minutes: 0 });
     assert.deepEqual(parseStagger({ kind: 'random', windowMinutes: 30 }), { kind: 'random', windowMinutes: 30 });
@@ -316,29 +339,86 @@ test('device status polling turns connection changes into events', () => {
         udid: 'udid-a', physical: 'connected', wda: 'ready', appium: 'ready', managed: true,
         message: 'WDA is ready', retryCount: 0, updatedAt: NOW.toISOString(), ...overrides,
     });
+    const down = status({ physical: 'disconnected', wda: 'disconnected', message: 'Reconnect the USB cable' });
+    const at = (seconds: number): Date => new Date(NOW.getTime() + seconds * 1_000);
     const state = createDeviceMonitorState();
 
     // First sighting is only a baseline.
     assert.deepEqual(diffDeviceStatuses(state, [status()], NOW), []);
     assert.deepEqual(diffDeviceStatuses(state, [status()], NOW), []);
 
-    const offline = diffDeviceStatuses(state, [status({ physical: 'disconnected', wda: 'disconnected', message: 'Reconnect the USB cable' })], NOW);
+    // A change is proposed, then has to hold for the debounce before it counts.
+    assert.deepEqual(diffDeviceStatuses(state, [down], at(0)), []);
+    const offline = diffDeviceStatuses(state, [down], at(60));
     assert.deepEqual(offline.map(({ kind, severity, deviceUdid }) => [kind, severity, deviceUdid]),
         [['device.disconnected', 'warning', 'udid-a']]);
 
-    const back = diffDeviceStatuses(state, [status()], new Date(NOW.getTime() + 60_000));
+    assert.deepEqual(diffDeviceStatuses(state, [status()], at(70)), []);
+    const back = diffDeviceStatuses(state, [status()], at(130));
     assert.deepEqual(back.map(({ kind, severity }) => [kind, severity]), [['device.connected', 'info']]);
 
-    const failed = diffDeviceStatuses(state, [status({ wda: 'error', message: 'xcodebuild exited 65' })], NOW);
+    const broken = status({ wda: 'error', message: 'xcodebuild exited 65' });
+    assert.deepEqual(diffDeviceStatuses(state, [broken], at(140)), []);
+    const failed = diffDeviceStatuses(state, [broken], at(200));
     assert.deepEqual(failed.map(({ kind, severity }) => [kind, severity]), [['device.error', 'error']]);
     assert.equal((failed[0]!.detail as { error: string }).error, 'xcodebuild exited 65');
     // The same error is not re-reported on every poll.
-    assert.deepEqual(diffDeviceStatuses(state, [status({ wda: 'error', message: 'xcodebuild exited 65' })], NOW), []);
+    assert.deepEqual(diffDeviceStatuses(state, [broken], at(400)), []);
 
     // Devices offline for over an hour feed the digest.
-    const later = new Date(NOW.getTime() + 3 * 3_600_000);
-    assert.deepEqual(longOfflineDevices(state, later).map(({ deviceUdid, minutes }) => [deviceUdid, minutes]), [['udid-a', 180]]);
+    const later = new Date(NOW.getTime() + 3 * 3_600_000 + 200_000);
+    assert.deepEqual(longOfflineDevices(state, later).map(({ deviceUdid }) => deviceUdid), ['udid-a']);
     assert.deepEqual(longOfflineDevices(state, NOW), []);
+});
+
+test('a flapping USB cable produces no events at all', () => {
+    const status = (physical: 'connected' | 'disconnected'): DeviceConnectionStatus => ({
+        udid: 'udid-a', physical, wda: physical === 'connected' ? 'ready' : 'disconnected', appium: 'ready',
+        managed: true, message: '', retryCount: 0, updatedAt: NOW.toISOString(),
+    });
+    const state = createDeviceMonitorState();
+    diffDeviceStatuses(state, [status('connected')], NOW);
+
+    // Ten polls over five minutes, alternating every 30 s: nothing ever holds
+    // for the debounce window, so nothing reaches the timeline.
+    const produced: unknown[] = [];
+    for (let poll = 1; poll <= 10; poll++) {
+        const physical = poll % 2 === 0 ? 'connected' : 'disconnected';
+        produced.push(...diffDeviceStatuses(state, [status(physical)], new Date(NOW.getTime() + poll * 30_000)));
+    }
+    assert.deepEqual(produced, []);
+
+    // Once it stays down, the disconnect is reported exactly once.
+    const settled = [11, 12, 13].flatMap((poll) =>
+        diffDeviceStatuses(state, [status('disconnected')], new Date(NOW.getTime() + poll * 30_000)));
+    assert.deepEqual(settled.map(({ kind }) => kind), ['device.disconnected']);
+});
+
+test('a retried execution reports one execution.started, not one per attempt', () => {
+    const isFirstStart = createStartedDeduplicator();
+    const started = { kind: 'execution.started', execution: executionRow({ status: 'running' }) } as const;
+    assert.equal(isFirstStart(started), true);
+    assert.equal(isFirstStart(started), false);
+    assert.equal(isFirstStart(started), false);
+
+    // A terminal signal always passes and releases the id for the next run.
+    assert.equal(isFirstStart({ kind: 'execution.failed', execution: executionRow({ status: 'failed' }) }), true);
+    assert.equal(isFirstStart(started), true);
+
+    // Schedule signals are never deduplicated.
+    const created = { kind: 'schedule.created', schedule: scheduleRow() } as const;
+    assert.equal(isFirstStart(created), true);
+    assert.equal(isFirstStart(created), true);
+});
+
+test('the scheduler hook swallows a mapping failure instead of taking the scheduler down', () => {
+    const logged: string[] = [];
+    const hook = schedulerEventHook({ record: async () => null }, (message) => logged.push(message));
+    // A lifecycle signal with no execution row at all: lifecycleEventInput throws
+    // reading through it, and the hook must absorb that.
+    assert.doesNotThrow(() => hook({ kind: 'execution.started' } as never));
+    assert.equal(logged.length, 1);
+    assert.match(logged[0]!, /execution\.started/);
 });
 
 test('scheduler lifecycle signals map onto the event contract', () => {
@@ -359,4 +439,121 @@ test('scheduler lifecycle signals map onto the event contract', () => {
     assert.equal(paused.scheduleId, 'sched-1');
     assert.equal(paused.executionId, undefined);
     assert.match(paused.title, /schedule paused on udid-a/);
+});
+
+/* ------------------------------------------------- rendering and summary cost */
+
+test('every interpolation on the fleet page is escaped', async (context) => {
+    const store = createMemoryEventStore();
+    await store.record({
+        kind: 'device.error', severity: 'error', deviceUdid: 'udid-x',
+        title: 'Device <script>alert("event")</script> broke',
+        detail: { error: '<img src=x onerror=alert(1)>' },
+    });
+    const scheduler = fakeScheduler({
+        async listExecutions() {
+            return [executionRow({ deviceUdid: 'udid-x', status: 'running', taskType: '"><script>alert(4)</script>' })];
+        },
+        async listSchedules() { return []; },
+    } as unknown as Partial<SchedulerRepository>);
+    const app = await fleetApp({
+        scheduler, events: store,
+        loadDevices: async () => [device({
+            udid: 'udid-x',
+            name: '<script>alert("name")</script>',
+            tags: ['" onmouseover="alert(2)', "it's fine"],
+            pluginData: { 'com.git-agni.tiktok': { accounts: ['</option><script>alert(3)</script>'] } },
+        })],
+        connectedUdids: async () => ['udid-x'],
+    });
+    context.after(() => app.close());
+
+    const page = await inject(app, { method: 'GET', url: '/fleet' });
+    assert.equal(page.statusCode, 200);
+    // The only <script> element on the page is the one the page ships itself:
+    // every injected one survives as &lt;script&gt; text.
+    const scripts = page.body.match(/<script\b/g) ?? [];
+    assert.equal(scripts.length, 1, `found ${scripts.length} script tags`);
+    // None of the injection signatures survive as markup: no raw tag, and no
+    // quote that closes an attribute and opens a handler.
+    assert.doesNotMatch(page.body, /<script>alert/);
+    assert.doesNotMatch(page.body, /<\/option><script/);
+    assert.doesNotMatch(page.body, /"><script/);
+    assert.doesNotMatch(page.body, /" onmouseover="/);
+    assert.doesNotMatch(page.body, /<img src=x/);
+    // And the values are still there, escaped.
+    assert.match(page.body, /&lt;script&gt;alert\(&quot;name&quot;\)&lt;\/script&gt;/);
+    assert.match(page.body, /it&#39;s fine/);
+
+    // The renderer itself, on the values a device record can carry.
+    assert.equal(escapeHtml('<a href="x">&\'</a>'),
+        '&lt;a href=&quot;x&quot;&gt;&amp;&#39;&lt;/a&gt;');
+    assert.equal(escapeHtml(null), '');
+    assert.equal(escapeHtml(7), '7');
+});
+
+test('twelve pollers on the summary cost one device enumeration, not twelve', async (context) => {
+    let enumerations = 0;
+    let executionQueries = 0;
+    const scheduler = fakeScheduler({
+        async listExecutions() { executionQueries++; return []; },
+        async listSchedules() { return []; },
+    } as unknown as Partial<SchedulerRepository>);
+    const app = await fleetApp({
+        scheduler, events: createMemoryEventStore(),
+        loadDevices: async () => [device()],
+        connectedUdids: async () => { enumerations++; return ['udid-a']; },
+        summaryTtlMs: 5_000,
+    });
+    context.after(() => app.close());
+
+    // A dozen fleet pages and tray apps all polling inside one window.
+    await Promise.all(Array.from({ length: 12 }, () => inject(app, { method: 'GET', url: '/api/fleet/summary' })));
+    assert.equal(enumerations, 1, 'USB was enumerated once for twelve callers');
+    assert.equal(executionQueries, 1, 'the execution table was read once for twelve callers');
+
+    // Serial callers inside the window reuse it too; the clock is frozen at NOW.
+    for (let call = 0; call < 5; call++) await inject(app, { method: 'GET', url: '/api/fleet/summary' });
+    assert.equal(enumerations, 1);
+});
+
+test('stuck executions are swept on a timer and reported once each', async (context) => {
+    const store = createMemoryEventStore();
+    const executions = [
+        // Five minutes past its deadline plus the grace period.
+        executionRow({ id: 'e-stuck', status: 'running', deadlineAt: new Date(NOW.getTime() - 10 * 60_000) }),
+        executionRow({ id: 'e-fine', status: 'running', deadlineAt: new Date(NOW.getTime() + 60_000) }),
+    ];
+    let listed = 0;
+    const scheduler = fakeScheduler({
+        async listExecutions() { listed++; return executions; },
+        async listSchedules() { return []; },
+    } as unknown as Partial<SchedulerRepository>);
+
+    const app = Fastify();
+    context.after(() => app.close());
+    const { registerFleetRoutes } = await import('../src/api/routes/fleet.js');
+    await registerFleetRoutes(app, {
+        scheduler, events: store, now: () => NOW,
+        loadDevices: async () => [device()],
+        connectedUdids: async () => ['udid-a'],
+        deviceStatuses: async () => [],
+        monitorIntervalMs: 5,
+        notifications: {
+            channels: [], minSeverity: 'warning', digestLocalTime: '08:00',
+            digestTimezone: 'UTC', publicBaseUrl: '',
+        },
+    });
+
+    // The sweep is a background timer, not something a request triggers.
+    const stuck = () => store.events.filter((event) => event.kind === 'execution.stuck');
+    await new Promise((resolve) => { setTimeout(resolve, 120); });
+    assert.ok(listed > 1, `the sweep ran ${listed} times`);
+    assert.deepEqual(stuck().map(({ executionId, severity }) => [executionId, severity]),
+        [['e-stuck', 'error']], 'exactly one execution.stuck, however many sweeps ran');
+    assert.equal(stuck()[0]!.deviceUdid, 'udid-a');
+    assert.equal((stuck()[0]!.detail as { deadlineAt: string }).deadlineAt,
+        executions[0]!.deadlineAt.toISOString());
+    // No secrets: the detail carries the task identity and timings, never the payload.
+    assert.deepEqual(Object.keys(stuck()[0]!.detail!).sort(), ['deadlineAt', 'startedAt', 'task']);
 });

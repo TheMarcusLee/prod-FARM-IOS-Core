@@ -87,8 +87,11 @@ editor sends the same request.
 
 - `deviceUdids` is capped at 200 per request, and `stagger.minutes` /
   `stagger.windowMinutes` must be between 0 and 1440. Both are hard `400`s.
-- `fixed` gives device *i* an offset of `i × minutes`; `random` gives each device
-  a whole minute drawn from `[0, windowMinutes)`.
+- `fixed` gives device *i* an offset of `i × minutes`; `random` deals each device
+  a *distinct* whole minute inside `[0, windowMinutes)` and shuffles the deal, so
+  no two phones start in the same minute unless there are more devices than
+  minutes — in which case the collisions are spread as evenly as the window
+  allows rather than clumping.
 - An offset shifts `once` and `now` timings forward in time (a staggered `now`
   becomes a `once`), and shifts the `localTime` of `daily` / `weekly` timings,
   wrapping past midnight.
@@ -155,7 +158,20 @@ run-window deadline), `device.connected`, `device.disconnected`, `device.error`,
 Execution and schedule events come from the optional `onEvent` hook on
 `SchedulerRepository` (wired in `src/scheduler/runtime.ts` and
 `src/scheduler/worker.ts`); device events come from polling wda-service's
-`/devices`; stuck executions are swept on the same timer.
+`/devices`; stuck executions are swept on the same timer, every 30 s, and each
+one is reported once for as long as it stays stuck.
+
+The hook never throws and never blocks: a failed insert or a malformed
+lifecycle signal costs the timeline row, not the scheduled task. It also
+deduplicates `execution.started` per execution, because pg-boss retries a job by
+running it again — without that a task with `retryLimit: 3` produced four
+"started" events and four push notifications for one launch.
+
+Device transitions are debounced: a new state has to hold for 45 s (two monitor
+polls) before it becomes an event, so a USB cable with a bad contact flapping
+several times a minute produces nothing at all rather than hundreds of rows and
+pushes. Offline *duration*, which feeds the digest, is tracked from the raw
+polls — a 45 s debounce is noise next to the digest's one-hour threshold.
 
 ### `GET /api/events`
 
@@ -189,12 +205,24 @@ data: {"id":42,"kind":"execution.failed", … }
 
 - `Last-Event-ID` (or `?lastEventId=`) replays everything with a larger id, so a
   reconnecting client misses nothing.
-- A `: connected` comment is written immediately on open, then a `: heartbeat`
-  comment every 15 s keeps proxies from closing the connection.
-- The stream is polled from the table once a second, so events written by the
-  **worker** process reach a browser attached to the **web** process. The device
-  and stuck-execution sweep that *produces* those events runs every 30 s.
-- Closing the connection stops the timers immediately.
+- A `: heartbeat` comment every 15 s keeps proxies from closing the connection.
+- The stream is polled from the table, so events written by the **worker**
+  process reach a browser attached to the **web** process.
+- One poll timer and **one query per round** serve every subscriber, however
+  many browsers, tray apps and push relays are attached (`src/fleet/sse-hub.ts`).
+  The round reads from the lowest cursor anybody holds and fans the rows out in
+  memory, and it is guarded against overlapping itself — two rounds racing on
+  the same cursor would send every event twice.
+- A subscriber whose socket stops accepting bytes is paused until it drains
+  rather than having JSON queued for it, and one that falls more than 5000
+  events behind is dropped.
+- Closing the connection stops that subscriber immediately; closing the server
+  ends every open stream and clears the timers.
+- The route is behind the same authentication as the rest of the API — the
+  `onRequest` hook runs before the handler hijacks the reply — so an API client
+  passes `Authorization: Bearer …` exactly as it would anywhere else. Note that
+  a stream is authenticated once, at connect: revoking a token does not close
+  streams that are already open.
 
 ```sh
 curl -N -H 'Last-Event-ID: 42' http://127.0.0.1:3000/api/events/stream
@@ -203,8 +231,21 @@ curl -N -H 'Last-Event-ID: 42' http://127.0.0.1:3000/api/events/stream
 ## Notification channels
 
 Deliveries are asynchronous — the scheduler is never blocked and a channel
-failure is logged, never thrown. Each post is retried three times after the
-first attempt with exponential backoff (500 ms, 1 s, 2 s).
+failure is logged, never thrown. Channels are posted in parallel, so a webhook
+that takes its full 10 s timeout does not delay the others.
+
+A post is retried three times after the first attempt with exponential backoff
+(500 ms, 1 s, 2 s, capped at 30 s) when it fails in a way that might improve:
+a transport error, a `408`, a `429`, or a `5xx`. Any other `4xx` — a revoked
+Slack webhook answering `404`, a payload a channel refuses — is reported after
+one attempt rather than posted four times.
+
+Every interpolated value is truncated to the channel's documented ceiling
+before it goes out, because a stack trace in `detail.error` otherwise turns a
+notification into a `400`: Slack block text at 3000 and header text at 150,
+Discord title at 256, field values at 1024 and the whole embed at 6000. ntfy
+header values are stripped to one line of printable ASCII, the `Click` link
+included, so nothing in a device name or `PUBLIC_BASE_URL` can inject a header.
 
 | Variable | Meaning |
 | --- | --- |
@@ -271,6 +312,14 @@ Once a day at `DIGEST_LOCAL_TIME` in `DIGEST_TIMEZONE`, the last 24 hours are
 summarised into a `digest.daily` event and delivered to every channel —
 regardless of `NOTIFY_MIN_SEVERITY`. The clock is checked once a minute rather
 than slept through, so a host that suspends past the slot still produces one.
+The slot is computed with the scheduler's own cron machinery, so `08:00` stays
+`08:00` local across a DST change instead of drifting an hour twice a year.
+
+Exactly one digest goes out per day, restarts included. At boot the scheduler
+asks for the newest `digest.daily` row — the timeline *is* the persistence — and
+compares it against the most recent slot: already served means wait for
+tomorrow, unserved means catch up now. A farm that has never sent one waits for
+the next slot rather than firing at start-up.
 
 `detail` carries:
 

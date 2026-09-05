@@ -47,7 +47,9 @@ typo in `PUSH_QUIET_HOURS` disables quiet hours, it does not stop the relay.
    otherwise `severity >= minSeverity`.
 4. **Quiet hours.** Inside the window only `severity: error` goes out; anything
    quieter is skipped. It is still in `/api/events`, so nothing is lost — the
-   app shows it the next time it opens.
+   app shows it the next time it opens. The window is read in `PUSH_TIMEZONE`
+   through `Intl`, so it wraps past midnight and follows a DST change rather
+   than sliding an hour.
 5. **Coalesce.** The first event for a quiet registration is pushed
    immediately; anything arriving inside the next 30 s is held and folded into
    one message — `"3 farm alerts"`, with `data.count` — so a half-out USB cable
@@ -55,15 +57,25 @@ typo in `PUSH_QUIET_HOURS` disables quiet hours, it does not stop the relay.
    ticks every `min(PUSH_COALESCE_WINDOW_MS, 1000)` ms.
 6. **Send** in batches of at most 100 to `https://exp.host/--/api/v2/push/send`.
    A `429` or a `5xx` is retried with backoff (1 s, 2 s, 4 s); a `4xx` is not.
-7. **Persist the cursor** only *after* a send round, and only up to the highest
-   id that was actually *pushed*. A crash therefore replays rather than drops;
-   the app dedupes on `data.eventId`. If nothing matched a registration the
-   cursor does not move at all, so a restart re-reads and re-filters the tail.
+   Each message is trimmed to Expo's 4 KiB ceiling before it goes — body first,
+   then title — so a long title plus a stack trace comes back as a notification
+   rather than `MessageTooBig`.
+7. **Persist the cursor** only past events that can no longer need sending.
+   An event that went out, that nobody was subscribed to, or that quiet hours
+   dropped is settled; anything still held in the coalescing window, or that
+   Expo refused (`MessageRateExceeded`, a wedged Expo, a transport error), pins
+   the cursor below it so the next start replays it. A crash therefore replays
+   rather than drops, and the app dedupes on `data.eventId`.
+   `DeviceNotRegistered` is deliberately not a blocker: that phone is gone, and
+   replaying at a dead token achieves nothing.
 8. **Read receipts** 15 minutes later. `DeviceNotRegistered` calls
    `DELETE /api/push/registrations/:id` — that phone is gone. Any other error is
    recorded with `POST /api/push/registrations/:id/error` and shows up as
    `lastError` in `GET /api/push/registrations`.
 9. **Reconnect** with jittered backoff, 1 s → 30 s.
+10. **Shut down** on `SIGINT`/`SIGTERM` by force-draining the coalescing window
+    — whatever it was holding goes out — and persisting the cursor, so a restart
+    neither loses a notification nor replays the night.
 
 ## The message
 

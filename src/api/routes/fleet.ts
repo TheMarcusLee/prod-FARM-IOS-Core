@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import type { ExecutionRow } from '../../database/schema.js';
-import { discoverConnectedDevices } from '../../devices/discovery.js';
+import { discoverConnectedDeviceUdids } from '../../devices/discovery.js';
 import { loadRegisteredDevices, type RegisteredDevice } from '../../devices/registry.js';
 import type { DeviceConnectionStatus } from '../../devices/connection-manager.js';
 import { requestWdaService } from '../../devices/wda-service-client.js';
@@ -15,6 +15,7 @@ import {
     createDeviceMonitorState, diffDeviceStatuses, longOfflineDevices, type DeviceMonitorState,
 } from '../../fleet/device-monitor.js';
 import { renderFleetPage, type FleetCard } from '../../fleet/page.js';
+import { createEventStreamHub, type EventStreamHub } from '../../fleet/sse-hub.js';
 import { createEventRecorder, type EventRecorder } from '../../fleet/recorder.js';
 import { deviceState, stuckExecutions, summarizeFleet } from '../../fleet/summary.js';
 import { notificationConfigFromEnv, type NotificationConfig } from '../../notifications/config.js';
@@ -36,13 +37,36 @@ export interface FleetRouteOptions {
     now?: () => Date;
     ssePollIntervalMs?: number;
     monitorIntervalMs?: number;
+    /** How long /api/fleet/summary and /fleet may reuse one device+scheduler read. */
+    summaryTtlMs?: number;
     /** Set false to keep the device/stuck/digest timers out of a test process. */
     backgroundTasks?: boolean;
 }
 
 const HEARTBEAT_MS = 15_000;
-const DEFAULT_SSE_POLL_MS = 1_000;
 const DEFAULT_MONITOR_MS = 30_000;
+/**
+ * The fleet page polls its summary every 5 s, and so does every tray app. Each
+ * call means a USB enumeration plus two 500-row scheduler queries, so a handful
+ * of watchers used to multiply that by however many of them there were. A cache
+ * this short is invisible to the operator and collapses the fan-in to one pass.
+ */
+const DEFAULT_SUMMARY_TTL_MS = 2_000;
+
+/** Memoises an async load for `ttlMs`, sharing one in-flight call between callers. */
+function throttled<T>(ttlMs: number, now: () => number, load: () => Promise<T>): () => Promise<T> {
+    let cached: { at: number; value: T } | null = null;
+    let inFlight: Promise<T> | null = null;
+    return async () => {
+        const at = now();
+        if (cached && at - cached.at < ttlMs) return cached.value;
+        inFlight ??= load().then((value) => {
+            cached = { at: now(), value };
+            return value;
+        }).finally(() => { inFlight = null; });
+        return inFlight;
+    };
+}
 
 function fleetTags(devices: readonly RegisteredDevice[]): string[] {
     return [...new Set(devices.flatMap((device) => device.tags ?? []))].sort();
@@ -100,8 +124,10 @@ export async function registerFleetRoutes(app: FastifyInstance, options: FleetRo
     const clock = options.now ?? (() => new Date());
     const notifications = options.notifications ?? notificationConfigFromEnv();
     const loadDevices = options.loadDevices ?? loadRegisteredDevices;
-    const connectedUdids = options.connectedUdids
-        ?? (async () => (await discoverConnectedDevices()).map(({ udid }) => udid));
+    // Only the UDIDs: discoverConnectedDevices() also asks usbmuxd for a name,
+    // an OS version and a device-info blob per phone — three extra round trips
+    // each — and every one of them is thrown away here.
+    const connectedUdids = options.connectedUdids ?? (() => discoverConnectedDeviceUdids());
 
     let store: EventStore | null = options.events ?? null;
     const eventStore = (): EventStore | null => {
@@ -123,6 +149,23 @@ export async function registerFleetRoutes(app: FastifyInstance, options: FleetRo
         after: async (id, limit) => eventStore()?.after(id, limit) ?? [],
         countAfter: async (id) => eventStore()?.countAfter(id) ?? 0,
     }, { notifications, ...(options.delivery ? { delivery: options.delivery } : {}), log: (message) => app.log.warn(message) });
+
+    // One poll timer and one query for every subscriber — see sse-hub.ts. Built
+    // lazily so a process without an event store never starts a timer at all.
+    let streams: EventStreamHub | null = null;
+    const hub = (): EventStreamHub => {
+        const resolved = eventStore();
+        if (!resolved) throw new Error('Event store unavailable');
+        streams ??= createEventStreamHub(resolved, {
+            ...(options.ssePollIntervalMs === undefined ? {} : { intervalMs: options.ssePollIntervalMs }),
+            heartbeatMs: HEARTBEAT_MS,
+            log: (message) => app.log.debug(message),
+        });
+        return streams;
+    };
+    // Without this an `app.close()` leaves the poll and heartbeat intervals
+    // running and the sockets open — a leaked timer per test that opened a stream.
+    app.addHook('onClose', async () => { streams?.closeAll(); });
 
     app.get<{ Querystring: Record<string, string | undefined> }>('/api/events', async (request, reply) => {
         const resolved = requireStore(reply);
@@ -157,28 +200,12 @@ export async function registerFleetRoutes(app: FastifyInstance, options: FleetRo
             connection: 'keep-alive', 'x-accel-buffering': 'no',
         });
         raw.write(': connected\n\n');
-        let closed = false;
-        const push = async (): Promise<void> => {
-            if (closed) return;
-            for (const event of await resolved.after(cursor, 200)) {
-                cursor = event.id;
-                raw.write(`id: ${event.id}\nevent: ${event.kind}\ndata: ${JSON.stringify(serializeEvent(event))}\n\n`);
-            }
-        };
-        const poll = setInterval(() => void push().catch(() => {}), options.ssePollIntervalMs ?? DEFAULT_SSE_POLL_MS);
-        const heartbeat = setInterval(() => { if (!closed) raw.write(': heartbeat\n\n'); }, HEARTBEAT_MS);
-        poll.unref?.();
-        heartbeat.unref?.();
-        const stop = (): void => {
-            if (closed) return;
-            closed = true;
-            clearInterval(poll);
-            clearInterval(heartbeat);
-            raw.end();
-        };
-        request.raw.once('close', stop);
-        request.raw.once('error', stop);
-        await push();
+        const subscription = hub().add(raw, cursor);
+        request.raw.once('close', () => subscription.close());
+        request.raw.once('error', () => subscription.close());
+        raw.once('error', () => subscription.close());
+        // First replay is immediate; everything after it rides the shared poll.
+        await hub().poll();
     });
 
     app.post('/api/notifications/test', async (_request: FastifyRequest, reply: FastifyReply) => {
@@ -211,27 +238,31 @@ export async function registerFleetRoutes(app: FastifyInstance, options: FleetRo
         return reply.code(created ? 201 : 400).send({ created, failed: outcomes.length - created, results: outcomes });
     });
 
-    const fleetState = async () => {
+    const summaryTtlMs = options.summaryTtlMs ?? DEFAULT_SUMMARY_TTL_MS;
+    const fleetState = throttled(summaryTtlMs, () => clock().getTime(), async () => {
         const [devices, connected] = await Promise.all([loadDevices(), connectedUdids()]);
         const online = new Set(connected);
         return devices.map((device) => ({
             device, connected: online.has(device.udid),
             state: deviceState(device, online.has(device.udid)),
         }));
-    };
+    });
+
+    const schedulerState = throttled(summaryTtlMs, () => clock().getTime(), async () => {
+        const [executions, schedules] = await Promise.all([
+            options.scheduler.listExecutions(500), options.scheduler.listSchedules(500),
+        ]);
+        return { executions, schedules };
+    });
 
     app.get('/api/fleet/summary', async () => {
-        const [devices, executions, schedules] = await Promise.all([
-            fleetState(), options.scheduler.listExecutions(500), options.scheduler.listSchedules(500),
-        ]);
+        const [devices, { executions, schedules }] = await Promise.all([fleetState(), schedulerState()]);
         return summarizeFleet({ devices, executions, schedules, now: clock() });
     });
 
     app.get('/fleet', async (_request, reply) => {
         const now = clock();
-        const [devices, executions, schedules] = await Promise.all([
-            fleetState(), options.scheduler.listExecutions(500), options.scheduler.listSchedules(500),
-        ]);
+        const [devices, { executions, schedules }] = await Promise.all([fleetState(), schedulerState()]);
         const recent = await (eventStore()?.list({ limit: 300 }) ?? Promise.resolve([] as FarmEvent[]));
         const latestEvent = new Map<string, FarmEvent>();
         for (const event of recent) {
@@ -268,7 +299,9 @@ export async function registerFleetRoutes(app: FastifyInstance, options: FleetRo
     if (options.backgroundTasks === false || (!options.events && !options.scheduler?.connection)) return;
     const monitorState: DeviceMonitorState = createDeviceMonitorState();
     const readStatuses = options.deviceStatuses ?? wdaServiceStatuses;
-    const reportedStuck = new Set<string>();
+    // Rebuilt from the still-stuck set on every sweep, so an execution that
+    // finishes drops out of it instead of accumulating for the process lifetime.
+    let reportedStuck = new Set<string>();
 
     const sweep = async (): Promise<void> => {
         const now = clock();
@@ -276,7 +309,10 @@ export async function registerFleetRoutes(app: FastifyInstance, options: FleetRo
             for (const input of diffDeviceStatuses(monitorState, await readStatuses(), now)) await recorder.record(input);
         } catch (error) { app.log.debug(`Fleet device poll failed: ${String(error)}`); }
         try {
-            for (const execution of stuckExecutions(await options.scheduler.listExecutions(500), now)) {
+            const stuck = stuckExecutions(await options.scheduler.listExecutions(500), now);
+            const seen = new Set(stuck.map(({ id }) => id));
+            reportedStuck = new Set([...reportedStuck].filter((id) => seen.has(id)));
+            for (const execution of stuck) {
                 if (reportedStuck.has(execution.id)) continue;
                 reportedStuck.add(execution.id);
                 await recorder.record({
@@ -300,6 +336,10 @@ export async function registerFleetRoutes(app: FastifyInstance, options: FleetRo
         localTime: notifications.digestLocalTime, timezone: notifications.digestTimezone,
         now: clock,
         log: (message) => app.log.warn(message),
+        // The timeline is the persistence: the newest digest.daily row is when
+        // the last one went out, so a restart after the slot does not send a
+        // second one and a farm that was down at the slot still catches up.
+        lastRunAt: async () => (await eventStore()?.list({ kind: 'digest.daily', limit: 1 }))?.[0]?.createdAt ?? null,
         run: async (now) => {
             const [executions, schedules] = await Promise.all([
                 options.scheduler.listExecutions(500), options.scheduler.listSchedules(500),

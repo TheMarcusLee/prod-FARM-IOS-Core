@@ -39,7 +39,50 @@ export function lifecycleEventInput(event: SchedulerLifecycleEvent): EventInput 
     };
 }
 
-/** The hook handed to SchedulerRepository; synchronous and non-blocking by design. */
-export function schedulerEventHook(recorder: EventRecorder): SchedulerEventHook {
-    return (event) => { void recorder.record(lifecycleEventInput(event)); };
+/**
+ * pg-boss retries an execution by running the same job again, and the worker
+ * calls `startAttempt` on every attempt. Without this the timeline would carry
+ * one `execution.started` per attempt — four rows and four push notifications
+ * for a task that was only ever launched once. The set is bounded and an id is
+ * released as soon as the execution reaches a terminal state.
+ */
+const STARTED_MEMORY = 2_000;
+
+export function createStartedDeduplicator(limit = STARTED_MEMORY): (event: SchedulerLifecycleEvent) => boolean {
+    const started = new Set<string>();
+    return (event) => {
+        if (!('execution' in event)) return true;
+        const { id } = event.execution;
+        if (event.kind !== 'execution.started') {
+            started.delete(id);
+            return true;
+        }
+        if (started.has(id)) return false;
+        // Oldest-first eviction: a Set iterates in insertion order.
+        if (started.size >= limit) {
+            const oldest = started.values().next().value;
+            if (oldest !== undefined) started.delete(oldest);
+        }
+        started.add(id);
+        return true;
+    };
+}
+
+/**
+ * The hook handed to SchedulerRepository. It is called from inside repository
+ * transactions, so it must return immediately and must never throw: a malformed
+ * lifecycle signal has to lose the timeline row, not the scheduled task.
+ */
+export function schedulerEventHook(
+    recorder: EventRecorder, log: (message: string) => void = (message) => console.error(message),
+): SchedulerEventHook {
+    const isFirstStart = createStartedDeduplicator();
+    return (event) => {
+        try {
+            if (!isFirstStart(event)) return;
+            void recorder.record(lifecycleEventInput(event));
+        } catch (error) {
+            log(`Unable to map a ${event.kind} lifecycle signal onto an event: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    };
 }

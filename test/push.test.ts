@@ -11,8 +11,9 @@ import { registerFleetRoutes } from '../src/api/routes/fleet.js';
 import { registerPushRoutes } from '../src/api/routes/push.js';
 import { createMemoryEventStore, type EventInput, type FarmEvent } from '../src/fleet/events.js';
 import {
-    chunk, fetchExpoReceipts, isDeviceNotRegistered, isRetryableStatus, sendExpoMessages,
-    EXPO_PUSH_URL, EXPO_RECEIPT_URL, type ExpoTicket, type PushFetch,
+    capExpoMessage, chunk, fetchExpoReceipts, isDeviceNotRegistered, isRetryableStatus,
+    isRetryableTicketError, sendExpoMessages,
+    EXPO_MESSAGE_LIMIT_BYTES, EXPO_PUSH_URL, EXPO_RECEIPT_URL, type ExpoTicket, type PushFetch,
 } from '../src/push/expo.js';
 import { createMemoryAckStore } from '../src/push/acks.js';
 import {
@@ -20,7 +21,7 @@ import {
 } from '../src/push/registrations.js';
 import {
     createCoalescer, createRelayClient, inQuietHours, parseQuietHours, parseStreamEvent, passesQuietHours,
-    pushMessage, readRelayState, relayConfigFromEnv, sendBatches, settleReceipts, writeRelayState,
+    pushMessage, readRelayState, relayConfigFromEnv, runRelay, sendBatches, settleReceipts, writeRelayState,
     type PendingReceipt, type RelayClient, type RelayConfig, type RelayRegistration,
 } from '../src/push/relay.js';
 import { createSseParser, sseBackoffDelay } from '../src/push/sse.js';
@@ -356,11 +357,14 @@ test('sendBatches drops a DeviceNotRegistered token and records other errors', a
     const batches = ['reg-1', 'reg-2', 'reg-3'].map((id) => ({
         registration: registration({ id }), events: [farmEvent({ id: 1 })],
     }));
-    const pending = await sendBatches(batches, { config: relayConfig(), client, fetchImpl, sleep: async () => {} }, 1_000);
+    const outcome = await sendBatches(batches, { config: relayConfig(), client, fetchImpl, sleep: async () => {} }, 1_000);
 
-    assert.deepEqual(pending, [{ ticketId: 'ticket-1', registrationId: 'reg-1', dueAt: 901_000 }]);
+    assert.deepEqual(outcome.receipts, [{ ticketId: 'ticket-1', registrationId: 'reg-1', dueAt: 901_000 }]);
     assert.deepEqual(client.deleted, ['reg-2']);
     assert.deepEqual(client.errors, [['reg-3', 'MessageRateExceeded']]);
+    // reg-3 was rate limited, so its event still holds the relay's cursor back;
+    // reg-2's device is gone for good and does not.
+    assert.equal(outcome.lowestUndelivered, 1);
 });
 
 test('receipts are read 15 minutes later and prune the tokens Expo has given up on', async () => {
@@ -469,6 +473,161 @@ test('the relay client talks to the farm over the public API, bearer token inclu
 test('an unfetched receipt lookup and an empty batch are both no-ops', async () => {
     const { calls, fetchImpl } = fakeExpo();
     assert.deepEqual(await fetchExpoReceipts([], { fetchImpl }), {});
-    assert.deepEqual(await sendBatches([], { config: relayConfig(), client: recordingClient(), fetchImpl }, 0), []);
+    assert.deepEqual(await sendBatches([], { config: relayConfig(), client: recordingClient(), fetchImpl }, 0),
+        { receipts: [], lowestUndelivered: null });
     assert.equal(calls.length, 0);
+});
+
+
+/* ------------------------------------------------- relay cursor and shutdown */
+
+test('quiet hours hold across a DST change and around midnight', () => {
+    const overnight = parseQuietHours('22:00-07:00')!;
+    // Europe/London springs forward at 01:00 UTC on 2026-03-29. 23:30 local is
+    // inside the window on either side of it, and 07:30 local is outside.
+    assert.ok(inQuietHours(overnight, new Date('2026-03-28T23:30:00.000Z'), 'Europe/London'));
+    assert.ok(inQuietHours(overnight, new Date('2026-03-29T22:30:00.000Z'), 'Europe/London'));
+    // 08:30 UTC on 29 March is 09:30 BST — morning, not quiet.
+    assert.ok(!inQuietHours(overnight, new Date('2026-03-29T08:30:00.000Z'), 'Europe/London'));
+    // 06:30 UTC is 07:30 BST, just past the end of the window.
+    assert.ok(!inQuietHours(overnight, new Date('2026-03-29T06:30:00.000Z'), 'Europe/London'));
+    // 05:30 UTC is 06:30 BST, still inside it.
+    assert.ok(inQuietHours(overnight, new Date('2026-03-29T05:30:00.000Z'), 'Europe/London'));
+
+    // Exactly midnight, and the two boundary minutes.
+    assert.ok(inQuietHours(overnight, new Date('2026-03-01T00:00:00.000Z'), 'UTC'));
+    assert.ok(inQuietHours(overnight, new Date('2026-03-01T22:00:00.000Z'), 'UTC'));
+    assert.ok(!inQuietHours(overnight, new Date('2026-03-01T21:59:00.000Z'), 'UTC'));
+    assert.ok(!inQuietHours(overnight, new Date('2026-03-01T07:00:00.000Z'), 'UTC'));
+    assert.ok(inQuietHours(overnight, new Date('2026-03-01T06:59:00.000Z'), 'UTC'));
+
+    // A daytime window does not wrap.
+    const daytime = parseQuietHours('09:00-17:00')!;
+    assert.ok(inQuietHours(daytime, new Date('2026-03-01T12:00:00.000Z'), 'UTC'));
+    assert.ok(!inQuietHours(daytime, new Date('2026-03-01T23:00:00.000Z'), 'UTC'));
+});
+
+test('an oversized push is cut down rather than rejected as MessageTooBig', () => {
+    const huge = pushMessage(registration(), [farmEvent({
+        title: 'x'.repeat(5_000),
+        detail: { error: 'y'.repeat(9_000) },
+    })], 'https://farm.example');
+    const capped = capExpoMessage(huge);
+    assert.ok(Buffer.byteLength(JSON.stringify(capped), 'utf8') <= EXPO_MESSAGE_LIMIT_BYTES);
+    // A message already inside the limit is untouched.
+    const small = pushMessage(registration(), [farmEvent()], '');
+    assert.deepEqual(capExpoMessage(small), small);
+
+    assert.equal(isRetryableTicketError({ status: 'error', details: { error: 'MessageRateExceeded' } }), true);
+    assert.equal(isRetryableTicketError({ status: 'error', details: { error: 'DeviceNotRegistered' } }), false);
+    assert.equal(isRetryableTicketError({ status: 'ok' }), false);
+});
+
+/** A source that yields a fixed script of events and then ends the connection. */
+function scriptedSource(events: FarmEvent[]) {
+    const seen: number[] = [];
+    return {
+        seen,
+        connect(lastEventId: number) {
+            seen.push(lastEventId);
+            return (async function* stream() {
+                for (const event of events) {
+                    if (event.id <= lastEventId) continue;
+                    yield { data: JSON.stringify({ ...event, createdAt: event.createdAt.toISOString() }) };
+                }
+            })();
+        },
+    };
+}
+
+async function runOnce(options: {
+    events: FarmEvent[];
+    statePath: string;
+    registrations?: RelayRegistration[];
+    config?: Partial<RelayConfig>;
+    tickets?: ExpoTicket[];
+}): Promise<{ pushed: unknown[]; seen: number[] }> {
+    const controller = new AbortController();
+    const source = scriptedSource(options.events);
+    const { calls, fetchImpl } = fakeExpo(() => ({ data: options.tickets ?? options.events.map((_event, index) => ({ status: 'ok', id: `ticket-${index}` })) }));
+    const client: RelayClient = {
+        async listRegistrations() { return options.registrations ?? [registration()]; },
+        async deleteRegistration() {},
+        async reportError() {},
+    };
+    // The scripted source ends immediately, so the relay would reconnect for
+    // ever; abort as soon as the first pass through the stream is done.
+    const sleep = async (): Promise<void> => { controller.abort(); };
+    await runRelay({
+        config: relayConfig({ statePath: options.statePath, coalesceWindowMs: 0, ...options.config }),
+        client, source, fetchImpl, sleep, log: () => {}, signal: controller.signal,
+    });
+    return { pushed: calls, seen: source.seen };
+}
+
+test('the relay cursor advances past events nobody wanted, and stops at one Expo refused', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'push-relay-cursor-'));
+
+    // No registrations at all: the events are settled the moment they are seen,
+    // so a farm nobody has registered a phone with does not replay its history.
+    const quiet = path.join(directory, 'quiet.json');
+    await runOnce({ statePath: quiet, registrations: [], events: [farmEvent({ id: 10 }), farmEvent({ id: 11 })] });
+    assert.deepEqual(await readRelayState(quiet), { lastEventId: 11 });
+
+    // Quiet hours drop a warning: same story, the cursor still moves.
+    const overnight = path.join(directory, 'overnight.json');
+    await runOnce({
+        statePath: overnight, registrations: [registration()],
+        config: { quietHours: parseQuietHours('00:00-23:59') },
+        events: [farmEvent({ id: 20, severity: 'warning' })],
+    });
+    assert.deepEqual(await readRelayState(overnight), { lastEventId: 20 });
+
+    // Expo refuses the message: the cursor stops just below it so the next start
+    // replays rather than losing the alert.
+    const refused = path.join(directory, 'refused.json');
+    await runOnce({
+        statePath: refused,
+        events: [farmEvent({ id: 30 })],
+        tickets: [{ status: 'error', message: 'MessageRateExceeded' }],
+    });
+    assert.deepEqual(await readRelayState(refused), { lastEventId: 29 });
+
+    // A successful send does move it, and the next connect resumes from there.
+    const sent = path.join(directory, 'sent.json');
+    await runOnce({ statePath: sent, events: [farmEvent({ id: 40 })] });
+    assert.deepEqual(await readRelayState(sent), { lastEventId: 40 });
+    const second = await runOnce({ statePath: sent, events: [farmEvent({ id: 41 })] });
+    assert.deepEqual(second.seen, [40]);
+});
+
+test('shutdown flushes whatever the coalescing window is still holding', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'push-relay-shutdown-'));
+    const statePath = path.join(directory, 'state.json');
+    // A window long enough that nothing would drain on its own before the abort.
+    const { pushed } = await runOnce({
+        statePath,
+        config: { coalesceWindowMs: 600_000 },
+        events: [farmEvent({ id: 50 }), farmEvent({ id: 51 })],
+        tickets: [{ status: 'ok', id: 'ticket-0' }],
+    });
+    // Both events reached Expo, folded into one message, and the cursor moved.
+    assert.ok(pushed.length >= 1);
+    assert.deepEqual(await readRelayState(statePath), { lastEventId: 51 });
+});
+
+test('the coalescer forgets registrations that stopped receiving', () => {
+    const coalescer = createCoalescer(1_000);
+    coalescer.add('reg-1', farmEvent({ id: 1 }));
+    coalescer.drain(0);
+    assert.equal(coalescer.lowestPendingId(), null);
+
+    coalescer.add('reg-1', farmEvent({ id: 5 }));
+    coalescer.add('reg-2', farmEvent({ id: 3 }));
+    // The oldest event still held is what pins the relay cursor.
+    assert.equal(coalescer.lowestPendingId(), 3);
+
+    // force ignores the window — the shutdown path.
+    assert.deepEqual(coalescer.drain(0, true).map(({ key }) => key).sort(), ['reg-1', 'reg-2']);
+    assert.equal(coalescer.lowestPendingId(), null);
 });

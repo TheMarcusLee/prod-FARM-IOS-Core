@@ -4,11 +4,16 @@
   Supervises `npm run push:relay` beside the scheduler worker.
 
   Copy to ~/Library/LaunchAgents/, replace /Users/you/phone-farm with the
-  checkout path, then:
+  checkout path and /Users/you with your home directory (launchd does not
+  expand ~ or $HOME in any of these values), then:
 
     mkdir -p ~/Library/Logs/phone-farm
     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/co.agniverse.phone-farm.push-relay.plist
     launchctl kickstart -k gui/$(id -u)/co.agniverse.phone-farm.push-relay
+
+  ProgramArguments[0] must be a real path: launchd does not search PATH for it,
+  and PATH below only applies to what npm itself spawns. On Apple Silicon
+  Homebrew that is /opt/homebrew/bin/npm; `which npm` settles it.
 
   FARM_API_TOKEN is better kept in the checkout's .env — `npm run push:relay`
   loads it — than written into this file, which is world-readable.
@@ -51,6 +56,11 @@
   <integer>30</integer>
   <key>RunAtLoad</key>
   <true/>
+
+  <!-- SIGTERM makes the relay drain its coalescing window and persist its
+       cursor before exiting; give it room before launchd escalates to SIGKILL. -->
+  <key>ExitTimeOut</key>
+  <integer>30</integer>
 
   <key>StandardOutPath</key>
   <string>/Users/you/Library/Logs/phone-farm/push-relay.log</string>

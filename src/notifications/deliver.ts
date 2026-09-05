@@ -25,9 +25,21 @@ export interface DeliveryOptions {
 export const DEFAULT_RETRIES = 3;
 export const DEFAULT_BASE_DELAY_MS = 500;
 
-/** Exponential: 500 ms, 1 s, 2 s. */
+/** Exponential: 500 ms, 1 s, 2 s — capped so a long retry chain cannot stall for minutes. */
+export const MAX_BACKOFF_MS = 30_000;
+
 export function backoffDelay(attempt: number, baseDelayMs = DEFAULT_BASE_DELAY_MS): number {
-    return baseDelayMs * 2 ** attempt;
+    return Math.min(baseDelayMs * 2 ** attempt, MAX_BACKOFF_MS);
+}
+
+/**
+ * A 429 or a 5xx is worth another try. Every other 4xx is the channel telling us
+ * the request itself is wrong — a revoked Slack webhook, a payload over a limit,
+ * a deleted Discord hook — and repeating it four times only adds three more
+ * requests to somebody's rate limit before the same failure is reported.
+ */
+export function isRetryableStatus(status: number): boolean {
+    return status === 408 || status === 429 || status >= 500;
 }
 
 /** NOTIFY_KINDS, when set, replaces the severity floor entirely. */
@@ -66,6 +78,7 @@ export async function postWithRetry(
             if (response.ok) return { ok: true, status: response.status, attempts };
             lastStatus = response.status;
             lastError = `Channel responded ${response.status}`;
+            if (!isRetryableStatus(response.status)) break;
         } catch (error) {
             lastError = message(error);
         }
