@@ -23,10 +23,25 @@ test('readiness follows the driver: WDA+Appium on iOS, adb visibility, or the br
     assert.equal(await readinessProblem(adb, true, down), undefined);
 
     const probed: string[] = [];
-    assert.equal(await readinessProblem(bridge, false, async (url) => { probed.push(url); return true; }), undefined);
+    assert.equal(await readinessProblem(bridge, true, async (url) => { probed.push(url); return true; }), undefined);
     assert.deepEqual(probed, ['http://192.168.1.40:18300/ping']);
     assert.match((await readinessProblem(bridge, true, down)) ?? '', /bridge is unavailable/);
     assert.match((await readinessProblem({ ...adb, driver: 'a11y-bridge' }, true, up)) ?? '', /no android.bridgeUrl/);
+});
+
+test('a bridge device still needs adb, because launch, terminate and push fall back to it', async () => {
+    const up = async () => true;
+    // The bridge answers, but the phone is not visible to adb: the run would fail on its first
+    // launchApp, so it is held rather than started.
+    assert.match((await readinessProblem(bridge, false, up)) ?? '', /not visible to adb/);
+    assert.match((await readinessProblem(bridge, false, up)) ?? '', /android\.bridgeOnly/);
+
+    // Opted in: the bridge alone is enough, and adb is never consulted.
+    const bridgeOnly = { ...bridge, android: { ...bridge.android!, bridgeOnly: true } };
+    assert.equal(await readinessProblem(bridgeOnly, false, up), undefined);
+
+    // bridgeOnly does not excuse a bridge that is down.
+    assert.match((await readinessProblem(bridgeOnly, false, async () => false)) ?? '', /bridge is unavailable/);
 });
 
 test('plugin environment is platform-specific and never leaks iOS variables to Android', () => {

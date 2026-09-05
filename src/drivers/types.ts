@@ -96,6 +96,13 @@ export interface AndroidDeviceConfig {
     bridgeUrl?: string;
     /** Bearer token minted by the bridge's ContentProvider during bootstrap. */
     bridgeToken?: string;
+    /**
+     * The bridge cannot launch or terminate an app, or push a file, so `a11y-bridge` hands those
+     * three to an adb fallback and the device is only fully driveable while adb can see it. Set
+     * this when the phone is deliberately off USB and the routines on it never need those verbs;
+     * readiness then asks for the bridge alone. See `src/drivers/README.md`.
+     */
+    bridgeOnly?: boolean;
 }
 
 export class DriverError extends Error {}

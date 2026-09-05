@@ -98,6 +98,29 @@ test('ports and the bridge URL are validated rather than stored as given', async
     assert.deepEqual(await onDisk(), []);
 });
 
+test('android.bridgeOnly is whitelisted, typed, and only stored when true', async (context) => {
+    await seed([]);
+    const app = await plainApp(context);
+
+    const refused = await inject(app, {
+        method: 'POST', url: '/api/devices', headers: json,
+        payload: { udid: 'p1', platform: 'android', android: { serial: 'S1', bridgeOnly: 'yes' } },
+    });
+    assert.equal(refused.statusCode, 400);
+    assert.match(refused.json().error, /android\.bridgeOnly/);
+
+    const created = await inject(app, {
+        method: 'POST', url: '/api/devices', headers: json,
+        payload: {
+            udid: 'p1', platform: 'android', driver: 'a11y-bridge',
+            android: { serial: 'S1', bridgeUrl: 'http://127.0.0.1:8080', bridgeOnly: true, nonsense: 1 },
+        },
+    });
+    assert.equal(created.statusCode, 201);
+    const [stored] = await onDisk();
+    assert.deepEqual(stored!.android, { serial: 'S1', bridgeUrl: 'http://127.0.0.1:8080', bridgeOnly: true });
+});
+
 // ---- secret redaction ------------------------------------------------------
 
 test('neither the passcode nor the bridge token leaves in a device response', async (context) => {

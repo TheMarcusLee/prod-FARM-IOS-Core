@@ -50,6 +50,12 @@ export async function readinessProblem(
             const bridgeUrl = registered.android?.bridgeUrl;
             if (!bridgeUrl) return 'device uses the a11y-bridge driver but has no android.bridgeUrl';
             if (!await ready(bridgePingUrl(bridgeUrl))) return `bridge is unavailable at ${bridgeUrl}`;
+            // launchApp, terminateApp and pushMedia fall through to adb (see drivers/select.ts), so a
+            // phone answering only on the bridge would start a run and fail on its first launch step.
+            if (!discovered && !registered.android?.bridgeOnly) {
+                return 'bridge is up but the device is not visible to adb, which the bridge driver still needs '
+                    + 'for launch, terminate and media push — set android.bridgeOnly to run without it';
+            }
             return;
         }
         case 'adb':

@@ -47,6 +47,37 @@ Switch the same phone to the bridge by changing one field and adding the bridge 
 
 Existing iOS entries need no changes: `platform` defaults to `ios` and `driver` to `wda`.
 
+### `android.bridgeOnly` — the adb the bridge still needs
+
+An `AccessibilityService` cannot start an app, stop one, or write a file to the gallery, so
+`a11y-bridge` keeps an adb driver behind it (`select.ts`) and forwards `launchApp`,
+`terminateApp` and `pushMedia` to it. A phone that answers on the bridge but is invisible to adb
+is therefore only *partly* driveable: taps, swipes, typing, screenshots and the tree work, and the
+first launch step of a routine fails.
+
+Readiness reflects that. `scheduler/executor.ts` requires **both** the bridge ping and adb
+visibility before it starts a run on an `a11y-bridge` device. Set `"bridgeOnly": true` under
+`android` to trade that safety for reach:
+
+```json
+"android": {
+  "serial": "R58N12ABCDE",
+  "bridgeUrl": "http://192.168.1.40:8080",
+  "bridgeToken": "<uuid>",
+  "bridgeOnly": true
+}
+```
+
+| | adb visible | `bridgeOnly: true`, adb gone |
+|---|---|---|
+| tap / swipe / type / key / screenshot / tree | yes | yes |
+| `launchApp` / `terminateApp` / `pushMedia` | yes | **throws `UnsupportedOperationError` mid-run** |
+| starts a run while off USB | no — held until adb sees it | yes |
+
+So: leave it unset for a phone on a USB hub or on wireless adb, and set it only for a phone that
+is deliberately unreachable by adb *and* runs routines that launch apps by tapping the home-screen
+icon and never push media. `POST /api/devices` accepts the field; the dashboard does not set it.
+
 ## Bootstrapping the bridge on a phone (once, over USB)
 
 1. Build the APK: `cd <sim-use>/bridge && ./gradlew :app:assembleRelease`.

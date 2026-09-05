@@ -126,7 +126,7 @@ function validBridgeUrl(value: unknown): boolean {
 /** Returns the first problem with a device body, or null. Shared by POST and PATCH. */
 function deviceBodyProblem(body: {
     name?: unknown; wdaLocalPort?: unknown; mjpegLocalPort?: unknown;
-    android?: { serial?: unknown; bridgeUrl?: unknown; bridgeToken?: unknown } | null;
+    android?: { serial?: unknown; bridgeUrl?: unknown; bridgeToken?: unknown; bridgeOnly?: unknown } | null;
 }): string | null {
     if (body.name !== undefined && (typeof body.name !== 'string' || body.name.length > MAX_DEVICE_NAME_LENGTH)) {
         return `name must be a string of at most ${MAX_DEVICE_NAME_LENGTH} characters`;
@@ -145,6 +145,9 @@ function deviceBodyProblem(body: {
         }
         if (android.bridgeToken !== undefined && typeof android.bridgeToken !== 'string') {
             return 'android.bridgeToken must be a string';
+        }
+        if (android.bridgeOnly !== undefined && typeof android.bridgeOnly !== 'boolean') {
+            return 'android.bridgeOnly must be a boolean';
         }
     }
     return null;
@@ -481,7 +484,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         await options.registrations.cancel(request.params.id);
         return reply.code(204).send();
     });
-    app.post<{ Body: { name?: string; udid?: string; wdaLocalPort?: number; mjpegLocalPort?: number; passcode?: string; coordinateProfile?: string; pluginData?: Record<string, JsonObject>; platform?: string; driver?: string; android?: { serial?: unknown; bridgeUrl?: unknown; bridgeToken?: unknown } | null } }>(
+    app.post<{ Body: { name?: string; udid?: string; wdaLocalPort?: number; mjpegLocalPort?: number; passcode?: string; coordinateProfile?: string; pluginData?: Record<string, JsonObject>; platform?: string; driver?: string; android?: { serial?: unknown; bridgeUrl?: unknown; bridgeToken?: unknown; bridgeOnly?: unknown } | null } }>(
         '/api/devices', async (request, reply) => {
             const { name, udid, wdaLocalPort, mjpegLocalPort, passcode, coordinateProfile, pluginData, platform, driver, android } = request.body;
             if (!udid) return reply.code(400).send({ error: 'A device UDID is required' });
@@ -509,6 +512,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
                 serial: android.serial,
                 ...(typeof android.bridgeUrl === 'string' ? { bridgeUrl: android.bridgeUrl } : {}),
                 ...(typeof android.bridgeToken === 'string' ? { bridgeToken: android.bridgeToken } : {}),
+                ...(android.bridgeOnly === true ? { bridgeOnly: true } : {}),
             } : undefined;
             const created = await mutateRegisteredDevices((devices) => {
                 if (devices.some((device) => device.udid === udid)) throw httpError(409, 'A device with this UDID is already registered');
