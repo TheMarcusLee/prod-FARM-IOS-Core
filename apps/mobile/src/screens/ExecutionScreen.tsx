@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { formatDuration, formatRelative } from '@farm/client';
-import { Badge, Card, ErrorBanner, Loading, Muted, Row, SectionTitle } from '../components';
+import { Badge, Card, ErrorState, Loading, Muted, Row, SectionTitle } from '../components';
 import { useFarm } from '../context/FarmContext';
 import { useAsync } from '../hooks';
 import { executionStatusColor, useTheme } from '../theme';
@@ -20,7 +20,7 @@ export function ExecutionScreen({ id }: { id: string }) {
     }, [execution.data, snapshot]);
 
     if (execution.loading && !execution.data) return <Loading />;
-    if (execution.error) return <ErrorBanner message={execution.error.message} onRetry={() => void execution.reload()} />;
+    if (execution.error) return <ErrorState error={execution.error} onRetry={() => void execution.reload()} testID="execution-error" />;
     if (!execution.data) return null;
 
     const row = execution.data;

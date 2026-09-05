@@ -16,6 +16,16 @@ export interface HttpConfig {
     fetch?: typeof fetch;
     /** Extra headers on every request (e.g. a build id for the server log). */
     headers?: Record<string, string>;
+    /**
+     * Extra attempts for a **GET** that failed transiently. Default 2 (so three
+     * attempts in all). Nothing else is ever retried: `POST /api/schedules`
+     * launches automation on a phone and `POST /remote/action` taps it, and a
+     * reply this client did not see is not the same as one the farm did not act
+     * on. Set 0 to turn it off.
+     */
+    retries?: number;
+    /** Test seam for the retry sleep. */
+    sleep?: (ms: number) => Promise<void>;
 }
 
 export interface RequestOptions {
@@ -24,6 +34,8 @@ export interface RequestOptions {
     body?: unknown;
     timeoutMs?: number;
     signal?: AbortSignal;
+    /** Per-call override of `HttpConfig.retries`. */
+    retries?: number;
     /** Skip the JSON parse and hand back the raw Response. */
     raw?: boolean;
     accept?: string;
@@ -81,7 +93,43 @@ export class HttpTransport {
         return token ? { Authorization: `Bearer ${token}` } : {};
     }
 
-    async fetchRaw(path: string, options: RequestOptions = {}): Promise<Response> {
+    /**
+     * The delay before attempt `attempt` (0-based). The farm's own `Retry-After`
+     * wins when it sent one, so a 429 waits exactly as long as it was told to
+     * rather than guessing; otherwise 300 ms, 900 ms.
+     */
+    private retryDelay(attempt: number, error: FarmError): number {
+        return error.retryAfterMs ?? Math.min(5_000, 300 * 3 ** attempt);
+    }
+
+    /**
+     * A retry the operator would notice as a hang is not a retry, it is a
+     * freeze. Past this the failure goes to the screen instead, where the
+     * rate-limit banner counts the same `Retry-After` down in the open.
+     */
+    private static readonly SILENT_RETRY_CEILING_MS = 2_000;
+
+    /** Retried only for a GET, and only for a transient failure. */
+    private async attempt(path: string, options: RequestOptions, run: (response: Response) => Promise<Response>): Promise<Response> {
+        const method = options.method ?? 'GET';
+        const budget = method === 'GET' ? Math.max(0, options.retries ?? this.config.retries ?? 2) : 0;
+        const sleep = this.config.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+        for (let attempt = 0; ; attempt += 1) {
+            try {
+                return await run(await this.fetchOnce(path, options));
+            } catch (error) {
+                const failure = error instanceof FarmError ? error : null;
+                // An abort from the caller is the caller's decision, not a fault.
+                if (!failure?.retryable || attempt >= budget || options.signal?.aborted) throw error;
+                const delay = this.retryDelay(attempt, failure);
+                if (delay > HttpTransport.SILENT_RETRY_CEILING_MS) throw error;
+                await sleep(delay);
+            }
+        }
+    }
+
+    /** One attempt, no retry. `request`/`fetchRaw` add the policy on top. */
+    private async fetchOnce(path: string, options: RequestOptions = {}): Promise<Response> {
         const doFetch = this.config.fetch ?? globalThis.fetch;
         if (!doFetch) throw new FarmError('network', 'No fetch implementation available.');
 
@@ -127,19 +175,41 @@ export class HttpTransport {
         }
     }
 
+    /**
+     * The raw response, with the retry policy applied. A non-2xx status is
+     * raised as a `FarmError` first, so a retryable 503 is retried here rather
+     * than handed back as a `Response` nobody re-tries.
+     */
+    async fetchRaw(path: string, options: RequestOptions = {}): Promise<Response> {
+        const url = this.url(path, options.query);
+        return this.attempt(path, options, async (response) => {
+            if (!response.ok) throw await this.failure(response, url);
+            return response;
+        });
+    }
+
+    /** Body plus the response, for the few routes whose cursor is a header. */
+    async requestWithResponse<T>(path: string, options: RequestOptions = {}): Promise<{ body: T; response: Response }> {
+        const response = await this.fetchRaw(path, options);
+        return { body: await this.unwrap<T>(response, this.url(path, options.query)), response };
+    }
+
     async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
         const response = await this.fetchRaw(path, options);
-        const url = this.url(path, options.query);
+        return this.unwrap<T>(response, this.url(path, options.query));
+    }
 
-        if (!response.ok) {
-            let body = '';
-            try {
-                body = await response.text();
-            } catch {
-                // A 503 screenshot has an empty body by design; nothing to read.
-            }
-            throw errorFromResponse(response.status, body, url);
+    private async failure(response: Response, url: string): Promise<FarmError> {
+        let body = '';
+        try {
+            body = await response.text();
+        } catch {
+            // A 503 screenshot has an empty body by design; nothing to read.
         }
+        return errorFromResponse(response.status, body, url, response.headers);
+    }
+
+    private async unwrap<T>(response: Response, url: string): Promise<T> {
 
         if (response.status === 204) return undefined as T;
 

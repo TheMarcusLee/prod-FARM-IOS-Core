@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { Alert, FlatList, Image, RefreshControl, Text, View } from 'react-native';
 import { FarmError, formatRelative, type ContentQueueItem } from '@farm/client';
-import { Badge, Button, Card, EmptyState, ErrorBanner, Loading, Muted, Row } from '../components';
+import { Badge, Button, Card, EmptyState, ErrorState, Loading, Muted, Row } from '../components';
 import { useFarm } from '../context/FarmContext';
 import { useAsync } from '../hooks';
 import { useTheme } from '../theme';
@@ -64,14 +64,14 @@ export function ContentScreen() {
     );
 
     if (needsSetup) return <EmptyState title="No farm configured" detail="Add a server URL and token in Settings." />;
-    if (snapshot?.capabilities.drip === false) {
+    if (snapshot?.capabilities.contentQueue === false) {
         return <EmptyState title="No drip queue" detail="This farm does not advertise the content queue yet." />;
     }
     if (queue.loading && !queue.data) return <Loading label="Loading the queue…" />;
 
     return (
         <View style={{ flex: 1 }}>
-            {queue.error ? <ErrorBanner message={queue.error.message} onRetry={() => void queue.reload()} /> : null}
+            {queue.error ? <ErrorState error={queue.error} onRetry={() => void queue.reload()} testID="content-error" /> : null}
             <FlatList
                 data={items}
                 keyExtractor={(item) => item.id}

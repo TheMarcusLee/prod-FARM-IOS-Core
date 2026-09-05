@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { FlatList, Image, RefreshControl, ScrollView, Text, View, useWindowDimensions } from 'react-native';
 import { router } from 'expo-router';
 import { deviceTags, formatRelative, type FleetDevice } from '@farm/client';
-import { Badge, Card, EmptyState, ErrorBanner, Loading, Muted, Row, StaleBanner, StatusDot } from '../components';
+import { Badge, Card, Chip, EmptyState, ErrorState, Loading, Muted, Row, StaleBanner, StatusDot } from '../components';
 import { useFarm } from '../context/FarmContext';
 import { useForegroundInterval, useIsForeground } from '../hooks';
 import { deviceStateColor, useTheme } from '../theme';
@@ -11,7 +11,7 @@ const THUMBNAIL_WIDTH = 320;
 
 export function FleetScreen() {
     const { snapshot, initialising, lastError, isStale, refresh, needsSetup, client } = useFarm();
-    const { colors, spacing, radius } = useTheme();
+    const { colors, spacing } = useTheme();
     const { width } = useWindowDimensions();
     const [filter, setFilter] = useState<string>('all');
     const [refreshing, setRefreshing] = useState(false);
@@ -77,34 +77,18 @@ export function FleetScreen() {
             <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{ paddingHorizontal: spacing.lg, gap: spacing.sm, paddingVertical: spacing.sm }}
+                contentContainerStyle={{ paddingHorizontal: spacing.lg, gap: spacing.sm, paddingVertical: spacing.sm, alignItems: 'center' }}
                 style={{ flexGrow: 0 }}
             >
-                {chips.map((chip) => {
-                    const active = filter === chip.key;
-                    return (
-                        <Text
-                            key={chip.key}
-                            accessibilityRole="button"
-                            testID={`fleet-filter-${chip.key}`}
-                            onPress={() => setFilter(chip.key)}
-                            style={{
-                                color: active ? colors.accentText : colors.textMuted,
-                                backgroundColor: active ? colors.accent : colors.surface,
-                                borderColor: colors.border,
-                                borderWidth: 1,
-                                borderRadius: radius.pill,
-                                paddingHorizontal: spacing.md,
-                                paddingVertical: 6,
-                                fontSize: 12,
-                                fontWeight: '600',
-                                overflow: 'hidden',
-                            }}
-                        >
-                            {chip.label}
-                        </Text>
-                    );
-                })}
+                {chips.map((chip) => (
+                    <Chip
+                        key={chip.key}
+                        label={chip.label}
+                        active={filter === chip.key}
+                        testID={`fleet-filter-${chip.key}`}
+                        onPress={() => setFilter(chip.key)}
+                    />
+                ))}
             </ScrollView>
 
             {isStale && snapshot ? (
@@ -113,7 +97,7 @@ export function FleetScreen() {
                     message={`Last updated ${formatRelative(new Date(snapshot.fetchedAt).toISOString())} — can't reach the Mac`}
                 />
             ) : null}
-            {lastError && !snapshot ? <ErrorBanner message={lastError.message} onRetry={() => void refresh()} /> : null}
+            {lastError && !snapshot ? <ErrorState error={lastError} onRetry={() => void refresh()} testID="fleet-error" /> : null}
 
             <FlatList
                 key={`cols-${columns}`}
@@ -153,7 +137,7 @@ function DeviceCard({
     const secondLine =
         device.currentExecution?.summary ??
         (device.state === 'error' ? device.lastError : null) ??
-        (device.state === 'offline' ? device.connection.message : null) ??
+        (device.state === 'offline' ? 'not on the bus — check the cable' : null) ??
         (device.nextRunAt ? `next ${formatRelative(device.nextRunAt)}` : 'idle');
 
     return (

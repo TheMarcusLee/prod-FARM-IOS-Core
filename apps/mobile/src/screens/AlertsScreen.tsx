@@ -9,7 +9,7 @@ import {
     type EventSeverity,
     type FarmEvent,
 } from '@farm/client';
-import { Badge, Button, Card, EmptyState, ErrorBanner, Loading, Muted, Row, StatusDot } from '../components';
+import { Badge, Button, Card, Chip, EmptyState, ErrorState, Loading, Muted, Row, StatusDot } from '../components';
 import { useAlerts } from '../context/AlertsContext';
 import { useFarm } from '../context/FarmContext';
 import { severityColor, useTheme } from '../theme';
@@ -78,7 +78,7 @@ export function AlertsScreen() {
                 horizontal
                 showsHorizontalScrollIndicator={false}
                 style={{ flexGrow: 0 }}
-                contentContainerStyle={{ paddingHorizontal: spacing.lg, gap: spacing.sm, paddingVertical: spacing.sm }}
+                contentContainerStyle={{ paddingHorizontal: spacing.lg, gap: spacing.sm, paddingVertical: spacing.sm, alignItems: 'center' }}
             >
                 {(['all', 'error', 'warning', 'info'] as const).map((option) => (
                     <Chip
@@ -98,12 +98,12 @@ export function AlertsScreen() {
                         active={group === option}
                         testID={`alerts-group-${option}`}
                         onPress={() => setGroup(option)}
-                        tint={colors.accent}
+                        accessibilityLabel={`Group: ${option}`}
                     />
                 ))}
             </ScrollView>
 
-            {error && events.length === 0 ? <ErrorBanner message={error.message} onRetry={() => void refresh()} /> : null}
+            {error && events.length === 0 ? <ErrorState error={error} onRetry={() => void refresh()} testID="alerts-error" /> : null}
 
             <FlatList
                 data={visible}
@@ -117,43 +117,6 @@ export function AlertsScreen() {
                 renderItem={({ item }) => <EventRow event={item} deviceName={names.get(item.deviceUdid ?? '')} />}
             />
         </View>
-    );
-}
-
-function Chip({
-    label,
-    active,
-    onPress,
-    tint,
-    testID,
-}: {
-    label: string;
-    active: boolean;
-    onPress: () => void;
-    tint: string;
-    testID?: string;
-}) {
-    const { colors, spacing, radius } = useTheme();
-    return (
-        <Text
-            accessibilityRole="button"
-            testID={testID}
-            onPress={onPress}
-            style={{
-                color: active ? colors.accentText : colors.textMuted,
-                backgroundColor: active ? tint : colors.surface,
-                borderColor: colors.border,
-                borderWidth: 1,
-                borderRadius: radius.pill,
-                paddingHorizontal: spacing.md,
-                paddingVertical: 6,
-                fontSize: 12,
-                fontWeight: '600',
-                overflow: 'hidden',
-            }}
-        >
-            {label}
-        </Text>
     );
 }
 

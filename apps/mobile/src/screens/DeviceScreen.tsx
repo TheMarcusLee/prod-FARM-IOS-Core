@@ -10,7 +10,7 @@ import {
     platformOf,
     type RemoteAction,
 } from '@farm/client';
-import { Badge, Button, Card, ErrorBanner, Loading, Muted, Row, SectionTitle, StatusDot } from '../components';
+import { Badge, Button, Card, ErrorState, Loading, Muted, Row, SectionTitle, StatusDot } from '../components';
 import { useFarm } from '../context/FarmContext';
 import { useSafety } from '../context/SafetyContext';
 import { useAsync, useForegroundInterval, useIsForeground } from '../hooks';
@@ -340,7 +340,7 @@ export function DeviceScreen({ udid }: { udid: string }) {
                 )}
             </Card>
 
-            {connection.error ? <ErrorBanner message={connection.error.message} onRetry={() => void connection.reload()} /> : null}
+            {connection.error ? <ErrorState error={connection.error} onRetry={() => void connection.reload()} testID="device-error" /> : null}
         </ScrollView>
     );
 }

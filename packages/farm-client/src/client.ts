@@ -114,8 +114,8 @@ export interface FarmClient {
     deletePushRegistration(id: string): Promise<void>;
 
     listContentQueue(): Promise<{ items: ContentQueueItem[] }>;
-    approveContentItem(id: string, options?: { plannedFor?: string }): Promise<ContentQueueItem>;
-    skipContentItem(id: string, options?: { reason?: string }): Promise<ContentQueueItem>;
+    approveContentItem(id: string): Promise<ContentQueueItem>;
+    skipContentItem(id: string): Promise<ContentQueueItem>;
     assetThumbnailRef(assetId: string): ImageRef;
 }
 
@@ -214,8 +214,17 @@ export class FarmHttpClient implements FarmClient {
 
     /* -------------------------------------------------------- schedules */
 
-    listSchedules(query: ListQuery = {}): Promise<ScheduleListPage> {
-        return this.get<ScheduleListPage>('/api/schedules', { query: { ...query } });
+    /**
+     * The next cursor is the `X-Next-Before` **header**, not a body field — see
+     * `keysetPage()` in `src/api/routes/mobile.ts`. It is only ever sent when
+     * the request itself paginated (`limit` or `before` present).
+     */
+    async listSchedules(query: ListQuery = {}): Promise<ScheduleListPage> {
+        const { body, response } = await this.http.requestWithResponse<{ schedules: ScheduleRow[] }>(
+            '/api/schedules', { query: { ...query } },
+        );
+        const nextBefore = nextBeforeHeader(response);
+        return { schedules: body?.schedules ?? [], ...(nextBefore ? { nextBefore } : {}) };
     }
 
     createSchedule(input: CreateScheduleInput): Promise<ScheduleRow> {
@@ -232,8 +241,12 @@ export class FarmHttpClient implements FarmClient {
 
     /* ------------------------------------------------------- executions */
 
-    listExecutions(query: ListQuery = {}): Promise<ExecutionListPage> {
-        return this.get<ExecutionListPage>('/api/executions', { query: { ...query } });
+    async listExecutions(query: ListQuery = {}): Promise<ExecutionListPage> {
+        const { body, response } = await this.http.requestWithResponse<{ executions: ExecutionRow[] }>(
+            '/api/executions', { query: { ...query } },
+        );
+        const nextBefore = nextBeforeHeader(response);
+        return { executions: body?.executions ?? [], ...(nextBefore ? { nextBefore } : {}) };
     }
 
     getExecution(id: string): Promise<ExecutionDetail> {
@@ -283,8 +296,9 @@ export class FarmHttpClient implements FarmClient {
         return this.send<PushRegistration>('POST', '/api/push/register', input);
     }
 
-    listPushRegistrations(): Promise<PushRegistration[]> {
-        return this.get<PushRegistration[]>('/api/push/registrations');
+    async listPushRegistrations(): Promise<PushRegistration[]> {
+        const body = await this.get<{ registrations: PushRegistration[] }>('/api/push/registrations');
+        return body?.registrations ?? [];
     }
 
     async deletePushRegistration(id: string): Promise<void> {
@@ -297,12 +311,19 @@ export class FarmHttpClient implements FarmClient {
         return this.get<{ items: ContentQueueItem[] }>('/api/content/queue');
     }
 
-    approveContentItem(id: string, options: { plannedFor?: string } = {}): Promise<ContentQueueItem> {
-        return this.send<ContentQueueItem>('POST', `/api/content/queue/${encodeURIComponent(id)}/approve`, options);
+    /**
+     * Both answer `{ item }`. Neither reads a body: re-timing (`plannedFor`) and
+     * a skip `reason` are not implemented, so nothing is sent — an ignored field
+     * on the wire reads as a feature that works.
+     */
+    async approveContentItem(id: string): Promise<ContentQueueItem> {
+        const body = await this.send<{ item: ContentQueueItem }>('POST', `/api/content/queue/${encodeURIComponent(id)}/approve`);
+        return body.item;
     }
 
-    skipContentItem(id: string, options: { reason?: string } = {}): Promise<ContentQueueItem> {
-        return this.send<ContentQueueItem>('POST', `/api/content/queue/${encodeURIComponent(id)}/skip`, options);
+    async skipContentItem(id: string): Promise<ContentQueueItem> {
+        const body = await this.send<{ item: ContentQueueItem }>('POST', `/api/content/queue/${encodeURIComponent(id)}/skip`);
+        return body.item;
     }
 
     assetThumbnailRef(assetId: string): ImageRef {
@@ -314,6 +335,11 @@ export class FarmHttpClient implements FarmClient {
 }
 
 /* ------------------------------------------------------------- utilities */
+
+/** Case-insensitive per the Headers contract; absent on the last page. */
+function nextBeforeHeader(response: Response): string | undefined {
+    return response.headers?.get('x-next-before') ?? undefined;
+}
 
 export const TERMINAL_EXECUTION_STATUSES: ExecutionStatus[] = ['succeeded', 'failed', 'cancelled', 'skipped', 'stopped'];
 

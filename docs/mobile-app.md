@@ -157,10 +157,11 @@ The last fleet snapshot is cached to AsyncStorage and rendered behind a dimmed
 control disabled. **Nothing is queued for replay**: a stop or a tap that fires
 twenty minutes late on a phone farm is worse than one that never fired.
 
-Foregrounded, the app holds one `/api/events/stream` connection and polls the
-fleet summary every 15 s. Backgrounded, it closes the socket and does nothing —
-both platforms suspend sockets within seconds, and push is the background
-transport.
+Foregrounded, the app holds one `/api/events/stream` connection and re-polls
+`GET /api/mobile/bootstrap` every 15 s — **not** `/api/fleet/summary`, which
+answers with counters and no device list. Backgrounded, it closes the socket and
+does nothing: both platforms suspend sockets within seconds, and push is the
+background transport.
 
 ## Push setup
 
@@ -177,11 +178,15 @@ farm web ──SSE──▶ farm-push-relay ──HTTPS──▶ Expo ──▶ 
 2. Build and run `farm-push-relay` (gap 2) with its own named token.
 3. In the app: Settings → Notifications → **Push alerts** on. It asks for the OS
    permission, fetches an Expo push token, and `POST /api/push/register`s it
-   with the device label and the minimum severity. Registration is idempotent on
-   the token, so it re-registers on every launch and on every preference change.
+   with the device label and the minimum severity. `POST /api/push/register`
+   upserts on the Expo token, so the app re-registers on every launch and on
+   every preference change — an Expo token is not permanent, and a phone whose
+   token rotated would otherwise stop getting alerts silently.
 4. A tapped notification deep-links via `data.executionId` → `/execution/:id`,
    else `data.deviceUdid` → `/device/:udid`, else the Alerts tab. Cold start is
-   handled too (`getLastNotificationResponseAsync`).
+   handled too (`getLastNotificationResponseAsync`). The ids come from off
+   device, so anything that is not `[A-Za-z0-9._:-]` under 128 characters lands
+   on Alerts rather than being handed to the router.
 
 **Push needs a real device.** A simulator cannot register, and the app says so
 rather than failing silently.
@@ -227,47 +232,37 @@ creates them on first use. Decide the profile and channel names then.
 
 ## Contract questions, resolved
 
-The app was written against `docs/mobile-api.md` while parts of the farm were
-still landing, and it had to guess at a few shapes. The farm has since shipped
-all of them; this is where the guesses ended up. Each correction is a one-line
-change in `packages/farm-client/src/models.ts`.
+These were guesses made while the API doc and the server were being written in
+parallel. Each has since been checked against the server itself — the routes in
+`src/api/`, `serializeEvent`, `summarizeFleet` and `serializeRegistration` — and
+the ones the farm refuted are struck through with what actually happens. The
+contract tests in `packages/farm-client/test/contract.test.ts` now hold each of
+them to the farm's own fixtures.
 
-**Wrong, and fixed in the client**
-
-| Guess | Truth |
-| --- | --- |
-| Event `id` is a **string** (ULID), compared lexicographically | It is a **number** — the `scheduler.events` bigint identity, serialised as a JSON number. `models.ts` now types it `number` and compares `before` / `upToId` numerically. |
-| `capabilities.screenshotThumbnails` is the thumbnail signal, and the app reads it | The farm never emits that key. `GET /api/mobile/bootstrap` returns `{ push, eventAck, thumbnails, contentQueue, tokens, rateLimits }`. `?width=` on the screenshot is implemented unconditionally. |
-| A missing `capabilities` **key** means `false` | Every consumer gates on an explicit `false`, so a missing key means *available*. A missing `capabilities` object likewise means "assume everything works". |
-| `POST /api/content/queue/:id/approve` accepts an empty body "when the slot is not being moved" | The handler reads no body at all. Re-timing is not supported in any form; move a slot with `PATCH /api/schedules/:id`. |
-
-**Right, now confirmed against the code**
-
-| Guess | Confirmed |
-| --- | --- |
-| `Last-Event-ID` is sent as a header | The farm honours the header **and** `?lastEventId=`, header first. |
-| The SSE endpoint accepts `Authorization: Bearer` | It does; the `XMLHttpRequest` reader is still needed because `EventSource` cannot set headers. |
-| Keyset paging on `/api/schedules` and `/api/executions` | Shipped: `?limit=` (default and max 200) and `?before=`, cursor in the lowercase `x-next-before` header. |
-| `tags` on `PATCH /api/devices/:udid` replaces the whole array | Shipped: trimmed, de-duplicated, capped at 20. |
-| A `429` maps to a rate-limit error | Rate limits are live, with `x-ratelimit-*` and `retry-after`. |
-| `POST /api/events/ack` returns the post-ack `unacknowledgedCount` | It does. |
-| `POST /api/push/register` returns the registration on both `201` and `200` | It does. |
-| `FleetDevice.platform` absent means iOS | Matches `platformOf()` on the farm. |
-| `POST /api/schedules`'s `assetIds` is optional | It is. |
-| `GET /api/mobile/bootstrap`'s `release` is optional | Present only when a `RELEASED` marker exists. |
-
-**Still open**
-
-- **`remote/info`'s `screen.screenSize` units.** The client assumes points, and
-  that `/remote/action`'s `x`/`y` are the same units with `scale` *not* applied.
-  If that is wrong every tap lands out by a factor of 2 or 2.625. It cannot be
-  settled without a real phone — see
-  [device-testing-checklist.md](device-testing-checklist.md).
-- `nextBefore` on `/api/events` is **always present**, and `null` only when the
-  page was not full. An exactly-full last page still returns a cursor, so the
-  client will make one extra request at the end of a list.
-- `stopExecution`'s `result: "not-found"` is unreachable in practice — the route
-  answers `404` first. The client models both, harmlessly.
+| # | Guess | Verdict, and what it broke |
+| --- | --- | --- |
+| 1 | ~~**Event `id` is a string.**~~ **Confirmed as a number.** `serializeEvent` sends the `scheduler.events` bigint identity as a JSON number; the client compares cursors numerically, and only `Last-Event-ID` carries it as a string. | Resolved. |
+| 2 | **`Last-Event-ID` is sent as a header.** Confirmed — `/api/events/stream` reads the header first and falls back to `?lastEventId=`. | Resolved. |
+| 3 | **The SSE endpoint accepts `Authorization: Bearer`.** Confirmed: it is an ordinary route behind the same auth hook. `EventSource` cannot carry headers, so the client uses an `XMLHttpRequest` reader. | Resolved. |
+| 4 | **`FleetCurrentExecution.startedAt` is nullable.** Confirmed — a `queued` execution has `startedAt: null`. | Cosmetic — a bad relative time. |
+| 5 | **`FleetDevice.platform` is optional and absent means iOS**, mirroring `GET /api/devices`. Bootstrap always sends it (`platformOf`), so this only matters on the `/api/devices` fallback. | An Android device would render as iOS and offer no Back button. |
+| 6 | **`connection.wda` can also be `unavailable`.** The doc lists that value for `appium` but not for `wda`; the client's union accepts it for both. | A widened union — safe either way. |
+| 7 | **`nextBefore` is absent on the last page *and* on an empty page.** True for `/api/events`. | An extra empty request at the end of the list. |
+| 8 | ~~**Keyset paging is `nextBefore` in the body.**~~ **Refuted.** `/api/schedules` and `/api/executions` return the cursor in the **`X-Next-Before` header**, and only when the request itself paginated. | Was silently breaking paging: the client read a body field that is never sent, so the Queue tab stopped at one page. Fixed. |
+| 9 | **`?width=` on the screenshot is ignored harmlessly by an older farm** (gap 3), returning full resolution. | 12 full-size PNGs per refresh on a phone connection. `capabilities.thumbnails` is the intended signal; the app reads it. |
+| 10 | **`tags` comes back from `GET /api/devices` as well as bootstrap** (gap 12), and `PATCH /api/devices { tags }` replaces the whole array (capped at 20, trimmed, de-duplicated). | The tag filter chips come from bootstrap, so the app survives without it. |
+| 11 | **`remote/info`'s `screen.screenSize` is in points, and `/remote/action`'s `x`/`y` are in the same units** — `scale` is *not* applied. | Every tap lands at the wrong place, by a factor of 2 or 2.625. Untestable without a real phone; flagged in the plan as needing farm time. |
+| 12 | **A `429` maps to a rate-limit error**, and carries `retry-after`. Confirmed in `registerRateLimits`. | Resolved: the client reads `Retry-After` and the screen counts it down. |
+| 13 | **`POST /api/events/ack` returns the post-ack `unacknowledgedCount`.** Confirmed. | The tab badge would be one refresh behind. |
+| 14 | **`POST /api/push/register` returns the registration on both `201` and `200`.** Confirmed; `tokenSuffix` is on both. `GET /api/push/registrations` wraps its array in `{ registrations }`. | The list was read unwrapped and always came back empty. Fixed. |
+| 15 | **`thumbnailUrl` on a content item is server-relative and needs the bearer header** like every other route. The app builds the URL from `assetId` via `assetThumbnailRef()` rather than trusting the field. | A broken thumbnail. |
+| 16 | ~~**`approve` accepts a body.**~~ **Refuted.** Neither content route reads one: re-timing and a skip `reason` are not implemented, and both answer `{ "item": … }` rather than the item itself. | The client sent fields the farm ignores and read the envelope as the item. Fixed; it now sends no body. |
+| 17 | **`POST /api/schedules`'s `assetIds` is optional.** Confirmed (`request.body.assetIds ?? []`). | A `400` on doomscroll-now. |
+| 18 | **A missing `capabilities` key means `false`, but a missing `capabilities` object means "assume everything works".** The six real keys are `push`, `eventAck`, `thumbnails`, `contentQueue`, `tokens`, `rateLimits` — there is no `sse` or `events` key, so the stream is never gated on one. | The app 404s rather than hiding a tab — a worse failure, but a loud one. |
+| 19 | **`stopExecution`'s `result: "not-found"` is unreachable** — the route answers `404` for that case. The client models both. | Nothing. |
+| 20 | ~~**Bootstrap's `release` matches `/health`'s.**~~ **Refuted.** Bootstrap sends `{ version, sha }` from `package.json` plus the short git sha; `/health` sends the `RELEASED` marker's `{ sha, subject, deployedAt }`. Both are always present on bootstrap (`sha` may be `null`). | Settings → About read a field that does not exist. Fixed. |
+| 21 | ~~**`/api/fleet/summary` returns `{ counts, devices }`.**~~ **Refuted.** It returns counters only — no device list. The screen-shaped view is bootstrap's `fleet`. | The Fleet grid would have emptied itself on the first refresh after cold start. Fixed: every refresh is a bootstrap. |
+| 22 | ~~**Events carry `message` and `data`.**~~ **Refuted.** The wire field is `detail`, and there is no prose `message`. | Every event body on the Alerts list fell through to a hard-coded default. Fixed. |
 
 ## What is not built yet
 

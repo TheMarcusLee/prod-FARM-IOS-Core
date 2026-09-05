@@ -32,6 +32,7 @@ describe('error mapping', () => {
             [403, 'forbidden'],
             [404, 'not-found'],
             [409, 'conflict'],
+            [413, 'too-large'],
             [429, 'rate-limited'],
             [503, 'unavailable'],
             [500, 'server'],
@@ -143,6 +144,7 @@ describe('HttpTransport', () => {
         const transport = new HttpTransport({
             baseUrl: 'http://farm:3000',
             token: 't',
+            retries: 0,
             fetch: async () => {
                 throw new TypeError('Network request failed');
             },
@@ -155,12 +157,140 @@ describe('HttpTransport', () => {
             baseUrl: 'http://farm:3000',
             token: 't',
             timeoutMs: 20,
+            retries: 0,
             fetch: (_url, init) =>
                 new Promise((_resolve, reject) => {
                     init!.signal!.addEventListener('abort', () => reject(new Error('aborted')));
                 }),
         });
         await expect(transport.request('/health')).rejects.toMatchObject({ kind: 'timeout' });
+    });
+
+    it('reads Retry-After off a 429 so a backoff can count it down', async () => {
+        const transport = new HttpTransport({
+            baseUrl: 'http://farm:3000',
+            token: 't',
+            retries: 0,
+            fetch: async () =>
+                new Response(JSON.stringify({ error: 'Rate limit exceeded — retry in 4 seconds' }), {
+                    status: 429,
+                    headers: { 'content-type': 'application/json', 'retry-after': '4' },
+                }),
+        });
+        await expect(transport.request('/api/devices')).rejects.toMatchObject({
+            kind: 'rate-limited',
+            retryAfterMs: 4_000,
+        });
+    });
+});
+
+describe('retry policy', () => {
+    /** Records the sleeps rather than taking them, so the test stays instant. */
+    function seam() {
+        const slept: number[] = [];
+        return { slept, sleep: async (ms: number) => void slept.push(ms) };
+    }
+
+    it('retries a transient GET and returns the eventual success', async () => {
+        const { slept, sleep } = seam();
+        let attempts = 0;
+        const transport = new HttpTransport({
+            baseUrl: 'http://farm:3000',
+            token: 't',
+            sleep,
+            fetch: async () => {
+                attempts += 1;
+                return attempts < 3 ? jsonResponse({ error: 'unavailable' }, 503) : jsonResponse([{ udid: 'x' }]);
+            },
+        });
+        await expect(transport.request('/api/devices')).resolves.toEqual([{ udid: 'x' }]);
+        expect(attempts).toBe(3);
+        expect(slept).toEqual([300, 900]);
+    });
+
+    it('never retries a write — a reply this client missed is not a run that did not start', async () => {
+        let attempts = 0;
+        const transport = new HttpTransport({
+            baseUrl: 'http://farm:3000',
+            token: 't',
+            sleep: async () => {},
+            fetch: async () => {
+                attempts += 1;
+                return jsonResponse({ error: 'unavailable' }, 503);
+            },
+        });
+        await expect(transport.request('/api/schedules', { method: 'POST', body: {} })).rejects.toMatchObject({
+            kind: 'unavailable',
+        });
+        expect(attempts).toBe(1);
+    });
+
+    it('does not retry a GET the farm answered definitively', async () => {
+        let attempts = 0;
+        const transport = new HttpTransport({
+            baseUrl: 'http://farm:3000',
+            token: 't',
+            sleep: async () => {},
+            fetch: async () => {
+                attempts += 1;
+                return jsonResponse({ error: 'Device not found' }, 404);
+            },
+        });
+        await expect(transport.request('/api/devices/x/connection')).rejects.toMatchObject({ kind: 'not-found' });
+        expect(attempts).toBe(1);
+    });
+
+    it('surfaces a long rate limit instead of freezing behind it', async () => {
+        let attempts = 0;
+        const transport = new HttpTransport({
+            baseUrl: 'http://farm:3000',
+            token: 't',
+            sleep: async () => {},
+            fetch: async () => {
+                attempts += 1;
+                return new Response('{}', { status: 429, headers: { 'retry-after': '30' } });
+            },
+        });
+        // 30 s of silence reads as a hang; the screen counts it down instead.
+        await expect(transport.request('/api/devices')).rejects.toMatchObject({ kind: 'rate-limited' });
+        expect(attempts).toBe(1);
+    });
+
+    it('waits exactly as long as a short 429 told it to', async () => {
+        const { slept, sleep } = seam();
+        let attempts = 0;
+        const transport = new HttpTransport({
+            baseUrl: 'http://farm:3000',
+            token: 't',
+            sleep,
+            fetch: async () => {
+                attempts += 1;
+                return attempts === 1
+                    ? new Response('{}', { status: 429, headers: { 'retry-after': '2' } })
+                    : jsonResponse({ ok: true });
+            },
+        });
+        await expect(transport.request('/health')).resolves.toEqual({ ok: true });
+        expect(slept).toEqual([2_000]);
+    });
+
+    it('gives up on a caller abort rather than retrying behind their back', async () => {
+        const controller = new AbortController();
+        let attempts = 0;
+        const transport = new HttpTransport({
+            baseUrl: 'http://farm:3000',
+            token: 't',
+            sleep: async () => {},
+            fetch: async () => {
+                attempts += 1;
+                controller.abort();
+                throw new Error('aborted');
+            },
+        });
+        await expect(transport.request('/api/devices', { signal: controller.signal })).rejects.toMatchObject({
+            kind: 'aborted',
+        });
+        expect(attempts).toBe(1);
     });
 });
 

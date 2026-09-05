@@ -2,7 +2,7 @@
  * The whole component set: Card, Badge, Button, StatusDot, plus the three
  * layout scraps every screen needs. React Native primitives only.
  */
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
     ActivityIndicator,
     Pressable,
@@ -13,6 +13,8 @@ import {
     type TextStyle,
     type ViewStyle,
 } from 'react-native';
+import { router } from 'expo-router';
+import { FarmError } from '@farm/client';
 import { useTheme, type Palette } from '../theme';
 
 /* -------------------------------------------------------------- StatusDot */
@@ -188,6 +190,60 @@ function buttonTones(variant: ButtonVariant, colors: Palette) {
     }
 }
 
+/* ------------------------------------------------------------------- Chip */
+
+/**
+ * A filter pill. `Pressable`, not a pressable `Text`: only the former takes a
+ * `hitSlop`, and the pill itself is ~26 pt tall — well under a thumb. The
+ * selected state is announced rather than left to colour alone.
+ */
+export function Chip({
+    label,
+    active,
+    onPress,
+    tint,
+    testID,
+    accessibilityLabel,
+}: {
+    label: string;
+    active: boolean;
+    onPress: () => void;
+    tint?: string;
+    testID?: string;
+    accessibilityLabel?: string;
+}) {
+    const { colors, spacing, radius } = useTheme();
+    const fill = tint ?? colors.accent;
+    return (
+        <Pressable
+            testID={testID}
+            accessibilityRole="button"
+            accessibilityState={{ selected: active }}
+            accessibilityLabel={accessibilityLabel ?? `Filter: ${label}`}
+            hitSlop={{ top: 10, bottom: 10, left: 4, right: 4 }}
+            onPress={onPress}
+            style={({ pressed }) => ({
+                backgroundColor: active ? fill : colors.surface,
+                borderColor: active ? fill : colors.border,
+                borderWidth: StyleSheet.hairlineWidth,
+                borderRadius: radius.pill,
+                paddingHorizontal: spacing.md,
+                // A fixed height, so the horizontal `flexGrow: 0` row that holds
+                // these measures to something stable rather than clipping the
+                // descenders on the first layout pass.
+                height: 30,
+                alignItems: 'center',
+                justifyContent: 'center',
+                opacity: pressed ? 0.75 : 1,
+            })}
+        >
+            <Text style={{ color: active ? colors.accentText : colors.textMuted, fontSize: 12, fontWeight: '600' }}>
+                {label}
+            </Text>
+        </Pressable>
+    );
+}
+
 /* -------------------------------------------------------- layout scraps */
 
 export function Row({ children, gap, style }: { children: ReactNode; gap?: number; style?: StyleProp<ViewStyle> }) {
@@ -266,11 +322,47 @@ export function StaleBanner({ message, testID }: { message: string; testID?: str
     );
 }
 
-export function ErrorBanner({ message, onRetry }: { message: string; onRetry?: () => void }) {
+/**
+ * The one place a `FarmError` becomes a screen state, so "can't reach the Mac",
+ * "your token is dead" and "you are going too fast" never render as the same
+ * red line of prose on five different screens.
+ *
+ * - `401`/`403` is not retryable by tapping Try again — it needs a new token,
+ *   so the affordance goes to Settings.
+ * - `429` is a countdown, not a failure: the farm said exactly how long, and
+ *   the banner shows it ticking down rather than inviting an immediate retry
+ *   that will be refused again.
+ * - Everything else keeps Try again.
+ */
+export function ErrorState({ error, onRetry, testID }: { error: FarmError; onRetry?: () => void; testID?: string }) {
     const { colors, spacing, radius } = useTheme();
+    const seconds = useCountdown(error.kind === 'rate-limited' ? error.retryAfterMs : undefined);
+
+    const headline =
+        error.kind === 'network' || error.kind === 'timeout'
+            ? "Can't reach the Mac"
+            : error.authFailure
+              ? 'That token is not working'
+              : error.kind === 'rate-limited'
+                ? 'Slow down'
+                : error.kind === 'unavailable'
+                  ? 'That part of the farm is down'
+                  : 'The farm said no';
+
+    const detail =
+        error.kind === 'network' || error.kind === 'timeout'
+            ? 'Check that this phone and the Mac are both on the tailnet.'
+            : error.authFailure
+              ? 'Paste a fresh token in Settings — the farm rejected this one.'
+              : error.kind === 'rate-limited' && seconds > 0
+                ? `The farm is rate-limiting this app. Try again in ${seconds}s.`
+                : error.message;
+
     return (
         <View
+            testID={testID}
             accessibilityRole="alert"
+            accessibilityLabel={`${headline}. ${detail}`}
             style={{
                 backgroundColor: `${colors.danger}1A`,
                 borderColor: `${colors.danger}55`,
@@ -282,10 +374,32 @@ export function ErrorBanner({ message, onRetry }: { message: string; onRetry?: (
                 gap: spacing.sm,
             }}
         >
-            <Text style={{ color: colors.danger, fontSize: 13 }}>{message}</Text>
-            {onRetry ? <Button label="Try again" variant="danger" onPress={onRetry} /> : null}
+            <Text style={{ color: colors.danger, fontSize: 14, fontWeight: '700' }}>{headline}</Text>
+            <Text style={{ color: colors.text, fontSize: 13 }}>{detail}</Text>
+            {error.authFailure ? (
+                <Button
+                    label="Open Settings"
+                    variant="danger"
+                    testID="error-open-settings"
+                    onPress={() => router.push('/settings' as never)}
+                />
+            ) : error.kind === 'rate-limited' && seconds > 0 ? null : onRetry ? (
+                <Button label="Try again" variant="danger" onPress={onRetry} testID="error-retry" />
+            ) : null}
         </View>
     );
+}
+
+/** Whole seconds left on a `Retry-After`, ticking down to 0. */
+function useCountdown(ms: number | undefined): number {
+    const [remaining, setRemaining] = useState(() => Math.ceil((ms ?? 0) / 1000));
+    useEffect(() => {
+        setRemaining(Math.ceil((ms ?? 0) / 1000));
+        if (!ms) return;
+        const timer = setInterval(() => setRemaining((value) => (value <= 1 ? 0 : value - 1)), 1_000);
+        return () => clearInterval(timer);
+    }, [ms]);
+    return remaining;
 }
 
 export function Loading({ label }: { label?: string }) {

@@ -29,13 +29,15 @@ interface AlertsValue {
 const AlertsContext = createContext<AlertsValue | null>(null);
 
 export function AlertsProvider({ children }: { children: ReactNode }) {
-    const { client, needsSetup, setUnacknowledgedCount, snapshot } = useFarm();
+    const { client, needsSetup, setUnacknowledgedCount } = useFarm();
     const [events, setEvents] = useState<FarmEvent[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<FarmError | null>(null);
     const [streamStatus, setStreamStatus] = useState<SseStatus>('idle');
     const [nextBefore, setNextBefore] = useState<number | undefined>();
     const lastRenderedId = useRef<number | undefined>(undefined);
+    /** One "older page" at a time: `onEndReached` fires repeatedly per flick. */
+    const loadingMore = useRef(false);
 
     useEffect(() => {
         void (async () => {
@@ -70,13 +72,21 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
     }, [client, needsSetup, remember]);
 
     const loadMore = useCallback(async () => {
-        if (!nextBefore) return;
+        // `nextBefore` of 0 would mean an empty page, so `!nextBefore` is right
+        // here — but two concurrent calls with the same cursor are not.
+        if (!nextBefore || loadingMore.current) return;
+        loadingMore.current = true;
         try {
             const page = await client.listEvents({ limit: 50, before: nextBefore });
-            setEvents((previous) => [...previous, ...page.events]);
+            setEvents((previous) => {
+                const seen = new Set(previous.map((row) => row.id));
+                return [...previous, ...page.events.filter((row) => !seen.has(row.id))];
+            });
             setNextBefore(page.nextBefore);
         } catch {
             // A failed "older" page is not worth replacing the list for.
+        } finally {
+            loadingMore.current = false;
         }
     }, [client, nextBefore]);
 
@@ -92,10 +102,11 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [client]);
 
-    // The stream, only while foregrounded and only if the farm advertises it.
+    // The stream, only while foregrounded. There is no `sse` capability flag —
+    // `/api/events/stream` has always existed and answers 503 when the event
+    // store is not wired up, which the reconnect backoff already handles.
     useEffect(() => {
         if (needsSetup) return;
-        if (snapshot && snapshot.capabilities.sse === false) return;
         let unsubscribe: (() => void) | null = null;
 
         const open = () => {
@@ -136,7 +147,7 @@ export function AlertsProvider({ children }: { children: ReactNode }) {
             close();
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [client, needsSetup, snapshot?.capabilities.sse]);
+    }, [client, needsSetup]);
 
     const value = useMemo<AlertsValue>(
         () => ({ events, loading, error, streamStatus, loadMore, hasMore: Boolean(nextBefore), refresh, acknowledgeAll }),

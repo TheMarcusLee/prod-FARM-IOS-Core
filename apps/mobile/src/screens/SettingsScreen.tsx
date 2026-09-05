@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react';
 import { Alert, ScrollView, Switch, Text, TextInput, View } from 'react-native';
 import Constants from 'expo-constants';
 import { FarmError, createFarmClient, type EventSeverity } from '@farm/client';
-import { Badge, Button, Card, Muted, Row, SectionTitle } from '../components';
+import { Badge, Button, Card, Chip, Muted, Row, SectionTitle } from '../components';
 import { useFarm } from '../context/FarmContext';
 import { useSafety } from '../context/SafetyContext';
 import { useSettings } from '../context/SettingsContext';
@@ -209,23 +209,14 @@ export function SettingsScreen() {
                     <Muted>Minimum severity</Muted>
                     <View style={{ flex: 1 }} />
                     {(['info', 'warning', 'error'] as EventSeverity[]).map((option) => (
-                        <Text
+                        <Chip
                             key={option}
-                            accessibilityRole="button"
+                            label={option}
+                            active={settings.notifications.minSeverity === option}
+                            testID={`settings-severity-${option}`}
+                            accessibilityLabel={`Minimum severity: ${option}`}
                             onPress={() => update({ notifications: { ...settings.notifications, minSeverity: option } })}
-                            style={{
-                                color: settings.notifications.minSeverity === option ? colors.accentText : colors.textMuted,
-                                backgroundColor: settings.notifications.minSeverity === option ? colors.accent : colors.surfaceRaised,
-                                paddingHorizontal: spacing.sm,
-                                paddingVertical: 4,
-                                borderRadius: radius.pill,
-                                overflow: 'hidden',
-                                fontSize: 11,
-                                fontWeight: '700',
-                            }}
-                        >
-                            {option}
-                        </Text>
+                        />
                     ))}
                 </Row>
                 {pushState ? <Muted style={{ marginTop: spacing.sm }}>{pushState}</Muted> : null}

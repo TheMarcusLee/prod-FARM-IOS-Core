@@ -80,6 +80,7 @@ maps a thrown `statusCode` through, defaulting to `400`.
 | `403` | Cross-origin write blocked (missing `Bearer`) |
 | `404` | Unknown device, schedule, execution, or asset |
 | `409` | State conflict — remote input during a run, disabling a busy device, resuming a completed schedule, retrying a non-retryable execution |
+| `413` | Body over the 50 MB limit (`createApp`'s `bodyLimit`). Only reachable on an upload; the message is Fastify's, not the farm's |
 | `429` | Rate limit spent — see below. Carries `x-ratelimit-limit`, `x-ratelimit-remaining`, `x-ratelimit-reset` and `retry-after` |
 | `503` | Subsystem unavailable — device flapping (screenshot), registration not configured, stream down, a thumbnail that cannot be rendered, or **no scheduler database** (which is what `/api/events*`, `/api/push/*`, `/api/content/queue*` and `/api/assets/:id/thumbnail` all answer without one) |
 
@@ -510,6 +511,21 @@ The two fields are `title` and `detail`; there is no `message` and no `data`.
 `nextBefore` is always present and is `null` unless the page came back full —
 so an exactly-full last page still returns a cursor, and the next request is
 what tells you the list is exhausted.
+
+`serializeEvent` (`src/fleet/events.ts`) sends exactly these nine keys.
+Two corrections to the earlier sketch of this shape, which described a
+`message` string and a `data` object:
+
+- `id` is the `scheduler.events` bigint identity, a JSON **number**. Cursors
+  (`before`, `upToId`) compare numerically; only the SSE `Last-Event-ID`
+  header carries it as a string.
+- There is no `message`. The structured payload is **`detail`**, and it is
+  `null` when the recorder wrote none. `title` is the operator-facing line;
+  a prose body is the client's to compose from `detail` (`eventText()` in
+  `@farm/client` does it). The keys in `detail` are whatever the recorder put
+  there: `task`/`status`/`exitCode`/`error` for an execution
+  (`src/fleet/scheduler-events.ts`), `physical`/`wda`/`message` for a device
+  (`src/fleet/device-monitor.ts`), counters for the daily digest.
 
 **Kinds and their default severity**
 

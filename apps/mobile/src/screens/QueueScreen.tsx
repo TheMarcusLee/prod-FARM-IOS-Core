@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, FlatList, RefreshControl, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, FlatList, Pressable, RefreshControl, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import {
     FarmError,
@@ -12,7 +12,7 @@ import {
     type ScheduleRow,
     type ScheduleTiming,
 } from '@farm/client';
-import { Badge, Button, Card, EmptyState, ErrorBanner, Loading, Muted, Row } from '../components';
+import { Badge, Button, Card, EmptyState, ErrorState, Loading, Muted, Row } from '../components';
 import { useFarm } from '../context/FarmContext';
 import { useSafety } from '../context/SafetyContext';
 import { executionStatusColor, scheduleStatusColor, useTheme } from '../theme';
@@ -30,6 +30,12 @@ export function QueueScreen() {
     const [refreshing, setRefreshing] = useState(false);
     const [error, setError] = useState<FarmError | null>(null);
     const [busyId, setBusyId] = useState<string | null>(null);
+    /**
+     * `onEndReached` fires more than once for one flick. Without this, two
+     * in-flight requests carry the *same* cursor and both pages get appended —
+     * duplicate rows, and duplicate keys for FlatList.
+     */
+    const loadingMore = useRef(false);
 
     const names = useMemo(() => {
         const map = new Map<string, string>();
@@ -43,19 +49,24 @@ export function QueueScreen() {
                 setLoading(false);
                 return;
             }
+            if (!reset) {
+                if (loadingMore.current || !cursor) return;
+                loadingMore.current = true;
+            }
             try {
                 if (segment === 'schedules') {
                     const page = await client.listSchedules({ limit: 100 });
                     setSchedules(page.schedules);
                 } else {
                     const page = await client.listExecutions({ limit: 50, before: reset ? undefined : cursor });
-                    setExecutions((previous) => (reset ? page.executions : [...previous, ...page.executions]));
+                    setExecutions((previous) => (reset ? page.executions : mergeById(previous, page.executions)));
                     setCursor(page.nextBefore);
                 }
                 setError(null);
             } catch (caught) {
                 setError(caught instanceof FarmError ? caught : new FarmError('unknown', String(caught)));
             } finally {
+                loadingMore.current = false;
                 setLoading(false);
             }
         },
@@ -70,6 +81,9 @@ export function QueueScreen() {
 
     const onRefresh = useCallback(async () => {
         setRefreshing(true);
+        // A pull-to-refresh restarts the walk; keeping the old cursor would
+        // page from a point that is no longer the end of what is on screen.
+        setCursor(undefined);
         await load(true);
         setRefreshing(false);
     }, [load]);
@@ -98,32 +112,40 @@ export function QueueScreen() {
         <View style={{ flex: 1 }}>
             <Row style={{ padding: spacing.lg, paddingBottom: spacing.sm }}>
                 {(['schedules', 'executions'] as const).map((option) => (
-                    <Text
+                    <Pressable
                         key={option}
-                        accessibilityRole="button"
+                        accessibilityRole="tab"
+                        accessibilityState={{ selected: segment === option }}
+                        accessibilityLabel={`Show ${option}`}
+                        hitSlop={{ top: 8, bottom: 8 }}
                         testID={`queue-segment-${option}`}
                         onPress={() => setSegment(option)}
                         style={{
                             flex: 1,
-                            textAlign: 'center',
-                            paddingVertical: 8,
+                            paddingVertical: 10,
                             borderRadius: radius.md,
-                            overflow: 'hidden',
-                            fontWeight: '700',
-                            fontSize: 13,
-                            color: segment === option ? colors.accentText : colors.textMuted,
+                            alignItems: 'center',
                             backgroundColor: segment === option ? colors.accent : colors.surface,
                         }}
                     >
-                        {option}
-                    </Text>
+                        <Text
+                            style={{
+                                fontWeight: '700',
+                                fontSize: 13,
+                                color: segment === option ? colors.accentText : colors.textMuted,
+                            }}
+                        >
+                            {option}
+                        </Text>
+                    </Pressable>
                 ))}
             </Row>
 
-            {error ? <ErrorBanner message={error.message} onRetry={() => void load(true)} /> : null}
+            {error ? <ErrorState error={error} onRetry={() => void load(true)} testID="queue-error" /> : null}
 
             {segment === 'schedules' ? (
                 <FlatList
+                    testID="queue-schedules-list"
                     data={schedules}
                     keyExtractor={(row) => row.id}
                     contentContainerStyle={{ padding: spacing.lg, gap: spacing.sm, paddingBottom: spacing.xxl }}
@@ -141,11 +163,12 @@ export function QueueScreen() {
                 />
             ) : (
                 <FlatList
+                    testID="queue-executions-list"
                     data={executions}
                     keyExtractor={(row) => row.id}
                     contentContainerStyle={{ padding: spacing.lg, gap: spacing.sm, paddingBottom: spacing.xxl }}
                     refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />}
-                    onEndReached={() => cursor && void load(false)}
+                    onEndReached={() => void load(false)}
                     onEndReachedThreshold={0.4}
                     ListEmptyComponent={<EmptyState title="No executions yet" />}
                     renderItem={({ item }) => (
@@ -162,6 +185,16 @@ export function QueueScreen() {
             )}
         </View>
     );
+}
+
+/**
+ * Append the rows we have not already got. Even with a single in-flight page,
+ * the farm's `(createdAt, id)` cursor can hand back a row that arrived between
+ * two requests, and a duplicate key is a silent FlatList bug.
+ */
+function mergeById<T extends { id: string }>(previous: T[], incoming: T[]): T[] {
+    const seen = new Set(previous.map((row) => row.id));
+    return [...previous, ...incoming.filter((row) => !seen.has(row.id))];
 }
 
 /** Timing in the schedule's own timezone, because the operator may not be in it. */
