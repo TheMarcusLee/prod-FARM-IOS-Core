@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 
 import type { DeviceAutomation, PluginProcessSpecification, TaskExecutionContext } from '../plugin.js';
-import { discoverConnectedDevices, type Device } from '../devices/discovery.js';
+import { connectedDevices, type Device } from '../devices/discovery.js';
 import { loadRegisteredDevices, type RegisteredDevice } from '../devices/registry.js';
 import { passcodeForDevice } from '../devices/secrets.js';
 import { bridgePingUrl } from '../drivers/a11y-bridge.js';
@@ -72,7 +72,9 @@ async function waitForDevice(execution: ExecutionRow, registered: RegisteredDevi
     let lastProblem = 'device is offline';
     while (Date.now() <= execution.deadlineAt.getTime()) {
         if (signal.aborted) throw new Error('Execution stopped while waiting for the device');
-        const discovered = (await discoverConnectedDevices()).find(({ udid }) => udid === execution.deviceUdid);
+        // Cached for a couple of seconds and shared: a worker with several executions waiting on
+        // their phones used to run one full USB enumeration per execution per 5 s tick.
+        const discovered = (await connectedDevices()).find(({ udid }) => udid === execution.deviceUdid);
         const problem = await readinessProblem(registered, Boolean(discovered));
         if (!problem) return discovered ?? identityFromRegistration(registered);
         lastProblem = problem;
