@@ -1,0 +1,10 @@
+{
+  "name": "@farm/client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Typed client for the phone farm JSON API — HTTP, SSE, event text, and an in-memory mock farm. No React, no DOM.",
+  "license": "Apache-2.0",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "sideEffects": false
+}
