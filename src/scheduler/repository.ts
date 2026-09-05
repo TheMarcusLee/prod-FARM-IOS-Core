@@ -1,11 +1,11 @@
-import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt, notExists, or, sql } from 'drizzle-orm';
 import { fromDrizzle, type PgBoss } from 'pg-boss';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { DatabaseConnection } from '../database/client.js';
 import {
-    assets, executionAttempts, executionLogs, executions, schedules,
+    assets, contentItems, executionAttempts, executionLogs, executions, schedules,
     type ExecutionRow, type ScheduleRow,
 } from '../database/schema.js';
 import type { PluginRegistry } from '../registry.js';
@@ -360,6 +360,11 @@ export class SchedulerRepository {
         const cutoff = new Date(Date.now() - hours * 3_600_000);
         const rows = await this.connection.db.select({ id: assets.id }).from(assets).where(and(
             isNull(assets.scheduleId), isNull(assets.executionId), lt(assets.createdAt, cutoff),
+            // A content-library master is deliberately unattached — it is reused
+            // by every drip post, so it is not an abandoned upload.
+            notExists(this.connection.db.select({ present: sql`1` }).from(contentItems).where(or(
+                eq(contentItems.assetId, assets.id), eq(contentItems.originalAssetId, assets.id),
+            ))),
         ));
         await this.purgeAssetIds(rows.map(({ id }) => id));
         return rows.length;

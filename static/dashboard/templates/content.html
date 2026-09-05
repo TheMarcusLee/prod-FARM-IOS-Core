@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Content · Handler</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+    <script src="/assets/htmx.min.js" defer></script>
+</head>
+<body>
+    <header class="topbar">
+        <div class="topbar-inner">
+            <div class="brand">
+                <a class="brand-name" href="/">iOS Farm</a>
+                <a class="brand-by" href="https://gethandler.ai" target="_blank" rel="noopener">by Handler</a>
+            </div>
+            <nav class="topbar-nav"><a class="button secondary" href="/">Devices</a><a class="button secondary" href="/tasks">Tasks</a><button id="refresh-content" class="button secondary" type="button">Refresh</button>__PLUGIN_NAV____AUTH_NAV__</nav>
+        </div>
+    </header>
+    <main class="shell">
+        <header class="page-header">
+            <div><span class="eyebrow">Content queue</span><h1>Content</h1><p>Normalised media, sets, caption templates, and the drip rules that turn them into scheduled posts.</p></div>
+        </header>
+
+        <section class="panel task-section">
+            <div class="section-heading"><div><span class="eyebrow">Ingest</span><h2>Add media</h2></div></div>
+            <div class="workspace-grid">
+                <form id="upload-form" class="automation-form" enctype="multipart/form-data">
+                    <div class="form-row"><label for="upload-media">Upload files</label><input id="upload-media" name="media" type="file" multiple accept="video/*,image/*" required></div>
+                    <div class="form-row"><label for="upload-tags">Tags</label><input id="upload-tags" name="tags" type="text" placeholder="fitness, ugc"></div>
+                    <div class="checkbox-option"><label><input id="upload-crop" name="crop" type="checkbox"> Crop to 9:16 instead of padding</label></div>
+                    <div class="form-actions"><button class="button primary" type="submit">Upload</button></div>
+                    <p id="upload-result" class="muted" aria-live="polite"></p>
+                </form>
+                <form id="ingest-form" class="automation-form">
+                    <div class="form-row"><label for="ingest-directory">Ingest a folder on this host</label><input id="ingest-directory" name="directory" type="text" placeholder="/Users/me/clips" required></div>
+                    <div class="form-row"><label for="ingest-tags">Tags</label><input id="ingest-tags" name="tags" type="text" placeholder="fitness"></div>
+                    <div class="form-actions"><button class="button secondary" type="submit">Ingest folder</button></div>
+                    <p id="ingest-result" class="muted" aria-live="polite"></p>
+                </form>
+                <form id="ingest-url-form" class="automation-form">
+                    <div class="form-row"><label for="ingest-url">Ingest a URL (needs yt-dlp)</label><input id="ingest-url" name="url" type="url" placeholder="https://…" required></div>
+                    <div class="form-row"><label for="ingest-url-tags">Tags</label><input id="ingest-url-tags" name="tags" type="text"></div>
+                    <div class="form-actions"><button class="button secondary" type="submit">Download</button></div>
+                    <p id="ingest-url-result" class="muted" aria-live="polite"></p>
+                </form>
+            </div>
+        </section>
+
+        <section class="panel task-section">
+            <div class="section-heading"><div><span class="eyebrow">Library</span><h2>Media</h2></div>
+                <div class="inline-actions"><input id="library-filter" type="text" placeholder="filter by tag"></div>
+            </div>
+            <div id="content-library" class="device-list loading-card" hx-get="/api/content/items" hx-trigger="load" hx-swap="outerHTML"><span class="spinner"></span>Loading media…</div>
+        </section>
+
+        <section class="panel task-section">
+            <div class="section-heading"><div><span class="eyebrow">Grouping</span><h2>Sets</h2></div></div>
+            <form id="set-form" class="inline-form">
+                <input name="name" type="text" placeholder="Set name" required>
+                <input name="notes" type="text" placeholder="Notes">
+                <button class="button secondary" type="submit">Create set</button>
+            </form>
+            <p class="field-help">A set of one to three images posts as a single slideshow; anything larger is a pool of individual posts.</p>
+            <div id="content-sets" hx-get="/api/content/sets" hx-trigger="load" hx-swap="outerHTML"></div>
+        </section>
+
+        <section class="panel task-section">
+            <div class="section-heading"><div><span class="eyebrow">Captions</span><h2>Templates</h2></div></div>
+            <form id="template-form" class="inline-form">
+                <input name="name" type="text" placeholder="Template name" required>
+                <input name="template" type="text" placeholder="{title} {random:🔥|✨} {hashtags}" required>
+                <button class="button secondary" type="submit">Save template</button>
+                <button id="template-preview-button" class="button secondary" type="button">Preview</button>
+            </form>
+            <p id="template-preview" class="field-help" aria-live="polite">Supports <code>{title}</code>, <code>{hashtags}</code>, <code>{account}</code>, <code>{date}</code>, and <code>{random:a|b|c}</code> spintax.</p>
+            <div id="caption-templates" hx-get="/api/content/templates" hx-trigger="load" hx-swap="outerHTML"></div>
+        </section>
+
+        <section class="panel task-section">
+            <div class="section-heading"><div><span class="eyebrow">Drip</span><h2>Rules</h2></div>
+                <button id="plan-now" class="button primary" type="button">Plan now</button>
+            </div>
+            <form id="rule-form" class="automation-form">
+                <div class="form-row"><label for="rule-device">Device</label><select id="rule-device" name="deviceUdid" required></select></div>
+                <div class="form-row"><label for="rule-account">Account</label><input id="rule-account" name="account" type="text" placeholder="@handle" required></div>
+                <div class="schedule-fields">
+                    <div class="form-row"><label for="rule-posts">Posts per day</label><input id="rule-posts" name="postsPerDay" type="number" min="1" max="24" value="2"></div>
+                    <div class="form-row"><label for="rule-start">Window start</label><input id="rule-start" name="windowStart" type="time" value="09:00"></div>
+                    <div class="form-row"><label for="rule-end">Window end</label><input id="rule-end" name="windowEnd" type="time" value="21:00"></div>
+                    <div class="form-row"><label for="rule-timezone">Timezone</label><input id="rule-timezone" name="timezone" type="text" value="UTC"></div>
+                    <div class="form-row"><label for="rule-gap">Minimum gap (min)</label><input id="rule-gap" name="minGapMinutes" type="number" min="0" max="1440" value="120"></div>
+                    <div class="form-row"><label for="rule-reuse">Avoid reuse (days)</label><input id="rule-reuse" name="avoidReuseDays" type="number" min="0" max="3650" value="30"></div>
+                </div>
+                <div class="schedule-fields">
+                    <div class="form-row"><label for="rule-destination">Destination</label><select id="rule-destination" name="destination"><option value="draft">Draft</option><option value="publish">Publish</option></select></div>
+                    <div class="form-row"><label for="rule-source">Source</label><select id="rule-source" name="source"><option value="tag">Tag</option><option value="set">Set</option></select></div>
+                    <div class="form-row"><label for="rule-tag">Tag</label><input id="rule-tag" name="tag" type="text" placeholder="fitness"></div>
+                    <div class="form-row"><label for="rule-set">Set</label><select id="rule-set" name="setId"><option value="">—</option></select></div>
+                    <div class="form-row"><label for="rule-template">Caption template</label><select id="rule-template" name="captionTemplateId"><option value="">—</option></select></div>
+                    <div class="form-row"><label for="rule-order">Order</label><select id="rule-order" name="order"><option value="random">Random</option><option value="fifo">FIFO</option></select></div>
+                </div>
+                <div class="form-actions"><button class="button primary" type="submit">Create rule</button></div>
+                <p id="rule-result" class="muted" aria-live="polite"></p>
+            </form>
+            <div id="drip-rules" hx-get="/api/drip/rules" hx-trigger="load" hx-swap="outerHTML"></div>
+        </section>
+    </main>
+    <script type="module" src="/assets/content.js"></script>
+    <footer class="app-footer">__FOOTER__</footer>
+</body>
+</html>

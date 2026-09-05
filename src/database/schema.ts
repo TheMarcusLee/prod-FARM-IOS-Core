@@ -72,3 +72,5 @@ export const assets = schedulerSchema.table('assets', {
 
 export type ScheduleRow = typeof schedules.$inferSelect;
 export type ExecutionRow = typeof executions.$inferSelect;
+
+export * from './schema-content.js';
