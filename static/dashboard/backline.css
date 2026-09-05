@@ -120,7 +120,7 @@ svg.bl-icon { width: 16px; height: 16px; flex: none; stroke: currentColor; fill:
 .bl-cc-filters .bl-label { display: flex; justify-content: space-between; color: var(--bl-text-3); }
 .bl-cc-filters .bl-label b { color: var(--bl-text); font-weight: 500; }
 .bl-numgrid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; }
-.bl-wall { display: grid; gap: 12px; padding: 16px; align-content: start; overflow: auto; grid-template-columns: repeat(auto-fill, minmax(var(--bl-tile, 170px), 1fr)); }
+.bl-wall { display: grid; gap: 12px; padding: 16px; align-content: start; overflow: auto; grid-template-columns: repeat(auto-fill, minmax(var(--bl-tile, 150px), 1fr)); }
 .bl-tile { display: flex; flex-direction: column; gap: 6px; padding: 6px; border-radius: 12px; background: var(--bl-panel); border: 1.5px solid var(--bl-line); text-align: left; cursor: pointer; }
 .bl-tile.is-selected { border-color: var(--bl-accent); box-shadow: var(--bl-ring); }
 .bl-tile.is-error { border-color: var(--bl-bad); }

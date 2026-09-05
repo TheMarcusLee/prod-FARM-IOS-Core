@@ -70,7 +70,13 @@ lives in `src/ui/icons.ts`; add to it rather than inlining new glyphs. Never emo
 Desktop shell (`src/ui/shell.ts` `renderShell`): 208px sidebar (brand, nav, rig status), 56px
 toolbar (page title, page actions, right cluster), content. Content pages are full-bleed inside
 that; panels are `bl-panel`. Control Center is three columns: 216px filter panel, the wall, 336px
-inspector. Schedule is a full-width timeline with a 150px track-name gutter. Min width 1180.
+inspector. Schedule is a full-width timeline with a 150px track-name gutter. Min width 1180;
+below it the shell scrolls sideways rather than squeezing, and the toolbar stays on one line.
+
+The wall's tile size slider has three notches — S 120px, M 150px, L 210px — as the minimum
+column width of `repeat(auto-fill, minmax(…, 1fr))`. Medium is the default, and at 1440x900 it
+gives the wall four columns: 1440 - 208 sidebar leaves 1232, minus the 216 filter panel and the
+336 inspector leaves 680, minus 16px padding either side and three 12px gaps is four 153px tiles.
 
 Nav, in order: Control Center, Schedule, Content, Runbooks, Accounts, Alerts, (divider), Devices,
 Rig, Settings. Alerts carries an unread count.

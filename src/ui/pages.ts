@@ -154,6 +154,8 @@ export function renderSettingsPage(input: SettingsInput): string {
 <a href="/settings?theme=auto"${input.theme === 'auto' ? ' aria-current="true"' : ''}>Auto</a>
 <a href="/settings?theme=light"${input.theme === 'light' ? ' aria-current="true"' : ''}>Light</a></div>`;
     const tiles = `<div class="bl-rows">
+<div><span>Tile size</span><span>S 120 · M 150 · L 210 px</span></div>
+<div><span>Default</span><span>Medium, 1 fps — four columns at 1440 wide</span></div>
 <div><span>Screen size</span><span><button type="button" class="bl-btn bl-btn-sm" data-reset-tiles>Reset to medium, 1 fps</button></span></div>
 <div><span>Where they are kept</span><span class="bl-faint">This browser only</span></div></div>`;
     const tokens = `<p class="bl-muted">API tokens are minted from the command line so they never pass
