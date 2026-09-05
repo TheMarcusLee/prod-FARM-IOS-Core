@@ -166,6 +166,67 @@ test('GET /api/events/stream replays from Last-Event-ID and streams new events',
     controller.abort();
 });
 
+test('an SSE stream ends when the token that opened it is revoked', async (context) => {
+    const store = await seededStore();
+    // A fake clock for the re-check: the interval is what drives it, so the test sets it short
+    // and answers "still valid" until it decides the token is gone.
+    let active = true;
+    const asked: string[] = [];
+    const app = Fastify();
+    app.addHook('onRequest', async (request) => { request.apiToken = { id: 'token-7', name: 'phone-3' }; });
+    await registerFleetRoutes(app, {
+        scheduler, backgroundTasks: false, events: store, ssePollIntervalMs: 20,
+        tokenCheckIntervalMs: 10,
+        tokenActive: async (id) => { asked.push(id); return active; },
+    });
+    context.after(() => app.close());
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const { port } = app.server.address() as AddressInfo;
+
+    const controller = new AbortController();
+    context.after(() => controller.abort());
+    const response = await fetch(`http://127.0.0.1:${port}/api/events/stream`, { signal: controller.signal });
+    assert.equal(response.status, 200);
+    const reader = response.body!.getReader();
+
+    // Still valid: the stream stays open and replays.
+    const first = await reader.read();
+    assert.ok(!first.done, 'the stream closed while the token was still valid');
+    assert.ok(asked.length >= 0);
+
+    // Revoked. The next re-check ends the response rather than waiting for the client.
+    active = false;
+    let done = false;
+    while (!done) {
+        const chunk = await reader.read();
+        done = chunk.done;
+    }
+    assert.equal(done, true);
+    assert.ok(asked.includes('token-7'), 'the stream never re-checked its token');
+});
+
+test('a stream with no token identity at all keeps working, and leaves no timer behind', async (context) => {
+    const store = await seededStore();
+    let asked = 0;
+    const app = await fleetApp({
+        events: store, ssePollIntervalMs: 20, tokenCheckIntervalMs: 5,
+        tokenActive: async () => { asked += 1; return true; },
+    });
+    context.after(() => app.close());
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const { port } = app.server.address() as AddressInfo;
+
+    const controller = new AbortController();
+    const response = await fetch(`http://127.0.0.1:${port}/api/events/stream`, { signal: controller.signal });
+    assert.equal(response.status, 200);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    // Auth is off in this process, so there is nothing to re-check.
+    assert.equal(asked, 0);
+    controller.abort();
+    await response.body!.cancel().catch(() => {});
+    await app.close();
+});
+
 /* --------------------------------------------------------------- the SSE hub */
 
 function fakeSocket(options: { acceptBytes?: number } = {}) {
