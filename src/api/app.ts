@@ -26,6 +26,7 @@ import type { AuthProvider, PluginNavLink } from '../plugin.js';
 import type { PluginRegistry } from '../registry.js';
 import type { CreateTaskInput, JsonObject, ScheduleTiming } from '../types.js';
 import { ScheduleTransitionError, type SchedulerRepository } from '../scheduler/repository.js';
+import { registerContentRoutes } from './routes/content.js';
 
 export interface CreateAppOptions {
     plugins: PluginRegistry;
@@ -621,6 +622,8 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         await options.scheduler.deleteAssets(request.body.assetIds ?? []);
         return reply.code(204).send();
     });
+
+    await registerContentRoutes(app, { scheduler: options.scheduler, navHtml: pluginNavHtml, footerHtml: FOOTER_HTML });
 
     for (const plugin of options.plugins.list()) {
         if (plugin.registerRoutes) await plugin.registerRoutes({
