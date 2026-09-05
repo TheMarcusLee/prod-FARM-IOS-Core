@@ -30,7 +30,7 @@ Source: `src/push/relay.ts`, with `src/push/sse.ts` for the stream and
 | `PUSH_COALESCE_WINDOW_MS` | `30000` | At most one push per registered phone per window |
 | `PUSH_RECEIPT_DELAY_MS` | `900000` | How long a ticket waits before its receipt is read |
 | `EXPO_ACCESS_TOKEN` | *(none)* | Only needed when the Expo project has push security enabled |
-| `PUBLIC_BASE_URL` | *(none)* | Put into `data.url` so a notification can deep-link |
+| `PUBLIC_BASE_URL` | *(none)* | Put into `data.url` as `<base>/fleet`, so tapping a notification opens the fleet page |
 
 Anything malformed falls back to the default rather than failing at boot — a
 typo in `PUSH_QUIET_HOURS` disables quiet hours, it does not stop the relay.
@@ -42,7 +42,7 @@ typo in `PUSH_QUIET_HOURS` disables quiet hours, it does not stop the relay.
    40 s with no traffic at all — not even the 15 s heartbeat — counts as a dead
    connection.
 2. **Refresh registrations** from `GET /api/push/registrations`, at most once
-   every 30 s.
+   every 30 s. That interval is fixed in code; there is no variable for it.
 3. **Filter** each event per registration: `kinds` when the phone set one,
    otherwise `severity >= minSeverity`.
 4. **Quiet hours.** Inside the window only `severity: error` goes out; anything
@@ -51,11 +51,14 @@ typo in `PUSH_QUIET_HOURS` disables quiet hours, it does not stop the relay.
 5. **Coalesce.** The first event for a quiet registration is pushed
    immediately; anything arriving inside the next 30 s is held and folded into
    one message — `"3 farm alerts"`, with `data.count` — so a half-out USB cable
-   flapping all night is one notification, not two hundred.
+   flapping all night is one notification, not two hundred. The flush timer
+   ticks every `min(PUSH_COALESCE_WINDOW_MS, 1000)` ms.
 6. **Send** in batches of at most 100 to `https://exp.host/--/api/v2/push/send`.
    A `429` or a `5xx` is retried with backoff (1 s, 2 s, 4 s); a `4xx` is not.
-7. **Persist the cursor** only *after* a send round. A crash therefore replays
-   rather than drops; the app dedupes on `data.eventId`.
+7. **Persist the cursor** only *after* a send round, and only up to the highest
+   id that was actually *pushed*. A crash therefore replays rather than drops;
+   the app dedupes on `data.eventId`. If nothing matched a registration the
+   cursor does not move at all, so a restart re-reads and re-filters the tail.
 8. **Read receipts** 15 minutes later. `DeviceNotRegistered` calls
    `DELETE /api/push/registrations/:id` — that phone is gone. Any other error is
    recorded with `POST /api/push/registrations/:id/error` and shows up as
@@ -72,7 +75,8 @@ typo in `PUSH_QUIET_HOURS` disables quiet hours, it does not stop the relay.
   "sound": "default",
   "priority": "high",
   "data": { "eventId": 42, "kind": "execution.failed", "severity": "error",
-            "deviceUdid": "00008030-…", "executionId": "0b6d1c77-…", "count": 1 }
+            "deviceUdid": "00008030-…", "executionId": "0b6d1c77-…", "count": 1,
+            "url": "https://farm-mac.tailnet-1234.ts.net/fleet" }
 }
 ```
 

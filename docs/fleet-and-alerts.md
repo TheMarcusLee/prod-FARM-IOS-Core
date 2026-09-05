@@ -1,6 +1,6 @@
 # Fleet operations and alerting
 
-Everything in this document is served by the `web` process. Three pieces:
+Everything in this document is served by the `web` process. Four pieces:
 
 - **`/fleet`** — one card per registered device, filters, and bulk actions.
 - **`scheduler.events`** — an append-only timeline of what happened to devices,
@@ -85,6 +85,8 @@ editor sends the same request.
 }
 ```
 
+- `deviceUdids` is capped at 200 per request, and `stagger.minutes` /
+  `stagger.windowMinutes` must be between 0 and 1440. Both are hard `400`s.
 - `fixed` gives device *i* an offset of `i × minutes`; `random` gives each device
   a whole minute drawn from `[0, windowMinutes)`.
 - An offset shifts `once` and `now` timings forward in time (a staggered `now`
@@ -141,7 +143,7 @@ Table `scheduler.events`:
 | `detail` | `jsonb` |
 | `created_at` | `timestamptz` default `now()` |
 
-Indexed on `created_at` and on `device_udid`. Migration: `drizzle/0002_events.sql`.
+Indexed on `created_at` and on `device_udid`. Migration: `drizzle/0003_events.sql`.
 
 ### Kinds
 
@@ -187,9 +189,11 @@ data: {"id":42,"kind":"execution.failed", … }
 
 - `Last-Event-ID` (or `?lastEventId=`) replays everything with a larger id, so a
   reconnecting client misses nothing.
-- A `: heartbeat` comment every 15 s keeps proxies from closing the connection.
-- The stream is polled from the table, so events written by the **worker**
-  process reach a browser attached to the **web** process.
+- A `: connected` comment is written immediately on open, then a `: heartbeat`
+  comment every 15 s keeps proxies from closing the connection.
+- The stream is polled from the table once a second, so events written by the
+  **worker** process reach a browser attached to the **web** process. The device
+  and stuck-execution sweep that *produces* those events runs every 30 s.
 - Closing the connection stops the timers immediately.
 
 ```sh
@@ -275,6 +279,7 @@ than slept through, so a host that suspends past the slot still produces one.
 - `offlineOverAnHour` — devices offline for more than an hour, with `since`
 - `stuckExecutions` — running past the deadline, with `deadlineAt`
 - `plannedNext24h` — schedules due in the next 24 hours
+- `windowHours` — always `24`
 
 ## Push registrations and acknowledgement
 
@@ -293,10 +298,12 @@ documented in `docs/mobile-api.md`; the process that turns events into pushes is
 | `GET /api/events/unacknowledged-count` | `{ unacknowledgedCount, upToId }` |
 | `GET /api/events?acknowledged=false` | Only events above the caller's mark |
 
-The caller's identity comes from `request.apiToken` when the named-token work has
-decorated it; a cookie session or an unauthenticated loopback request falls back
-to the shared `local` identity. A push token is never logged or returned in full
-— only its last six characters.
+The caller's identity is `request.apiToken`. A bearer token is its own identity
+(`{ id: <token id>, name: <token name> }`); a **cookie session** is
+`{ id: 'session', name: 'local' }`; a request with no auth provider configured at
+all falls back to `{ id: 'local', name: 'local' }`. Those are three different ack
+buckets — a browser session's read mark is stored under `session`, not `local`. A
+push token is never logged or returned in full — only its last six characters.
 
 ## Tests
 
