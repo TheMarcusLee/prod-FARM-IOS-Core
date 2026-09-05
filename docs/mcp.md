@@ -97,7 +97,8 @@ its next request fails; see `docs/auth.md`.
 | `stop_execution` | `id` | Cancels a queued run; asks a running one to stop if its task supports it |
 | `retry_execution` | `id` | Failed or stopped runs only |
 | `list_assets` | `limit?` (≤500, default 100) | Uploaded media, newest first |
-| `upload_asset` | `name`, `mimeType`, and exactly one of `path` (on the farm host) or `base64` | Returns the asset id to pass to `create_tiktok_post` |
+| `upload_asset` | `name`, `mimeType`, and exactly one of `path` (inside an allowed directory — see below) or `base64` | Returns the asset id to pass to `create_tiktok_post` |
+| `list_upload_dirs` | — | The directories `upload_asset`'s `path` may read from |
 | `list_plugins` | — | Loaded plugins and their task types/versions |
 
 `timing` is one of:
@@ -130,6 +131,24 @@ Consequences worth accepting before you hand out a token:
 Scope tokens by trust, revoke them freely, and keep an eye on the `apiToken`
 lines in the `web` log.
 
+## Upload directories
+
+`upload_asset` can read a file from the farm host, which without a boundary
+would mean "a token reads any file the `web` process can" — including
+`devices.json`, which holds device passcodes, and `.auth.json`, which holds
+every token digest. So `path` must resolve inside an allowlist:
+
+| | |
+|---|---|
+| Default | the content directory (`CONTENT_DIR`, else `SCHEDULER_DATA_DIR/content`) and `SCHEDULER_DATA_DIR/inbox` |
+| Override | `MCP_UPLOAD_DIRS`, comma- or colon-separated absolute paths |
+| Tool | `list_upload_dirs` reports the live list |
+
+Both the candidate and each allowed directory are resolved with `realpath`, so a
+symlink planted inside an allowed directory cannot point out of it. A rejected
+path is a tool error naming the allowed directories, not a silent failure.
+`base64` uploads are unaffected — they carry their own bytes and read nothing.
+
 ## Security
 
 - **Put the Mac behind Tailscale or a VPN before binding beyond loopback.** The
@@ -141,8 +160,9 @@ lines in the `web` log.
   safe — a private network is still the first control.
 - Terminate TLS in front of `web` if it is reachable from anything but the host
   itself; the session cookie is only marked `Secure` over HTTPS.
-- `upload_asset`'s `path` reads any file the `web` (or `mcp`) process can read.
-  Treat a token as filesystem read access to that user's files.
+- `upload_asset`'s `path` is restricted to an **allowlist** of directories, so a
+  token is not filesystem read access to the operator's home directory. See
+  below.
 - The tokens for `/mcp` are the same ones `/api` accepts. There is no way to
   issue a read-only or MCP-only token today.
 

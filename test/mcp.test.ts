@@ -96,7 +96,8 @@ test('the tool set exposes every farm tool plus the status resource and planning
         assert.deepEqual(names, [
             'create_doomscroll', 'create_schedule', 'create_tiktok_post', 'discover_devices', 'get_device',
             'get_execution', 'list_assets', 'list_devices', 'list_executions', 'list_plugins', 'list_schedules',
-            'retry_execution', 'screenshot', 'set_schedule_status', 'stop_execution', 'upload_asset',
+            'list_upload_dirs', 'retry_execution', 'screenshot', 'set_schedule_status', 'stop_execution',
+            'upload_asset',
         ]);
 
         const resources = (await client.listResources()).resources.map(({ uri }) => uri);

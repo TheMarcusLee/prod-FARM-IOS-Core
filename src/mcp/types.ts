@@ -97,4 +97,6 @@ export interface McpDependencies {
     listPlugins(): readonly PluginLike[];
     /** Where uploaded media lands. Defaults to SCHEDULER_DATA_DIR. */
     dataDirectory?: string;
+    /** Directories `upload_asset`'s `path` may read. Defaults to MCP_UPLOAD_DIRS / the content directory. */
+    uploadDirectories?: readonly string[];
 }

@@ -6,6 +6,7 @@ import { z } from 'zod';
 
 import type { CreateTaskInput, JsonObject, ScheduleTiming } from '../types.js';
 import type { McpDependencies, DeviceLike } from './types.js';
+import { resolveUploadPath, uploadDirectories } from './uploads.js';
 
 export const TIKTOK_PLUGIN_ID = 'com.git-agni.tiktok';
 export const SERVER_NAME = 'phone-farm';
@@ -58,6 +59,10 @@ async function attempt(run: () => Promise<ToolResult>): Promise<ToolResult> {
 
 function dataRoot(dependencies: McpDependencies): string {
     return path.resolve(dependencies.dataDirectory ?? process.env.SCHEDULER_DATA_DIR ?? '.scheduler-data');
+}
+
+function allowedUploadDirectories(dependencies: McpDependencies): string[] {
+    return dependencies.uploadDirectories ? [...dependencies.uploadDirectories] : uploadDirectories();
 }
 
 function devicePluginData(device: DeviceLike | undefined, pluginId: string): JsonObject {
@@ -294,14 +299,17 @@ function registerAssetTools(server: McpServer, dependencies: McpDependencies): v
         inputSchema: {
             name: z.string().min(1).describe('Filename shown in the dashboard'),
             mimeType: z.string().min(1).describe('e.g. video/mp4 or image/jpeg'),
-            path: z.string().optional().describe('Absolute path on the farm host'),
+            path: z.string().optional()
+                .describe('Path on the farm host, inside a directory list_upload_dirs reports'),
             base64: z.string().optional().describe('File contents, base64 — use for small files only'),
         },
     }, async ({ name, mimeType, path: sourcePath, base64 }) => attempt(async () => {
         if ((sourcePath === undefined) === (base64 === undefined)) {
             return failure('Provide exactly one of path or base64');
         }
-        const body = sourcePath === undefined ? Buffer.from(base64 ?? '', 'base64') : await readFile(sourcePath);
+        const body = sourcePath === undefined
+            ? Buffer.from(base64 ?? '', 'base64')
+            : await readFile(await resolveUploadPath(sourcePath, allowedUploadDirectories(dependencies)));
         const root = dataRoot(dependencies);
         await mkdir(path.join(root, 'uploads'), { recursive: true });
         const relativePath = path.join('uploads', crypto.randomUUID());
@@ -313,6 +321,12 @@ function registerAssetTools(server: McpServer, dependencies: McpDependencies): v
         }]);
         return asset ? json(asset) : failure('The scheduler did not register the asset');
     }));
+
+    server.registerTool('list_upload_dirs', {
+        title: 'List upload directories',
+        description: "Directories upload_asset's path argument may read from. Anything else is rejected.",
+        inputSchema: {},
+    }, async () => attempt(async () => json({ directories: allowedUploadDirectories(dependencies) })));
 
     server.registerTool('list_plugins', {
         title: 'List plugins',
