@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import type { ExecutionRow } from '../../database/schema.js';
-import { discoverConnectedDevices } from '../../devices/discovery.js';
+import { discoverConnectedDeviceUdids } from '../../devices/discovery.js';
 import { loadRegisteredDevices, type RegisteredDevice } from '../../devices/registry.js';
 import type { DeviceConnectionStatus } from '../../devices/connection-manager.js';
 import { requestWdaService } from '../../devices/wda-service-client.js';
@@ -37,12 +37,36 @@ export interface FleetRouteOptions {
     now?: () => Date;
     ssePollIntervalMs?: number;
     monitorIntervalMs?: number;
+    /** How long /api/fleet/summary and /fleet may reuse one device+scheduler read. */
+    summaryTtlMs?: number;
     /** Set false to keep the device/stuck/digest timers out of a test process. */
     backgroundTasks?: boolean;
 }
 
 const HEARTBEAT_MS = 15_000;
 const DEFAULT_MONITOR_MS = 30_000;
+/**
+ * The fleet page polls its summary every 5 s, and so does every tray app. Each
+ * call means a USB enumeration plus two 500-row scheduler queries, so a handful
+ * of watchers used to multiply that by however many of them there were. A cache
+ * this short is invisible to the operator and collapses the fan-in to one pass.
+ */
+const DEFAULT_SUMMARY_TTL_MS = 2_000;
+
+/** Memoises an async load for `ttlMs`, sharing one in-flight call between callers. */
+function throttled<T>(ttlMs: number, now: () => number, load: () => Promise<T>): () => Promise<T> {
+    let cached: { at: number; value: T } | null = null;
+    let inFlight: Promise<T> | null = null;
+    return async () => {
+        const at = now();
+        if (cached && at - cached.at < ttlMs) return cached.value;
+        inFlight ??= load().then((value) => {
+            cached = { at: now(), value };
+            return value;
+        }).finally(() => { inFlight = null; });
+        return inFlight;
+    };
+}
 
 function fleetTags(devices: readonly RegisteredDevice[]): string[] {
     return [...new Set(devices.flatMap((device) => device.tags ?? []))].sort();
@@ -100,8 +124,10 @@ export async function registerFleetRoutes(app: FastifyInstance, options: FleetRo
     const clock = options.now ?? (() => new Date());
     const notifications = options.notifications ?? notificationConfigFromEnv();
     const loadDevices = options.loadDevices ?? loadRegisteredDevices;
-    const connectedUdids = options.connectedUdids
-        ?? (async () => (await discoverConnectedDevices()).map(({ udid }) => udid));
+    // Only the UDIDs: discoverConnectedDevices() also asks usbmuxd for a name,
+    // an OS version and a device-info blob per phone — three extra round trips
+    // each — and every one of them is thrown away here.
+    const connectedUdids = options.connectedUdids ?? (() => discoverConnectedDeviceUdids());
 
     let store: EventStore | null = options.events ?? null;
     const eventStore = (): EventStore | null => {
@@ -212,27 +238,31 @@ export async function registerFleetRoutes(app: FastifyInstance, options: FleetRo
         return reply.code(created ? 201 : 400).send({ created, failed: outcomes.length - created, results: outcomes });
     });
 
-    const fleetState = async () => {
+    const summaryTtlMs = options.summaryTtlMs ?? DEFAULT_SUMMARY_TTL_MS;
+    const fleetState = throttled(summaryTtlMs, () => clock().getTime(), async () => {
         const [devices, connected] = await Promise.all([loadDevices(), connectedUdids()]);
         const online = new Set(connected);
         return devices.map((device) => ({
             device, connected: online.has(device.udid),
             state: deviceState(device, online.has(device.udid)),
         }));
-    };
+    });
+
+    const schedulerState = throttled(summaryTtlMs, () => clock().getTime(), async () => {
+        const [executions, schedules] = await Promise.all([
+            options.scheduler.listExecutions(500), options.scheduler.listSchedules(500),
+        ]);
+        return { executions, schedules };
+    });
 
     app.get('/api/fleet/summary', async () => {
-        const [devices, executions, schedules] = await Promise.all([
-            fleetState(), options.scheduler.listExecutions(500), options.scheduler.listSchedules(500),
-        ]);
+        const [devices, { executions, schedules }] = await Promise.all([fleetState(), schedulerState()]);
         return summarizeFleet({ devices, executions, schedules, now: clock() });
     });
 
     app.get('/fleet', async (_request, reply) => {
         const now = clock();
-        const [devices, executions, schedules] = await Promise.all([
-            fleetState(), options.scheduler.listExecutions(500), options.scheduler.listSchedules(500),
-        ]);
+        const [devices, { executions, schedules }] = await Promise.all([fleetState(), schedulerState()]);
         const recent = await (eventStore()?.list({ limit: 300 }) ?? Promise.resolve([] as FarmEvent[]));
         const latestEvent = new Map<string, FarmEvent>();
         for (const event of recent) {

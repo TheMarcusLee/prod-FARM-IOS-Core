@@ -30,17 +30,37 @@ export function parseStagger(value: unknown): Stagger {
     throw new Error('stagger.kind must be "fixed" or "random"');
 }
 
+/** Fisher–Yates, so a caller can hand in a deterministic source in a test. */
+function shuffled(values: number[], random: () => number): number[] {
+    const copy = [...values];
+    for (let index = copy.length - 1; index > 0; index--) {
+        const swap = Math.floor(random() * (index + 1));
+        [copy[index], copy[swap]] = [copy[swap]!, copy[index]!];
+    }
+    return copy;
+}
+
 /**
  * One start offset (in minutes) per device, in the order the devices were given.
- * `fixed` spreads them evenly (index × minutes); `random` picks a whole minute
- * inside [0, windowMinutes) so a fleet never posts in lockstep.
+ * `fixed` spreads them evenly (index × minutes).
+ *
+ * `random` deals each device a *distinct* minute inside [0, windowMinutes) and
+ * then shuffles the deal. Picking each offset independently — which is what this
+ * used to do — collides far more often than it feels like it should: twelve
+ * devices in a 45-minute window land on a shared minute more than four times in
+ * five, and two phones starting the same TikTok task in the same minute is the
+ * lockstep the stagger exists to avoid. When there are more devices than
+ * minutes the collisions are unavoidable, and the offsets are spread as evenly
+ * as the window allows instead of clumping.
  */
 export function staggerOffsets(count: number, stagger: Stagger, random: () => number = Math.random): number[] {
-    return Array.from({ length: Math.max(0, count) }, (_value, index) => (
-        stagger.kind === 'fixed'
-            ? index * stagger.minutes
-            : Math.floor(random() * stagger.windowMinutes)
-    ));
+    const total = Math.max(0, count);
+    if (stagger.kind === 'fixed') {
+        return Array.from({ length: total }, (_value, index) => index * stagger.minutes);
+    }
+    const window = Math.floor(stagger.windowMinutes);
+    if (window <= 0) return Array.from({ length: total }, () => 0);
+    return shuffled(Array.from({ length: total }, (_value, index) => index % window), random);
 }
 
 /** "23:50" + 20 → "00:10". */
