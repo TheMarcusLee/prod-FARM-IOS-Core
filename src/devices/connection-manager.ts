@@ -99,6 +99,7 @@ export class DeviceConnectionManager implements DeviceConnections {
     private readonly now: () => number;
     private readonly runtimes = new Map<string, RuntimeState>();
     private timer?: NodeJS.Timeout;
+    private pending: Promise<void> = Promise.resolve();
     private running = false;
     private closing = false;
     private appium: AppiumConnectionPhase = 'unavailable';
@@ -116,12 +117,17 @@ export class DeviceConnectionManager implements DeviceConnections {
         if (this.timer) return;
         await this.reconcile();
         let lastReconcileError = '';
-        this.timer = setInterval(() => void this.reconcile().catch((error: unknown) => {
-            const message = error instanceof Error ? error.message : String(error);
-            if (message === lastReconcileError) return;
-            lastReconcileError = message;
-            console.error(error);
-        }), this.pollIntervalMs);
+        this.timer = setInterval(() => {
+            // A tick that lands while a pass is still running is dropped, not queued: the next
+            // one is two seconds away and would see the same phones.
+            if (this.running) return;
+            void this.reconcile().catch((error: unknown) => {
+                const message = error instanceof Error ? error.message : String(error);
+                if (message === lastReconcileError) return;
+                lastReconcileError = message;
+                console.error(error);
+            });
+        }, this.pollIntervalMs);
     }
 
     status(udid: string): DeviceConnectionStatus | undefined {
@@ -133,8 +139,18 @@ export class DeviceConnectionManager implements DeviceConnections {
         return Array.from(this.runtimes.values(), ({ status }) => ({ ...status }));
     }
 
-    async reconcile(): Promise<void> {
-        if (this.running || this.closing) return;
+    /**
+     * Runs a full pass. Concurrent callers queue behind the pass in flight rather than being
+     * dropped, so `reconnect()` always observes a reading taken after it asked for one.
+     */
+    reconcile(): Promise<void> {
+        const run = this.pending.then(() => this.runReconcile());
+        this.pending = run.catch(() => undefined);
+        return run;
+    }
+
+    private async runReconcile(): Promise<void> {
+        if (this.closing) return;
         this.running = true;
         try {
             const [allDevices, connected, appiumReady] = await Promise.all([
@@ -177,7 +193,13 @@ export class DeviceConnectionManager implements DeviceConnections {
 
     private async reconcileAndroid(runtime: RuntimeState, attached: boolean): Promise<void> {
         const device = runtime.device;
-        const bridgeUrl = driverKindOf(device) === 'a11y-bridge' ? device.android?.bridgeUrl : undefined;
+        const wantsBridge = driverKindOf(device) === 'a11y-bridge';
+        const bridgeUrl = wantsBridge ? device.android?.bridgeUrl : undefined;
+        if (wantsBridge && !bridgeUrl) {
+            // Otherwise this reads as a healthy adb phone and the first task fails at driver build.
+            this.update(runtime, 'error', 'This device is set to the a11y-bridge driver but has no android.bridgeUrl; re-run the driver setup');
+            return;
+        }
         if (!bridgeUrl) {
             if (attached) this.update(runtime, 'ready', 'adb is connected');
             else this.update(runtime, 'disconnected', 'Not visible to adb — check the USB cable or wireless debugging');
@@ -195,6 +217,10 @@ export class DeviceConnectionManager implements DeviceConnections {
         const runtime = this.runtimes.get(udid);
         if (!runtime) return;
         if (platformOf(runtime.device) === 'android') {
+            // There is no child to restart; a fresh pass is the whole of a reconnect. Clear the
+            // retry counter so the UI does not keep showing failures from before the replug.
+            runtime.status.retryCount = 0;
+            runtime.retryAt = 0;
             await this.reconcile();
             return this.status(udid);
         }

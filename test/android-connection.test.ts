@@ -49,3 +49,54 @@ test('a11y-bridge devices are ready when /ping answers, even with nothing attach
     assert.equal(bridgeDown.instance.status('R58N1')?.wda, 'connecting');
     assert.equal(bridgeDown.spawned.length, 0);
 });
+
+test('a bridge device with no bridgeUrl is an error, not a healthy adb phone', async () => {
+    const devices: RegisteredDevice[] = [{
+        name: 'pixel', udid: 'R58N1', platform: 'android', driver: 'a11y-bridge',
+        android: { serial: 'R58N1' }, pluginData: {},
+    }];
+    const { instance } = manager(devices, ['R58N1'], () => true);
+    await instance.reconcile();
+    assert.equal(instance.status('R58N1')?.wda, 'error');
+    assert.match(instance.status('R58N1')?.message ?? '', /android\.bridgeUrl/);
+});
+
+test('reconnect on an Android phone waits for a fresh pass instead of a poll already in flight', async () => {
+    const devices: RegisteredDevice[] = [{ name: 'pixel', udid: 'R58N1', platform: 'android', pluginData: {} }];
+    let connected: string[] = [];
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let entered = () => {};
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    let firstLoad = true;
+    const instance = new DeviceConnectionManager({
+        loadDevices: async () => {
+            // Hold the first pass open so the reconnect below arrives while it is still running.
+            if (firstLoad) { firstLoad = false; entered(); await gate; }
+            return devices;
+        },
+        connectedUdids: async () => connected,
+        endpointReady: async () => false,
+        spawnSupervisor: () => { throw new Error('should not spawn WDA for Android'); },
+        now: () => 0,
+    });
+    const slow = instance.reconcile();
+    await started;
+    // The phone is plugged back in while the slow pass is still reading a stale, empty listing.
+    connected = ['R58N1'];
+    release();
+    await slow;
+    assert.equal(instance.status('R58N1')?.wda, 'disconnected');
+    assert.equal((await instance.reconnect('R58N1'))?.wda, 'ready');
+});
+
+test('a disabled Android device is forgotten rather than reported as ready', async () => {
+    const devices: RegisteredDevice[] = [{ name: 'pixel', udid: 'R58N1', platform: 'android', pluginData: {} }];
+    const { instance } = manager(devices, ['R58N1'], () => false);
+    await instance.reconcile();
+    assert.equal(instance.status('R58N1')?.wda, 'ready');
+    devices[0]!.disabled = true;
+    await instance.reconcile();
+    assert.equal(instance.status('R58N1'), undefined);
+    assert.deepEqual(instance.statuses(), []);
+});
