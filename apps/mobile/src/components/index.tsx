@@ -18,6 +18,7 @@ import {
     type ViewStyle,
 } from 'react-native';
 import { router } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FarmError } from '@farm/client';
 import { Icon, type IconName } from '../icons';
 import { useTheme, type Palette } from '../theme';
@@ -431,6 +432,9 @@ export function SectionTitle({ children }: { children: ReactNode }) {
 /**
  * The screen header: 24px title, a 12.5px subtitle, and the one compact action
  * the mockup gives the screen. No floating gear — Settings lives under Rig.
+ *
+ * It owns the top safe area because the tabs draw no navigation header: the
+ * mockup's 58px of padding above "Wall" is the notch plus 10.
  */
 export function ScreenHeader({
     title,
@@ -444,12 +448,13 @@ export function ScreenHeader({
     testID?: string;
 }) {
     const { colors, spacing } = useTheme();
+    const insets = useSafeAreaInsets();
     return (
         <View
             testID={testID}
             style={{
                 paddingHorizontal: spacing.lg2,
-                paddingTop: spacing.sm2,
+                paddingTop: insets.top + spacing.sm2,
                 paddingBottom: spacing.sm2,
                 flexDirection: 'row',
                 alignItems: 'center',

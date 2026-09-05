@@ -8,7 +8,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { Alert, FlatList, Image, RefreshControl, Text, View } from 'react-native';
 import { router } from 'expo-router';
-import { FarmError, deviceDisplayName, formatRelative, type ContentQueueItem } from '@farm/client';
+import { FarmError, formatRelative, type ContentQueueItem } from '@farm/client';
 import {
     Badge,
     Button,
@@ -36,7 +36,9 @@ export function ContentScreen() {
 
     const names = useMemo(() => {
         const map = new Map<string, string>();
-        for (const device of snapshot?.fleet.devices ?? []) map.set(device.udid, deviceDisplayName(device.name));
+        // The full name, slot suffix and all: these rows carry no number chip,
+        // so stripping it would throw away the only slot the operator can see.
+        for (const device of snapshot?.fleet.devices ?? []) map.set(device.udid, device.name);
         return map;
     }, [snapshot]);
 

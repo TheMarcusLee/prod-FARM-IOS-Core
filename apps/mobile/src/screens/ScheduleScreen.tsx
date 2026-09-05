@@ -50,7 +50,8 @@ const HOURS_AHEAD = 7;
 const PIXELS_PER_HOUR = 92;
 const TRACK_HEIGHT = 34;
 const CLIP_HEIGHT = 28;
-const GUTTER = 34;
+/** Wide enough for a two-digit number chip without wrapping it. */
+const GUTTER = 44;
 
 type Segment = 'upcoming' | 'recent';
 
@@ -177,7 +178,9 @@ export function ScheduleScreen() {
         const paused: Listed[] = schedules
             .filter((row) => row.status === 'paused')
             .map((row) => ({ key: `sch:${row.id}`, schedule: row, at: row.nextRunAt }));
-        return [...live, ...planned, ...paused].sort((a, b) => (a.at ?? '').localeCompare(b.at ?? ''));
+        // A schedule with no next run has no place on a timeline; it sorts to
+        // the bottom rather than to the top, which is where '' would put it.
+        return [...live, ...planned, ...paused].sort((a, b) => (a.at ?? '\uffff').localeCompare(b.at ?? '\uffff'));
     }, [executions, schedules]);
 
     const recent = useMemo<Listed[]>(

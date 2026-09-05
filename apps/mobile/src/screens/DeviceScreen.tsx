@@ -71,7 +71,7 @@ export function DeviceScreen({ udid }: { udid: string }) {
     const { unlocked, unlock, lock, secondsRemaining } = useSafety();
     const { colors, spacing } = useTheme();
     const insets = useSafeAreaInsets();
-    const { height } = useWindowDimensions();
+    const { width, height } = useWindowDimensions();
     const foreground = useIsForeground();
 
     const [nonce, setNonce] = useState(0);
@@ -192,6 +192,14 @@ export function DeviceScreen({ udid }: { udid: string }) {
     if (connection.loading && !connection.data) return <Loading label="Checking the device…" />;
 
     const frameHeight = Math.max(280, Math.round(height * 0.46));
+    /**
+     * Shape the ink frame to the phone rather than letterboxing inside it: the
+     * image is `contain`, so a frame of the wrong aspect puts grey bars either
+     * side and makes the tap-mapping's dead zone visible for no reason.
+     */
+    const frameWidth = screenSize
+        ? Math.min(width - 2 * spacing.md2, Math.round(frameHeight * (screenSize.width / screenSize.height)))
+        : undefined;
 
     const header = (
         <View style={{ gap: spacing.sm2 }}>
@@ -212,6 +220,8 @@ export function DeviceScreen({ udid }: { udid: string }) {
             <View
                 style={{
                     marginHorizontal: spacing.md2,
+                    alignSelf: frameWidth ? 'center' : 'auto',
+                    width: frameWidth,
                     height: frameHeight,
                     borderRadius: 22,
                     borderWidth: 8,

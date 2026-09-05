@@ -1,25 +1,66 @@
-# Companion mobile app
+# Backline, the companion phone app
 
-The operator's phone app: watch the fleet, unstick a run, approve a post, get
+The operator's phone app: watch the wall, unstick a run, approve a post, get
 paged when something breaks. It is a **client of the same JSON API** as the
 dashboard — it adds no automation of its own and holds no state the Mac does not
 already have.
 
+- The design, which is fixed: [`docs/design/backline.md`](design/backline.md).
 - The *why* and the order of work: [`docs/companion-app-plan.md`](companion-app-plan.md).
 - The wire contract: [`docs/mobile-api.md`](mobile-api.md).
 - This document: how to run it, point it at a farm, and ship it.
+
+## The five tabs
+
+| tab | what it answers | screenshot |
+| --- | --- | --- |
+| **Wall** | What is happening right now. Every phone's screen, live, numbered, selectable. | [light](../apps/mobile/docs/screenshots/wall-light.png) · [dark](../apps/mobile/docs/screenshots/wall-dark.png) |
+| **Schedule** | What happens tonight. A timeline strip — tracks are phones, clips are posts coloured by account, a playhead on now — then what is coming and what just ran. | [light](../apps/mobile/docs/screenshots/schedule-light.png) · [dark](../apps/mobile/docs/screenshots/schedule-dark.png) |
+| **Content** | The library, and the posts waiting on an approve or a skip. | — |
+| **Alerts** | What the farm said, with the unread count on the tab. | [light](../apps/mobile/docs/screenshots/alerts-light.png) · [dark](../apps/mobile/docs/screenshots/alerts-dark.png) |
+| **Rig** | The machine that runs this, in plain words, and every setting. | [light](../apps/mobile/docs/screenshots/rig-light.png) · [dark](../apps/mobile/docs/screenshots/rig-dark.png) |
+
+Tapping a tile opens the **device screen**: the mirrored phone framed in ink,
+the hardware row, the last two log lines, and the inspector below the fold
+([light](../apps/mobile/docs/screenshots/device-light.png) ·
+[dark](../apps/mobile/docs/screenshots/device-dark.png)).
+
+**Settings is not a tab.** It lives under Rig, below the service rows, because
+that is where the rest of "the machine that runs this" already is.
+
+## Design
+
+Every colour, radius, type size and piece of copy comes from
+[`docs/design/backline.md`](design/backline.md) — the light and dark token
+tables verbatim in `src/theme/index.tsx`, nothing picked by eye. Light is
+primary; Rig → Appearance overrides the system setting either way.
+
+Icons are the desktop set: `src/ui/icons.ts`'s glyph strings are copied
+byte-for-byte into `apps/mobile/src/icons/glyphs.ts` and rendered through
+`react-native-svg` at 24 on a 16 grid. **There are no emoji and no text glyphs
+anywhere in the app** — the old `▦ ≣ ▶ ◉ ⚙` tab characters are gone. Add a glyph
+to `src/ui/icons.ts` first, then re-copy.
+
+Interaction rules the whole app keeps to: 44 pt targets (with `hitSlop` where
+the ink is smaller), `FlatList` with memoised rows and stable keys for anything
+that grows, an accessibility label on every touch target, and no action that is
+only reachable by a gesture — the Wall's long-press has a Select button beside
+the title that does the same thing.
 
 ## Layout
 
 ```
 apps/mobile/              Expo app (Expo Router, TypeScript strict)
-  app/                    routes — (tabs)/ plus device/[udid] and execution/[id]
+  app/(tabs)/             index (Wall), schedule, content, alerts, rig
+  app/                    plus device/[udid] and execution/[id]
   src/screens/            one file per screen; the routes are three-line wrappers
-  src/components/         Card, Badge, Button, StatusDot plus Row, Muted,
-                          SectionTitle, EmptyState, StaleBanner, ErrorBanner, Loading
+  src/components/         Panel, Button, Chip, Segmented, NumberChip, StatusDot,
+                          ScreenHeader, InspectorRow, Callout, LogBlock,
+                          EmptyState, StaleBanner, ErrorState, Loading
+  src/icons/              glyphs.ts (copied from src/ui/icons.ts) + <Icon>
   src/context/            Settings, Farm, Alerts, Safety — React context, no store
   src/hooks/              shared hooks
-  src/theme/              colours, spacing, type scale
+  src/theme/              the Backline tokens, both palettes, account colours
   src/lib/                secure storage, push registration
   test/                   React Native Testing Library
 packages/farm-client/     the typed API client — no React, no DOM
@@ -27,7 +68,8 @@ packages/farm-client/     the typed API client — no React, no DOM
   src/http.ts             base URL + bearer + timeouts + { error } unwrap
   src/errors.ts           status → typed error
   src/client.ts           the FarmClient interface both implementations satisfy
-  src/derive.ts           shared derivations (device badge, counters)
+  src/derive.ts           shared derivations (device badge, counters, the wall
+                          summary, the schedule timeline fallback)
   src/sse.ts              SSE parser, Last-Event-ID resume, jittered backoff
   src/event-text.ts       event → human string, shared with the desktop app
   src/mock/               createMockFarm() — 12 fake devices that tick
@@ -62,8 +104,9 @@ npm run mobile:test    # from the repo root
 
 One `jest` invocation, two projects: `farm-client` in a node environment
 (HTTP error mapping, the SSE parser and its `Last-Event-ID` resume, the mock
-farm's invariants) and `app` under `jest-expo` (Fleet and Alerts rendering from
-the mock client). 95 tests.
+farm's invariants) and `app` under `jest-expo` (the tab set, the Wall's tiles
+and selection bar, the device screen's lock, Schedule's timeline and paging,
+Alerts, and every screen's error states). 155 tests.
 
 `npm run check` at the repo root is unchanged — the farm's own typecheck and
 tests do not see `apps/mobile`.
@@ -79,7 +122,8 @@ client, so flipping the toggle swaps one object in a React context and no screen
 knows the difference. It gives you:
 
 - 12 devices — 2 iOS, 10 Android; three busy, one offline, one disabled, one
-  erroring — with tags, so the filter chips have something to filter.
+  erroring — which is what the Wall's All / Posting / Needs you / Offline chips
+  filter.
 - Schedules covering all four timing shapes and all four statuses; executions
   covering all seven statuses, with logs.
 - Events ticking every four seconds through the same subscription the SSE client
@@ -109,16 +153,16 @@ reverse proxy on a VPS. Tailscale is the transport.
    npm run token:create -- --name marcus-iphone
    ```
 
-4. In the app: Settings → Server → paste the MagicDNS URL
+4. In the app: Rig → Server → paste the MagicDNS URL
    (`http://farm-mac.tailnet-1234.ts.net:3000`), then **Test** — it hits
    `/health`, which is cheap and does not touch USB. It reports the round-trip
    time and the farm's release sha.
-5. Settings → Token → paste. It goes straight to `expo-secure-store`
+5. Rig → Token → paste. It goes straight to `expo-secure-store`
    (Keychain, `WHEN_UNLOCKED_THIS_DEVICE_ONLY` — never synced to iCloud, never
    restored to a different phone from a backup) and is never shown again: the UI
    shows a masked suffix and a **Replace** button. (Tokens are `pf_` plus 43
    base64url characters, which is what the field's placeholder now shows.)
-6. Turn *Use demo data* off.
+6. Rig → Demo → turn *Use demo data* off.
 
 A second **LAN** URL is supported as a fallback for when you are at home.
 
@@ -156,6 +200,10 @@ The last fleet snapshot is cached to AsyncStorage and rendered behind a dimmed
 control disabled. **Nothing is queued for replay**: a stop or a tap that fires
 twenty minutes late on a phone farm is worse than one that never fired.
 
+Frames follow the same rule. The Wall refreshes a `?width=320` thumbnail at
+**0.5 fps**, only for the tiles actually on screen and only while the app is in
+front; the device screen's mirror runs at **2 fps**. Backgrounded, both stop.
+
 Foregrounded, the app holds one `/api/events/stream` connection and re-polls
 `GET /api/mobile/bootstrap` every 15 s — **not** `/api/fleet/summary`, which
 answers with counters and no device list. Backgrounded, it closes the socket and
@@ -175,7 +223,7 @@ farm web ──SSE──▶ farm-push-relay ──HTTPS──▶ Expo ──▶ 
 1. Run `ntfy` first (plan §8, M1) — it is zero app code and keeps working
    forever as the fallback pager.
 2. Build and run `farm-push-relay` (gap 2) with its own named token.
-3. In the app: Settings → Notifications → **Push alerts** on. It asks for the OS
+3. In the app: Rig → Notifications → **Push alerts** on. It asks for the OS
    permission, fetches an Expo push token, and `POST /api/push/register`s it
    with the device label and the minimum severity. `POST /api/push/register`
    upserts on the Expo token, so the app re-registers on every launch and on
@@ -188,7 +236,9 @@ farm web ──SSE──▶ farm-push-relay ──HTTPS──▶ Expo ──▶ 
    on Alerts rather than being handed to the router.
 
 **Push needs a real device.** A simulator cannot register, and the app says so
-rather than failing silently.
+rather than failing silently. The biometric gate is the same: the simulator has
+no enrolled Face ID at launch, so *hold to unlock* refuses there. The unit tests
+cover both branches with `expo-local-authentication` mocked.
 
 **Push bodies leave the tailnet.** `pushText()` in `farm-client` deliberately
 carries a device *name* and a task name and nothing else — no UDIDs, no account
@@ -222,8 +272,8 @@ creates them on first use. Decide the profile and channel names then.
 - Config plugins are already declared in `app.json`: `expo-router`,
   `expo-secure-store`, `expo-local-authentication` (with the Face ID usage
   string), `expo-notifications`.
-- The app version and the farm's `/health.release.sha` sit side by side in
-  Settings → About. That is the first thing to check when the app and the farm
+- The app version and the farm's release sha sit side by side in Rig →
+  Services. That is the first thing to check when the app and the farm
   disagree.
 - Crash reporting (Sentry) is **not** wired up yet. When it is, it needs a
   scrubber that drops screenshot bodies, bearer tokens and any `pluginData` —
@@ -261,16 +311,21 @@ them to the farm's own fixtures.
 | 19 | **`stopExecution`'s `result: "not-found"` is unreachable** — the route answers `404` for that case. The client models both. | Nothing. |
 | 20 | ~~**Bootstrap's `release` matches `/health`'s.**~~ **Refuted.** Bootstrap sends `{ version, sha }` from `package.json` plus the short git sha; `/health` sends the `RELEASED` marker's `{ sha, subject, deployedAt }`. Both are always present on bootstrap (`sha` may be `null`). | Settings → About read a field that does not exist. Fixed. |
 | 21 | ~~**`/api/fleet/summary` returns `{ counts, devices }`.**~~ **Refuted.** It returns counters only — no device list. The screen-shaped view is bootstrap's `fleet`. | The Fleet grid would have emptied itself on the first refresh after cold start. Fixed: every refresh is a bootstrap. |
+| 23 | **`GET /api/schedule/timeline?from=&to=` answers `{ tracks: [{ udid, number, name, clips }], now }`.** Being built on the server in parallel; the client types it and falls back to `composeTimeline()` over schedules and executions when it 404s. | Nothing — the strip draws either way, and only a `404` falls back, so a 401 or a dead Mac still surfaces as an error. |
 | 22 | ~~**Events carry `message` and `data`.**~~ **Refuted.** The wire field is `detail`, and there is no prose `message`. | Every event body on the Alerts list fell through to a hard-coded default. Fixed. |
 
 ## What is not built yet
 
 - Maestro E2E flows (plan §9). The unit and RNTL layers are in place.
-- Kind-by-kind notification preferences — Settings registers the four
-  push-worthy kinds and exposes only `minSeverity`. The API already takes the
-  full list.
-- Long-press quick-action sheet on a Fleet card; the actions live on the device
-  screen.
+- Kind-by-kind notification preferences — Rig registers the four push-worthy
+  kinds and exposes only `minSeverity`. The API already takes the full list.
+- **Recents and Power** on the device screen's hardware row. `/remote/action`
+  models `tap`, `swipe`, `home`, `back` and `text` and nothing else, so those
+  two keys are drawn and disabled rather than wired to a route that does not
+  exist. Screenshot re-fetches the frame, which is what it can honestly do.
+- **Accounts.** `account` and `accountColor` on a timeline clip come from the
+  farm; the local fallback assigns a colour per phone in fleet order, because
+  the wire has no account model yet.
 - Content approval with re-timing (a date picker). Approve keeps the planned
   slot; the client method already takes `plannedFor`.
 - Sentry, and the app-level PIN for cold start.
