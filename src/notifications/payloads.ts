@@ -118,9 +118,11 @@ export const NTFY_PRIORITY: Record<EventSeverity, string> = { info: '3', warning
 /** ntfy renders these shortcodes as the emoji in front of the title. */
 export const NTFY_TAGS: Record<EventKind, string> = {
     'execution.started': 'arrow_forward',
+    'execution.retried': 'repeat',
     'execution.succeeded': 'white_check_mark',
     'execution.failed': 'x',
     'execution.stopped': 'octagonal_sign',
+    'execution.cancelled': 'wastebasket',
     'execution.stuck': 'hourglass',
     'device.connected': 'electric_plug',
     'device.disconnected': 'warning',

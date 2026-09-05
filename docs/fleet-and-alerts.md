@@ -150,10 +150,18 @@ Indexed on `created_at` and on `device_udid`. Migration: `drizzle/0003_events.sq
 
 ### Kinds
 
-`execution.started`, `execution.succeeded`, `execution.failed`,
-`execution.stopped`, `execution.stuck` (still running five minutes past its
+`execution.started`, `execution.retried` (pg-boss started a later attempt of
+the same run; `detail.attempt` is the 1-based number), `execution.succeeded`,
+`execution.failed`,
+`execution.stopped`, `execution.cancelled` (the run was cancelled before it
+started — an operator stopped a queued execution, or its schedule was
+cancelled), `execution.stuck` (still running five minutes past its
 run-window deadline), `device.connected`, `device.disconnected`, `device.error`,
 `schedule.created`, `schedule.paused`, `schedule.cancelled`, `digest.daily`.
+
+Every terminal execution status produces a row, cancellation included: a run
+that disappeared from the queue with no timeline entry used to be
+indistinguishable from one that was never created.
 
 Execution and schedule events come from the optional `onEvent` hook on
 `SchedulerRepository` (wired in `src/scheduler/runtime.ts` and
@@ -161,11 +169,20 @@ Execution and schedule events come from the optional `onEvent` hook on
 `/devices`; stuck executions are swept on the same timer, every 30 s, and each
 one is reported once for as long as it stays stuck.
 
+`execution.stuck` is only the warning. The **worker** sweeps the same threshold
+once a minute and gives up on what it finds: the execution is marked `failed`
+with `Timed out past its execution window` (which raises `execution.failed`),
+and if this worker is the one running it, its plugin process is killed so the
+device queue is released. The pair therefore arrives warning-then-failure, and
+nothing is left at `running` for ever when the worker that owned it died.
+
 The hook never throws and never blocks: a failed insert or a malformed
-lifecycle signal costs the timeline row, not the scheduled task. It also
-deduplicates `execution.started` per execution, because pg-boss retries a job by
-running it again — without that a task with `retryLimit: 3` produced four
-"started" events and four push notifications for one launch.
+lifecycle signal costs the timeline row, not the scheduled task. pg-boss retries
+a job by running it again, so the worker starts an attempt per try;
+`startAttempt` passes the 1-based attempt number to the hook, which records
+`execution.started` for attempt 1 and `execution.retried` for the rest. A task
+with `retryLimit: 3` therefore leaves one "started" and up to three "retried"
+rows, rather than four identical launches.
 
 Device transitions are debounced: a new state has to hold for 45 s (two monitor
 polls) before it becomes an event, so a USB cable with a bad contact flapping

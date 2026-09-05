@@ -23,9 +23,16 @@ planner turns rules into **ordinary one-off schedules**, so anything the Tasks
 page can do to a schedule still works on a dripped post. See
 [content-queue.md](content-queue.md) for the library and the rule fields.
 
-The planner is **not a process**. It is a timer inside `web`, running every
-`DRIP_PLANNER_INTERVAL_MINUTES` (default 60). `0` disables the tick;
-`POST /api/drip/plan` still plans on demand.
+The planner is **not a process**. It is a timer, running every
+`DRIP_PLANNER_INTERVAL_MINUTES` (default 60), started by **both `web` and
+`worker`** — a farm deployed with a worker and no dashboard replica still plans
+its queue. `0` disables the tick in both; `POST /api/drip/plan` still plans on
+demand.
+
+Ticking from several processes is safe: every planning run takes a Postgres
+advisory lock for the whole pass, and a run that cannot take it plans nothing
+and reports `Another planning run is already in progress` in `skipped`. So
+however many web replicas and workers you run, a given moment is planned once.
 
 Each tick, for every enabled rule and for **today and tomorrow in the rule's own
 timezone**:
@@ -53,6 +60,7 @@ worker. Disabling a rule cancels the schedules it planned that have not started.
 | --- | --- | --- |
 | Fewer posts than `posts_per_day` | The window is too tight for `min_gap_minutes`, or the library ran out of items outside `avoid_reuse_days` | Widen the window, shorten the gap, or ingest more media |
 | Nothing planned at all | The rule is disabled, its device is disabled or unregistered, or `DRIP_PLANNER_INTERVAL_MINUTES=0` | Check the rule's `skipped` output from `POST /api/drip/plan` |
+| The queue emptied right after an edit | Editing a field that decides *when* or *what* a rule posts cancels its unrun posts on purpose, so the change reaches today | Nothing — the next tick rebuilds it, or `POST /api/drip/plan` rebuilds it now |
 | A slot is at the wrong time | Times are random inside the window by design | Move the individual schedule with `PATCH /api/schedules/:id` |
 | A queued post should not go out | `POST /api/content/queue/:id/skip` — it cancels the schedule and leaves the media unspent for the next planning run | |
 
@@ -109,9 +117,11 @@ configured. Kinds, their severity, and the response:
 | Kind | Severity | What it means | What to do |
 | --- | --- | --- | --- |
 | `execution.started` | info | A task began | Nothing |
+| `execution.retried` | info | pg-boss started a later attempt of the same task (`detail.attempt`) | Nothing on its own. Several in a row on one device is a device or selector problem worth reading the logs for |
 | `execution.succeeded` | info | A task finished cleanly | Nothing |
 | `execution.failed` | error | A task exhausted its retries | Read `GET /api/executions/:id`. A TikTok routine's failure lists the selectors it tried and the texts on screen — usually a UI change or an interstitial |
 | `execution.stopped` | warning | Someone pressed stop, or the run-window deadline passed | If it was the deadline, the device was busy or slow; check whether `SCHEDULER_RUN_WINDOW_MINUTES` is too tight |
+| `execution.cancelled` | info | A queued run was cancelled before it started — an operator stopped it, or its schedule was cancelled | Nothing. The queue job is gone and the media has been reclaimed |
 | `execution.stuck` | **error** | Still running **five minutes past** its deadline | The device is probably wedged. `POST /api/executions/:id/stop`, then reconnect the device. On iOS this is usually a dead WDA session |
 | `device.connected` | info | Discovery sees it again | Nothing |
 | `device.disconnected` | warning | Discovery lost it | Check the cable (iOS/adb) or the phone's Wi-Fi (bridge). One flap is noise; a repeating flap is a cable or a power-saving setting |
@@ -121,6 +131,16 @@ configured. Kinds, their severity, and the response:
 
 Only `execution.failed`, `device.disconnected`, `device.error` and
 `execution.stuck` are push-worthy by default.
+
+**Stuck runs are given up on, not just reported.** `execution.stuck` is a
+warning shot from `web`: the run is five minutes past its run-window deadline
+and still `running`. The `worker` sweeps the same threshold every minute, and
+anything it finds is marked **failed** with `Timed out past its execution
+window` — which is what raises `execution.failed`. If the worker doing the
+sweeping is the one running that execution, it also kills the plugin process, so
+the device queue is released rather than held by a wedged phone. The two events
+therefore arrive in that order, warning then failure, and an execution can no
+longer sit at `running` for ever because the worker that owned it died.
 
 **Channels** are configured entirely from the environment — `NOTIFY_WEBHOOK_URL`,
 `NOTIFY_SLACK_WEBHOOK_URL`, `NOTIFY_DISCORD_WEBHOOK_URL`, `NOTIFY_NTFY_URL`
@@ -254,6 +274,12 @@ plugin versions.** A task envelope stores its `taskVersion`, so a schedule
 written by a newer `web` against an older `worker` fails loudly rather than
 running the wrong contract — which is the intended behaviour, but it means you
 should restart both together.
+
+**After upgrading, every dashboard user signs in again once.** Session cookies
+now carry a session id, so cookies issued by the previous release are not
+recognised and are rejected on the first request. There is nothing to do about
+it: sign in again, once, per browser. API tokens (`pf_…`) are unaffected, so the
+companion app, the MCP server and any scripts keep working across the upgrade.
 
 Take a backup before a migration. Migrations are forward-only; there is no down
 path.

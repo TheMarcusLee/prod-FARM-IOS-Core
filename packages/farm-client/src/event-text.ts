@@ -24,9 +24,11 @@ export function eventGroup(kind: string): EventGroup {
 /** The default severity the farm assigns each kind (`docs/mobile-api.md`). */
 export const DEFAULT_SEVERITY: Record<EventKind, EventSeverity> = {
     'execution.started': 'info',
+    'execution.retried': 'info',
     'execution.succeeded': 'info',
     'execution.failed': 'error',
     'execution.stopped': 'warning',
+    'execution.cancelled': 'info',
     'execution.stuck': 'warning',
     'device.connected': 'info',
     'device.disconnected': 'warning',
@@ -57,9 +59,11 @@ export function severityAtLeast(severity: EventSeverity, minimum: EventSeverity)
 
 const KIND_LABELS: Record<EventKind, string> = {
     'execution.started': 'Run started',
+    'execution.retried': 'Run retried',
     'execution.succeeded': 'Run finished',
     'execution.failed': 'Run failed',
     'execution.stopped': 'Run stopped',
+    'execution.cancelled': 'Run cancelled',
     'execution.stuck': 'Run stuck',
     'device.connected': 'Device connected',
     'device.disconnected': 'Device disconnected',
@@ -119,8 +123,14 @@ function bodyFor(event: FarmEvent): string {
                 ? `Still running ${formatDuration(overBy)} past its deadline.`
                 : 'Still running past its deadline.';
         }
+        case 'execution.retried': {
+            const attempt = numberOr(detail.attempt);
+            return attempt === undefined ? 'The run is being retried.' : `Attempt ${attempt} started.`;
+        }
         case 'execution.stopped':
             return error || 'The run was stopped.';
+        case 'execution.cancelled':
+            return error || 'The run was cancelled before it started.';
         case 'device.error':
             return error || stringOr(detail.message) || 'The device reported an error.';
         case 'device.disconnected':

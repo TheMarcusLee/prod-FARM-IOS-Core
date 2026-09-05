@@ -16,10 +16,10 @@ import {
     createBulkSchedules, parseBulkRequest, parseStagger, shiftLocalTime, staggerOffsets, staggeredTiming,
 } from '../src/fleet/bulk.js';
 import { createDeviceMonitorState, diffDeviceStatuses, longOfflineDevices } from '../src/fleet/device-monitor.js';
-import { createMemoryEventStore } from '../src/fleet/events.js';
-import { createStartedDeduplicator, lifecycleEventInput, schedulerEventHook } from '../src/fleet/scheduler-events.js';
+import { createMemoryEventStore, type EventInput } from '../src/fleet/events.js';
+import { lifecycleEventInput, schedulerEventHook } from '../src/fleet/scheduler-events.js';
 import { escapeHtml } from '../src/fleet/page.js';
-import { deviceState, stuckExecutions, summarizeFleet } from '../src/fleet/summary.js';
+import { derivedDeviceState, deviceState, stuckExecutions, summarizeFleet } from '../src/fleet/summary.js';
 import type { CreateTaskInput, ScheduleTiming } from '../src/types.js';
 import type { SchedulerRepository } from '../src/scheduler/repository.js';
 
@@ -394,21 +394,31 @@ test('a flapping USB cable produces no events at all', () => {
     assert.deepEqual(settled.map(({ kind }) => kind), ['device.disconnected']);
 });
 
-test('a retried execution reports one execution.started, not one per attempt', () => {
-    const isFirstStart = createStartedDeduplicator();
-    const started = { kind: 'execution.started', execution: executionRow({ status: 'running' }) } as const;
-    assert.equal(isFirstStart(started), true);
-    assert.equal(isFirstStart(started), false);
-    assert.equal(isFirstStart(started), false);
+test('a retried execution reports one execution.started, then execution.retried', async () => {
+    const recorded: EventInput[] = [];
+    const hook = schedulerEventHook({ record: async (input) => { recorded.push(input); return null; } });
+    const execution = executionRow({ status: 'running' });
 
-    // A terminal signal always passes and releases the id for the next run.
-    assert.equal(isFirstStart({ kind: 'execution.failed', execution: executionRow({ status: 'failed' }) }), true);
-    assert.equal(isFirstStart(started), true);
+    // pg-boss runs a retry as the same job, so the worker starts an attempt per
+    // try. The attempt number rides along with the signal instead of the
+    // observer keeping a set of ids it has already seen.
+    hook({ kind: 'execution.started', execution, attempt: 1 });
+    hook({ kind: 'execution.started', execution, attempt: 2 });
+    hook({ kind: 'execution.started', execution, attempt: 3 });
+    hook({ kind: 'execution.failed', execution: executionRow({ status: 'failed' }) });
+    await new Promise((resolve) => setImmediate(resolve));
 
-    // Schedule signals are never deduplicated.
-    const created = { kind: 'schedule.created', schedule: scheduleRow() } as const;
-    assert.equal(isFirstStart(created), true);
-    assert.equal(isFirstStart(created), true);
+    assert.deepEqual(recorded.map(({ kind }) => kind),
+        ['execution.started', 'execution.retried', 'execution.retried', 'execution.failed']);
+    assert.deepEqual(recorded.map(({ severity }) => severity), ['info', 'info', 'info', 'error']);
+    assert.deepEqual(recorded.map(({ detail }) => (detail as { attempt?: number }).attempt), [1, 2, 3, undefined]);
+    assert.match(recorded[1]!.title, /was retried on udid-a/);
+
+    // A signal with no attempt at all — anything that is not startAttempt — is
+    // still a plain start.
+    hook({ kind: 'execution.started', execution });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(recorded.at(-1)!.kind, 'execution.started');
 });
 
 test('the scheduler hook swallows a mapping failure instead of taking the scheduler down', () => {
@@ -433,6 +443,16 @@ test('scheduler lifecycle signals map onto the event contract', () => {
 
     assert.equal(lifecycleEventInput({ kind: 'execution.started', execution: executionRow() }).severity, 'info');
     assert.equal(lifecycleEventInput({ kind: 'execution.stopped', execution: executionRow() }).severity, 'warning');
+
+    // A cancelled run is not an error, but it still has to leave a trace.
+    const cancelled = lifecycleEventInput({
+        kind: 'execution.cancelled',
+        execution: executionRow({ status: 'cancelled', error: 'Cancelled before execution' }),
+    });
+    assert.equal(cancelled.kind, 'execution.cancelled');
+    assert.equal(cancelled.severity, 'info');
+    assert.equal(cancelled.executionId, 'exec-1');
+    assert.match(cancelled.title, /com\.git-agni\.tiktok\/doomscroll@1 was cancelled on udid-a/);
 
     const paused = lifecycleEventInput({ kind: 'schedule.paused', schedule: scheduleRow({ status: 'paused' }) });
     assert.equal(paused.kind, 'schedule.paused');
@@ -556,4 +576,38 @@ test('stuck executions are swept on a timer and reported once each', async (cont
         executions[0]!.deadlineAt.toISOString());
     // No secrets: the detail carries the task identity and timings, never the payload.
     assert.deepEqual(Object.keys(stuck()[0]!.detail!).sort(), ['deadlineAt', 'startedAt', 'task']);
+});
+
+test('a bridge phone reachable over Wi-Fi but invisible to adb is online, not offline', async () => {
+    const { DeviceConnectionManager } = await import('../src/devices/connection-manager.js');
+    const bridgePhone = device({
+        name: 'Pixel', udid: 'R58N1', platform: 'android', driver: 'a11y-bridge',
+        android: { serial: 'R58N1', bridgeUrl: 'http://192.168.1.40:18300/' },
+    });
+    const connections = new DeviceConnectionManager({
+        loadDevices: async () => [bridgePhone],
+        // Nothing on the USB bus, and nothing in `adb devices`.
+        connectedUdids: async () => [],
+        endpointReady: async (url) => url.endsWith('/ping'),
+        spawnSupervisor: () => { throw new Error('Android phones never get a WDA supervisor'); },
+        now: () => 0,
+    });
+
+    await connections.reconcile();
+    const status = connections.status('R58N1');
+
+    // The bridge answering *is* the connection for this driver: adb is optional
+    // once the phone is bootstrapped, so the manager reports it as physically
+    // connected and the badge has to agree.
+    assert.equal(status?.physical, 'connected');
+    const connected = status?.physical === 'connected';
+    assert.equal(deviceState(bridgePhone, connected), 'online');
+    assert.equal(derivedDeviceState({ disabled: bridgePhone.disabled, connected }), 'online');
+    assert.equal(derivedDeviceState({ connected, busy: true }), 'busy');
+    assert.equal(derivedDeviceState({ connected, errored: true }), 'error');
+
+    // The rule the callers have to honour: `connected` is the connection
+    // manager's `physical`, not "is it in `adb devices`". Feeding raw USB/adb
+    // enumeration in shows a healthy Wi-Fi phone as offline.
+    assert.equal(derivedDeviceState({ connected: false }), 'offline');
 });

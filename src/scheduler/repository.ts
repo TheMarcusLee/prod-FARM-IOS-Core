@@ -9,6 +9,7 @@ import {
     assets, contentItems, executionAttempts, executionLogs, executions, schedules,
     type ExecutionRow, type ScheduleRow,
 } from '../database/schema.js';
+import { STUCK_GRACE_MS } from '../fleet/summary.js';
 import type { PluginRegistry } from '../registry.js';
 import type { CreateTaskInput, JsonObject, ScheduleTiming, StoredAsset, TaskEnvelope } from '../types.js';
 import { ensureDeviceQueue, queueNameForDevice } from './queue.js';
@@ -16,6 +17,9 @@ import { initialRunAt, latestDueOccurrence } from './recurrence.js';
 import { DEFAULT_MIN_SCHEDULE_GAP_MINUTES, estimatedTaskWindow, validateTaskInput, windowsTooClose } from './validation.js';
 
 export interface ExecutionDetail extends ExecutionRow { logs: string[] }
+
+/** The error a give-up sweep writes; the timeline and the dashboard show it verbatim. */
+export const STUCK_EXECUTION_ERROR = 'Timed out past its execution window';
 
 /**
  * Keyset cursor for the newest-first listings. `createdAt` alone is ambiguous
@@ -54,7 +58,17 @@ function taskEnvelope(row: Pick<ScheduleRow, 'pluginId' | 'taskType' | 'taskVers
 
 /** Lifecycle signals for the fleet event log. Mapped to `events` rows in src/fleet. */
 export type SchedulerLifecycleEvent =
-    | { kind: 'execution.started' | 'execution.succeeded' | 'execution.failed' | 'execution.stopped'; execution: ExecutionRow }
+    | {
+        kind: 'execution.started' | 'execution.succeeded' | 'execution.failed' | 'execution.stopped' | 'execution.cancelled';
+        execution: ExecutionRow;
+        /**
+         * 1-based attempt number, on the signals that have one. pg-boss runs a
+         * retry as the same job, so `startAttempt` fires once per attempt; the
+         * number is what tells a first launch from a retry, rather than the
+         * observer having to remember which executions it has already seen.
+         */
+        attempt?: number;
+    }
     | { kind: 'schedule.created' | 'schedule.paused' | 'schedule.cancelled'; schedule: ScheduleRow };
 
 export type SchedulerEventHook = (event: SchedulerLifecycleEvent) => void;
@@ -300,7 +314,7 @@ export class SchedulerRepository {
         }).where(and(eq(executions.id, id), inArray(executions.status, ['queued', 'running']))).returning();
         if (!row) return null;
         await this.connection.db.insert(executionAttempts).values({ executionId: id, attempt }).onConflictDoNothing();
-        this.emit({ kind: 'execution.started', execution: row });
+        this.emit({ kind: 'execution.started', execution: row, attempt });
         return row;
     }
 
@@ -317,11 +331,34 @@ export class SchedulerRepository {
         const [finished] = await this.connection.db.update(executions).set({
             status, exitCode, error, finishedAt: new Date(), updatedAt: new Date(),
         }).where(eq(executions.id, id)).returning();
-        if (finished && status !== 'cancelled') this.emit({ kind: `execution.${status}`, execution: finished });
+        // Every terminal status is emitted, cancellation included: a run that
+        // vanished from the queue with no timeline row is indistinguishable
+        // from one that was never created.
+        if (finished) this.emit({ kind: `execution.${status}`, execution: finished });
         // Keep the media for retryable outcomes — the dashboard Retry button
         // accepts failed/stopped and would otherwise hit "asset is missing".
         // failed/stopped media is reclaimed by cleanup() once it ages out.
         if (status === 'succeeded' || status === 'cancelled') await this.purgeTerminalAssets(id);
+    }
+
+    /**
+     * Nothing else moves an execution off `running`: if the worker that owned it
+     * died, or the plugin process wedged past the point pg-boss will wait, the
+     * row sits there for ever and the device looks busy. `execution.stuck` (the
+     * fleet sweep) is the warning; this is the give-up, on the same threshold so
+     * the two agree about what "past its window" means.
+     *
+     * The update is conditional, so two workers sweeping at once fail each
+     * execution exactly once — only the transaction that moved the row off
+     * `running` gets it back from `returning()`.
+     */
+    async failStuckExecutions(now = new Date(), graceMs = STUCK_GRACE_MS): Promise<ExecutionRow[]> {
+        const cutoff = new Date(now.getTime() - graceMs);
+        const failed = await this.connection.db.update(executions).set({
+            status: 'failed', error: STUCK_EXECUTION_ERROR, finishedAt: now, updatedAt: now,
+        }).where(and(eq(executions.status, 'running'), lt(executions.deadlineAt, cutoff))).returning();
+        for (const execution of failed) this.emit({ kind: 'execution.failed', execution });
+        return failed;
     }
 
     async resetForRetry(id: string, error: string): Promise<void> {

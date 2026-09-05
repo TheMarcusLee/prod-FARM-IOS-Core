@@ -31,7 +31,7 @@ filename or URL is ever passed through a shell.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `CONTENT_DIR` | `$SCHEDULER_DATA_DIR/content` | Originals, normalised copies, posters, and per-post links. |
-| `DRIP_PLANNER_INTERVAL_MINUTES` | `60` | How often the web process plans. `0` disables the tick; `POST /api/drip/plan` still works. |
+| `DRIP_PLANNER_INTERVAL_MINUTES` | `60` | How often the web process **and the worker** plan. `0` disables the tick in both; `POST /api/drip/plan` still works. |
 | `CONTENT_CONCURRENCY` | `2` | Concurrent FFmpeg jobs. |
 | `FFMPEG_PATH`, `FFPROBE_PATH` | — | Explicit binaries instead of `PATH`. |
 | `YT_DLP_PATH` | — | Explicit `yt-dlp` binary. |
@@ -71,6 +71,23 @@ without saving it.
 
 ## The drip planner
 
+### Who ticks, and the lock
+
+Both `npm run web` and `npm run worker` start the same tick
+(`startDripPlannerTick` in `src/content/runner.ts`), every
+`DRIP_PLANNER_INTERVAL_MINUTES`. A worker-only deployment therefore still plans
+its queue, and a farm running several web replicas alongside a worker does not
+plan several times.
+
+What makes that safe is a Postgres advisory lock. Every planning run — the tick
+in any process, and `POST /api/drip/plan` — goes through `runDripPlanner`, which
+opens a transaction and takes `pg_try_advisory_xact_lock` on one fixed key
+(`DRIP_PLANNER_LOCK_KEY`). `try` means a second run is **refused, not queued**:
+it plans nothing and comes back with `Another planning run is already in
+progress` in `skipped`. The lock covers planning *and* the `used_count`
+reconciliation, and is held by the transaction, so a planner whose process dies
+releases it when the connection drops rather than wedging the farm.
+
 Every tick (and on `POST /api/drip/plan`), for each enabled rule and for today
 and tomorrow **in the rule's own timezone**:
 
@@ -90,6 +107,35 @@ A set of one to three images is planned as a single slideshow post; a larger set
 is a pool of individual posts.
 
 Disabling a rule cancels the schedules it planned that have not started yet.
+
+**Editing a planning-relevant field does the same and re-plans.** `PATCH
+/api/drip/rules/:id` compares the row before and after; if any of `deviceUdid`,
+`account`, `postsPerDay`, `windowStart`, `windowEnd`, `timezone`,
+`minGapMinutes`, `destination`, `source`, `setId`, `tag`, `captionTemplateId`,
+`pickOrder` or `avoidReuseDays` changed, the rule's unrun posts are cancelled
+and their `drip_plans` rows deleted, so the next pass rebuilds today's queue
+from the new settings. The response carries `replanned: { cancelled, released }`.
+Editing anything else (the `enabled` flag aside) leaves the queue alone. A post
+that has already started is never touched — an edit reaches the future, not a
+run in flight.
+
+### Reading `skipped`
+
+The report is `{ rulesConsidered, planned, cancelled, skipped }`, and `skipped`
+is where an unattended farm says what it could not do. Lines to watch for:
+
+- `<rule>: no unused content matches this rule` — everything in the tag or set
+  is inside `avoid_reuse_days`, or nothing is `ready`.
+- `<rule>: ran out of unused content on <date> after 2 of 3 posts` — the
+  **shortfall report**. The day was planned short. Silently under-posting for
+  weeks is the failure mode a drip queue actually has, so a partial day is
+  always named, with the count it managed against the count it wanted.
+- `<rule>: device <udid> is not registered or is disabled` — the rule points at
+  a phone that is gone.
+- `<rule>: "<zone>" is not a time zone this host knows` — a restored dump or a
+  hand-edited row; the other rules still plan.
+- `Another planning run is already in progress` — another process held the
+  advisory lock. Nothing is wrong; the run that held it did the work.
 
 `used_count` and `last_used_at` are only credited once an execution actually
 **succeeded** — the planner polls the executions table rather than hooking the

@@ -11,7 +11,7 @@ import { ingestDirectory, ingestMedia, listMediaFiles, mimeTypeFor, removeItemFi
 import { escapeHtml, renderLibrary, renderRules, renderSets, renderTemplates } from '../../content/page.js';
 import { contentRoot } from '../../content/paths.js';
 import { renderCaptionTemplate } from '../../content/templates.js';
-import { replanRule, runDripPlanner } from '../../content/runner.js';
+import { replanRule, runDripPlanner, startDripPlannerTick } from '../../content/runner.js';
 import { createContentStore, type ContentStore } from '../../content/store.js';
 import {
     asObject, parseIngestRequest, parseIngestUrl, parseItemPatch, parseRuleInput, parseRulePatch,
@@ -368,10 +368,13 @@ export async function registerContentRoutes(app: FastifyInstance, options: Conte
 
     // ---- hourly tick --------------------------------------------------------
 
-    const minutes = options.plannerIntervalMinutes ?? Number(process.env.DRIP_PLANNER_INTERVAL_MINUTES ?? 60);
-    if (Number.isFinite(minutes) && minutes > 0 && store()) {
-        const timer = setInterval(() => void plan().catch((error) => app.log.error(error)), minutes * 60_000);
-        timer.unref?.();
-        app.addHook('onClose', async () => clearInterval(timer));
-    }
+    // The same tick the worker runs (src/scheduler/worker.ts). Both take the
+    // planner's advisory lock, so however many processes tick, a given moment
+    // is planned once.
+    const tick = startDripPlannerTick({
+        store: store(), scheduler: options.scheduler,
+        ...(options.plannerIntervalMinutes === undefined ? {} : { intervalMinutes: options.plannerIntervalMinutes }),
+        log: (error) => app.log.error(error),
+    });
+    if (tick) app.addHook('onClose', async () => tick.stop());
 }
