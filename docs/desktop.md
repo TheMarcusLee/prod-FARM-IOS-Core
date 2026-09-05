@@ -34,7 +34,9 @@ configured, Failed) and a menu, revealed on hover, carrying Start, Stop, Restart
 and the log files. The database migrations are folded into the Database row, and
 a one-shot job (Prepare iPhones) appears as a row of the same kind with its
 checklist in a disclosure. Right: the worker's live log — the last 200 lines,
-following the newest until you scroll up — and the three things worth doing to
+following the newest until you scroll up, without the spawn command line the app
+echoes into every service log (that one stays in the log file, where a bug report
+needs it) — and the three things worth doing to
 the whole rig. The header carries what used to be two banners: whether Backline
 is working, and where the dashboard is.
 

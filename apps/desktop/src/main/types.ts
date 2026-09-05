@@ -8,9 +8,19 @@ export type ServiceState =
     | 'failed'
     | 'not-configured';
 
+/**
+ * One line of a service's log.
+ *
+ * `command` is the spawn command line this app echoes before it starts a child.
+ * It is its own stream rather than an `app` line so the renderer can drop it
+ * without reading the text: the live panel has no room for a 200-character
+ * Electron path the operator did not type, while the on-disk log — which is what
+ * a diagnostics zip carries — keeps it, because "what was actually run" is the
+ * first thing a bug report needs.
+ */
 export interface LogLine {
     at: number;
-    stream: 'out' | 'err' | 'app';
+    stream: 'out' | 'err' | 'app' | 'command';
     text: string;
 }
 
@@ -80,7 +90,7 @@ export interface RunHandle {
 }
 
 export interface LaunchContext {
-    log(stream: 'out' | 'err' | 'app', text: string): void;
+    log(stream: LogLine['stream'], text: string): void;
 }
 
 export interface ServiceDefinition {

@@ -12,6 +12,7 @@ import {
 import { postgresReady } from '../src/main/health.ts';
 import { LogFiles, MAX_LOG_BYTES, MAX_LOG_GENERATIONS, rotateLogFile } from '../src/main/logs.ts';
 import { farmEntryExtension } from '../src/main/paths.ts';
+import { spawnService } from '../src/main/process.ts';
 import { embeddedDatabaseUrl, normalizeSettings } from '../src/main/settings.ts';
 import type { FleetSnapshot } from '../src/main/types.ts';
 
@@ -218,4 +219,25 @@ test('redaction is driven by the key name, so a secret added later is covered', 
     assert.equal(redacted.apiToken, REDACTED);
     assert.equal(redacted.xcodeOrgId, 'ABCDE12345', 'an Xcode org id is not a credential');
     assert.equal(redacted.xcodeSigningId, 'Apple Development');
+});
+
+test('the spawn command line is echoed into the service log, marked as the command', async () => {
+    const lines: { stream: string; text: string }[] = [];
+    const handle = spawnService(
+        { file: '/bin/echo', args: ['hello', 'rig'], cwd: os.tmpdir(), env: {} },
+        { log: (stream, text) => { lines.push({ stream, text }); } },
+    );
+    await handle.exited;
+
+    const echo = lines.find((entry) => entry.stream === 'command');
+    assert.ok(echo, 'the command line is logged');
+    assert.equal(echo.text, '$ /bin/echo hello rig');
+    // It is still a log line, so the on-disk file — and every diagnostics zip —
+    // carries it; only the live panel filters it out.
+    const directory = temporaryDirectory('farm-command-log-');
+    const logs = new LogFiles(directory);
+    logs.append('worker', { at: 0, stream: 'command', text: echo.text });
+    logs.close();
+    await new Promise((resolve) => { setTimeout(resolve, 50); });
+    assert.match(readFileSync(path.join(directory, 'worker.log'), 'utf8'), /\[command\] \$ \/bin\/echo hello rig/);
 });

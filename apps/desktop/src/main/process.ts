@@ -31,7 +31,8 @@ export interface SpawnSpec {
  * behaves exactly like the Node it embeds.
  */
 export function spawnService(spec: SpawnSpec, context: LaunchContext, label = spec.file): RunHandle {
-    context.log('app', `$ ${spec.file} ${spec.args.join(' ')}`);
+    // `command`, not `app`: the on-disk log keeps it, the live panel drops it.
+    context.log('command', `$ ${spec.file} ${spec.args.join(' ')}`);
     const child = spawn(spec.file, [...spec.args], {
         cwd: spec.cwd,
         env: spec.env,

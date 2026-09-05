@@ -2,7 +2,7 @@ import type { FleetSnapshot, Settings } from './global.d.ts';
 import { button, createJobCard, type JobCard } from './job-card.ts';
 import { icon } from './icons.ts';
 import { createLiveLog } from './live-log.ts';
-import { headerState, rigRows, type RigRow } from './rig-model.ts';
+import { headerState, liveLogLines, rigRows, type RigRow } from './rig-model.ts';
 
 const list = document.querySelector<HTMLElement>('#list');
 const jobList = document.querySelector<HTMLElement>('#jobs');
@@ -163,7 +163,7 @@ function render(snapshot: FleetSnapshot): void {
     if (copyDashboard) copyDashboard.disabled = snapshot.dashboardUrl === null;
 
     renderJobs(snapshot);
-    live.show(snapshot.services.find((service) => service.id === 'worker')?.recentLogs ?? []);
+    live.show(liveLogLines(snapshot.services.find((service) => service.id === 'worker')));
 
     if (!list) return;
     for (const model of rigRows(snapshot, settings)) {
