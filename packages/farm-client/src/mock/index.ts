@@ -48,9 +48,11 @@ import type {
     RemoteAction,
     RemoteInfo,
     ScheduleRow,
+    ScheduleTimeline,
     StopExecutionResult,
+    TimelineQuery,
 } from '../models';
-import { countStates } from '../derive';
+import { composeTimeline, countStates } from '../derive';
 import { DEFAULT_SEVERITY } from '../event-text';
 import { encodePngDataUri } from './png';
 import {
@@ -606,6 +608,18 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
             });
             return delay({ ...row });
         },
+
+        getScheduleTimeline: async (query: TimelineQuery) =>
+            delay<ScheduleTimeline>(
+                composeTimeline({
+                    devices: fleetDevices(),
+                    schedules,
+                    executions,
+                    from: query.from,
+                    to: query.to,
+                    now: new Date().toISOString(),
+                }),
+            ),
 
         listExecutions: async (query: ListQuery = {}) => {
             let rows = executions.slice();

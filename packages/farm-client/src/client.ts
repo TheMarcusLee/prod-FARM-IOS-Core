@@ -34,7 +34,9 @@ import type {
     RemoteInfo,
     ScheduleRow,
     ScheduleStatus,
+    ScheduleTimeline,
     StopExecutionResult,
+    TimelineQuery,
 } from './models';
 import { SseClient, type SseStatus } from './sse';
 
@@ -99,6 +101,13 @@ export interface FarmClient {
     createSchedulesBulk(input: BulkScheduleInput): Promise<BulkScheduleResult>;
     /** `pause | resume | cancel` — the no-body routes, one fewer thing to get wrong. */
     setScheduleStatus(id: string, transition: 'pause' | 'resume' | 'cancel'): Promise<ScheduleRow>;
+
+    /**
+     * The Schedule timeline: one track per phone, clips coloured by account.
+     * A farm that predates the endpoint answers 404 — callers fall back to
+     * `composeTimeline()` over schedules and executions.
+     */
+    getScheduleTimeline(query: TimelineQuery): Promise<ScheduleTimeline>;
 
     listExecutions(query?: ListQuery): Promise<ExecutionListPage>;
     getExecution(id: string): Promise<ExecutionDetail>;
@@ -237,6 +246,10 @@ export class FarmHttpClient implements FarmClient {
 
     setScheduleStatus(id: string, transition: 'pause' | 'resume' | 'cancel'): Promise<ScheduleRow> {
         return this.send<ScheduleRow>('POST', `/api/schedules/${encodeURIComponent(id)}/${transition}`);
+    }
+
+    getScheduleTimeline(query: TimelineQuery): Promise<ScheduleTimeline> {
+        return this.get<ScheduleTimeline>('/api/schedule/timeline', { query: { from: query.from, to: query.to } });
     }
 
     /* ------------------------------------------------------- executions */
