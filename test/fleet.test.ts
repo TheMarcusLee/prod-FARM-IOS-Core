@@ -19,7 +19,7 @@ import { createDeviceMonitorState, diffDeviceStatuses, longOfflineDevices } from
 import { createMemoryEventStore, type EventInput } from '../src/fleet/events.js';
 import { lifecycleEventInput, schedulerEventHook } from '../src/fleet/scheduler-events.js';
 import { escapeHtml } from '../src/fleet/page.js';
-import { deviceState, stuckExecutions, summarizeFleet } from '../src/fleet/summary.js';
+import { derivedDeviceState, deviceState, stuckExecutions, summarizeFleet } from '../src/fleet/summary.js';
 import type { CreateTaskInput, ScheduleTiming } from '../src/types.js';
 import type { SchedulerRepository } from '../src/scheduler/repository.js';
 
@@ -576,4 +576,38 @@ test('stuck executions are swept on a timer and reported once each', async (cont
         executions[0]!.deadlineAt.toISOString());
     // No secrets: the detail carries the task identity and timings, never the payload.
     assert.deepEqual(Object.keys(stuck()[0]!.detail!).sort(), ['deadlineAt', 'startedAt', 'task']);
+});
+
+test('a bridge phone reachable over Wi-Fi but invisible to adb is online, not offline', async () => {
+    const { DeviceConnectionManager } = await import('../src/devices/connection-manager.js');
+    const bridgePhone = device({
+        name: 'Pixel', udid: 'R58N1', platform: 'android', driver: 'a11y-bridge',
+        android: { serial: 'R58N1', bridgeUrl: 'http://192.168.1.40:18300/' },
+    });
+    const connections = new DeviceConnectionManager({
+        loadDevices: async () => [bridgePhone],
+        // Nothing on the USB bus, and nothing in `adb devices`.
+        connectedUdids: async () => [],
+        endpointReady: async (url) => url.endsWith('/ping'),
+        spawnSupervisor: () => { throw new Error('Android phones never get a WDA supervisor'); },
+        now: () => 0,
+    });
+
+    await connections.reconcile();
+    const status = connections.status('R58N1');
+
+    // The bridge answering *is* the connection for this driver: adb is optional
+    // once the phone is bootstrapped, so the manager reports it as physically
+    // connected and the badge has to agree.
+    assert.equal(status?.physical, 'connected');
+    const connected = status?.physical === 'connected';
+    assert.equal(deviceState(bridgePhone, connected), 'online');
+    assert.equal(derivedDeviceState({ disabled: bridgePhone.disabled, connected }), 'online');
+    assert.equal(derivedDeviceState({ connected, busy: true }), 'busy');
+    assert.equal(derivedDeviceState({ connected, errored: true }), 'error');
+
+    // The rule the callers have to honour: `connected` is the connection
+    // manager's `physical`, not "is it in `adb devices`". Feeding raw USB/adb
+    // enumeration in shows a healthy Wi-Fi phone as offline.
+    assert.equal(derivedDeviceState({ connected: false }), 'offline');
 });
