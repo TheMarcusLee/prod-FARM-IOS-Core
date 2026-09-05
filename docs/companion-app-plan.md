@@ -1,5 +1,11 @@
 # Companion mobile app — plan
 
+> **Historical.** This is the plan the app was built from, kept for the
+> reasoning and the order of work. It has been executed: the app is
+> `apps/mobile` ([mobile-app.md](mobile-app.md)), the shared client is
+> `packages/farm-client`, and every API gap it lists in §6 has since shipped.
+> For the current contract read [mobile-api.md](mobile-api.md), not this file.
+
 A phone app for the operator (and one or two teammates) to watch and steer the
 farm from away from the desk. The farm is one Mac on the operator's premises
 with 2 iPhones and ~10 Android phones attached; the desktop Electron app, the
