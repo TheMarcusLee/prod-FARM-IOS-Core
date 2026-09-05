@@ -87,6 +87,11 @@ button:disabled { cursor: wait; opacity: .55; }
 .device-icon, .empty-icon { position: relative; width: 28px; height: 44px; margin: auto; border: 2px solid #728096; border-radius: 7px; }
 .device-icon::after, .empty-icon::after { position: absolute; bottom: 3px; left: 50%; width: 4px; height: 4px; border-radius: 50%; background: #728096; content: ""; transform: translateX(-50%); }
 .device-copy h2 { margin: 0 0 3px; }
+/* Platform + driver pills: the grid, the device summary and the wizard candidate list. */
+.badge { display: inline-block; margin: 0 5px 0 0; padding: 2px 7px; border: 1px solid var(--border-strong); border-radius: 999px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+.badge.platform-android { border-color: var(--success); color: var(--success); }
+.badge.platform-ios { border-color: var(--border-strong); color: var(--text); }
+.device-badges { margin: 0 0 5px; }
 .device-copy p { font-size: 13px; }
 .connected { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; color: #a7b2c1; font-size: 11px; font-weight: 700; }
 .connected span { width: 6px; height: 6px; border-radius: 50%; background: var(--success); box-shadow: 0 0 10px var(--success); }

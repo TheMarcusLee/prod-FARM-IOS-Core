@@ -1,3 +1,25 @@
+function platformOf(device) {
+    return device.platform ?? 'ios';
+}
+function osLabel(device) {
+    return `${platformOf(device) === 'android' ? 'Android' : 'iOS'} ${device.osVersion}`;
+}
+// One heading per check name, per platform: the same slot means different work on each.
+const CHECK_LABELS = {
+    ios: {
+        host: 'Host tooling', connection: 'USB connection', signing: 'Xcode signing', developer: 'Developer Mode',
+        wda: 'WebDriverAgent', appium: 'Appium session', video: 'Video stream', touch: 'Touch input',
+        tiktok: 'TikTok installed', accounts: 'TikTok accounts',
+    },
+    android: {
+        host: 'adb on PATH', connection: 'adb sees the phone', developer: 'USB debugging authorised',
+        driver: 'Control channel', video: 'Screen capture', touch: 'Input dispatch',
+        tiktok: 'TikTok installed', accounts: 'TikTok accounts',
+    },
+};
+function checkLabel(platform, name) {
+    return CHECK_LABELS[platform][name] ?? name.replace(/^./, (letter) => letter.toUpperCase());
+}
 const candidatePanel = document.querySelector('#candidate-panel');
 const candidateList = document.querySelector('#candidate-list');
 const registrationPanel = document.querySelector('#registration-panel');
@@ -13,6 +35,17 @@ const ports = document.querySelector('#registration-ports');
 const checks = document.querySelector('#registration-checks');
 const logs = document.querySelector('#registration-logs');
 const authorize = document.querySelector('#authorize-registration');
+const driverField = document.querySelector('#registration-driver-field');
+const driverInput = document.querySelector('#registration-driver');
+const bridgeField = document.querySelector('#registration-bridge-field');
+const bridgeInput = document.querySelector('#registration-bridge-url');
+const profileField = document.querySelector('#registration-profile-field');
+const passcodeField = document.querySelector('#registration-passcode-field');
+const authorizationField = document.querySelector('#authorization-field');
+const guidanceIos = document.querySelector('#guidance-ios');
+const guidanceAndroid = document.querySelector('#guidance-android');
+const prepareButton = document.querySelector('#action-prepare');
+const verifyButton = document.querySelector('#action-verify');
 const finalizeButton = document.querySelector('#action-finalize');
 let currentId;
 let poll;
@@ -44,9 +77,12 @@ async function candidates() {
             const copy = document.createElement('div');
             const heading = document.createElement('h3');
             heading.textContent = device.name;
+            const badge = document.createElement('span');
+            badge.className = `badge platform-${platformOf(device)}`;
+            badge.textContent = platformOf(device) === 'android' ? 'Android' : 'iOS';
             const meta = document.createElement('p');
-            meta.textContent = `iOS ${device.osVersion} · ${device.udid}`;
-            copy.append(heading, meta);
+            meta.textContent = `${osLabel(device)} · ${device.udid}`;
+            copy.append(heading, badge, meta);
             const button = document.createElement('button');
             button.className = 'button primary';
             button.type = 'button';
@@ -72,11 +108,27 @@ async function create(udid) {
     poll = window.setInterval(() => void refreshSnapshot(), 2_000);
 }
 function render(snapshot) {
-    title.textContent = `${snapshot.name} · iOS ${snapshot.device.osVersion}`;
+    const android = snapshot.platform === 'android';
+    title.textContent = `${snapshot.name} · ${osLabel(snapshot.device)}`;
     busy.hidden = !snapshot.busy;
+    // Coordinate packs, passcodes and Apple team registration are iOS-only concepts.
+    profileField.hidden = android;
+    passcodeField.hidden = android;
+    authorizationField.hidden = android;
+    guidanceIos.hidden = android;
+    guidanceAndroid.hidden = !android;
+    driverField.hidden = !android;
+    bridgeField.hidden = !android || snapshot.driver !== 'a11y-bridge';
+    profileInput.required = !android;
+    prepareButton.textContent = android ? 'Set up the driver' : 'Register and prepare WDA';
+    verifyButton.textContent = android ? 'Verify capture, input, and TikTok' : 'Verify Appium, video, touch, and accounts';
+    if (android && document.activeElement !== driverInput)
+        driverInput.value = snapshot.driver ?? 'adb';
+    if (android && document.activeElement !== bridgeInput)
+        bridgeInput.value = snapshot.bridgeUrl ?? '';
     if (document.activeElement !== nameInput)
         nameInput.value = snapshot.name;
-    if (document.activeElement !== profileInput) {
+    if (!android && document.activeElement !== profileInput) {
         const previous = profileInput.value;
         profileInput.replaceChildren(new Option('Choose a coordinate profile', ''));
         for (const profile of snapshot.availableProfiles) {
@@ -88,8 +140,11 @@ function render(snapshot) {
     if (document.activeElement !== accountsInput)
         accountsInput.value = snapshot.tiktokAccounts.join(', ');
     passcodeInput.placeholder = snapshot.hasPasscode ? 'Passcode saved in this setup session' : 'Optional numeric passcode';
-    ports.textContent = `WDA ${snapshot.wdaLocalPort} · video ${snapshot.mjpegLocalPort}`;
-    checks.replaceChildren(...Object.entries(snapshot.checks).map(([key, value]) => {
+    ports.textContent = android
+        ? `${snapshot.driver ?? 'adb'} · serial ${snapshot.device.udid}`
+        : `WDA ${snapshot.wdaLocalPort} · video ${snapshot.mjpegLocalPort}`;
+    checks.replaceChildren(...snapshot.checkNames.map((key) => {
+        const value = snapshot.checks[key] ?? { state: 'pending', message: 'Not checked yet', updatedAt: '' };
         const row = document.createElement('article');
         row.className = `registration-check ${value.state}`;
         const state = document.createElement('span');
@@ -97,7 +152,7 @@ function render(snapshot) {
         state.textContent = value.state === 'passed' ? '✓' : value.state === 'checking' ? '…' : '!';
         const copy = document.createElement('div');
         const heading = document.createElement('h3');
-        heading.textContent = key.replace(/^./, (letter) => letter.toUpperCase());
+        heading.textContent = checkLabel(snapshot.platform, key);
         const message = document.createElement('p');
         message.textContent = value.message;
         copy.append(heading, message);
@@ -143,12 +198,17 @@ async function action(name) {
 }
 document.querySelector('#refresh-candidates').addEventListener('click', () => void candidates());
 document.querySelector('#action-refresh').addEventListener('click', () => void action('refresh'));
-document.querySelector('#action-prepare').addEventListener('click', () => {
-    if (!authorize.checked && !window.confirm('Continue without allowing automatic Apple Developer team device registration? Xcode may ask you to register it manually.'))
+prepareButton.addEventListener('click', () => {
+    // The Apple team-registration warning is meaningless on Android.
+    if (!authorizationField.hidden && !authorize.checked
+        && !window.confirm('Continue without allowing automatic Apple Developer team device registration? Xcode may ask you to register it manually.'))
         return;
     void action('prepare');
 });
-document.querySelector('#action-verify').addEventListener('click', () => void action('verify'));
+verifyButton.addEventListener('click', () => void action('verify'));
+driverInput.addEventListener('change', () => {
+    bridgeField.hidden = driverInput.value !== 'a11y-bridge';
+});
 finalizeButton.addEventListener('click', () => void action('finalize'));
 document.querySelector('#action-cancel').addEventListener('click', async () => {
     if (!currentId || !window.confirm('Cancel this setup? Apple Developer registration or an installed WDA app cannot be undone automatically.'))
@@ -168,9 +228,12 @@ form.addEventListener('submit', async (event) => {
     showError();
     try {
         const snapshot = await request(`/api/device-registrations/${encodeURIComponent(currentId)}`, {
-            method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+            method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(driverField.hidden ? {
                 name: nameInput.value, coordinateProfile: profileInput.value,
                 tiktokAccounts: accountsInput.value.split(','), passcode: passcodeInput.value || undefined,
+            } : {
+                name: nameInput.value, driver: driverInput.value, bridgeUrl: bridgeInput.value.trim(),
+                tiktokAccounts: accountsInput.value.split(','),
             }),
         });
         passcodeInput.value = '';

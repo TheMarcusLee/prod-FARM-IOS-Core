@@ -6,9 +6,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { remote, type Browser } from 'webdriverio';
 
+import { bridgePingUrl } from '../drivers/a11y-bridge.js';
+import { errorMessage, runCommand, type CommandRunner } from '../drivers/common.js';
+import { driverForDevice } from '../drivers/select.js';
+import type { DeviceDriver, DriverKind, Platform } from '../drivers/types.js';
 import { switchTikTokAccount, tapCoordinate } from '../tiktok/actions.js';
 import { coordinateProfiles, coordinatesForProfile, profileForProductType, type CoordinateProfile } from './coordinates.js';
-import { discoverConnectedDevices, type Device } from './discovery.js';
+import { devicePlatform, discoverConnectedDevices, type Device } from './discovery.js';
+import {
+    BRIDGE_DEVICE_PORT, BRIDGE_PACKAGE, createAndroidProbe, type AndroidProbe,
+} from './registration-android.js';
 import { loadRegisteredDevices, mutateRegisteredDevices, type RegisteredDevice } from './registry.js';
 import { passcodeForDevice, setDevicePasscode } from './secrets.js';
 import { WdaRemoteControl } from './wda-remote.js';
@@ -17,7 +24,7 @@ import { diagnoseWdaLaunchFailure } from './wda/diagnostics.js';
 export type RegistrationCheckState = 'pending' | 'checking' | 'blocked' | 'passed' | 'failed';
 export type RegistrationAction = 'refresh' | 'prepare' | 'verify' | 'finalize';
 export type RegistrationCheckName = 'host' | 'connection' | 'signing' | 'developer'
-    | 'wda' | 'appium' | 'video' | 'touch' | 'tiktok' | 'accounts';
+    | 'wda' | 'appium' | 'video' | 'touch' | 'tiktok' | 'accounts' | 'driver';
 
 export interface RegistrationCheck {
     state: RegistrationCheckState;
@@ -29,6 +36,15 @@ export interface RegistrationSnapshot {
     id: string;
     device: Device;
     name: string;
+    /** Decides which check set runs; taken from the discovered candidate. */
+    platform: Platform;
+    /** Android only: which control channel the phone will be driven through. */
+    driver?: DriverKind;
+    /** Android + a11y-bridge: local end of `adb forward`, and the URL the driver will use. */
+    bridgePort?: number;
+    bridgeUrl?: string;
+    /** The checks this platform runs, in the order the wizard shows them. */
+    checkNames: RegistrationCheckName[];
     coordinateProfile?: CoordinateProfile;
     availableProfiles: Array<{ name: CoordinateProfile; displayName: string; screenSize: { width: number; height: number } }>;
     recommendedProfile?: CoordinateProfile;
@@ -37,7 +53,8 @@ export interface RegistrationSnapshot {
     tiktokAccounts: string[];
     hasPasscode: boolean;
     busy: boolean;
-    checks: Record<RegistrationCheckName, RegistrationCheck>;
+    /** Only the names in `checkNames` are populated. */
+    checks: Partial<Record<RegistrationCheckName, RegistrationCheck>>;
     logs: string[];
     canFinalize: boolean;
     finalized: boolean;
@@ -48,11 +65,18 @@ export interface RegistrationUpdate {
     coordinateProfile?: string;
     tiktokAccounts?: string[];
     passcode?: string;
+    /** Android only: 'adb' or 'a11y-bridge'. */
+    driver?: string;
+    /** Android + a11y-bridge: local forwarded port, or an explicit base URL for the Wi-Fi build. */
+    bridgePort?: number;
+    bridgeUrl?: string;
 }
 
 interface RegistrationSession extends RegistrationSnapshot {
     passcode?: string;
     supervisor?: ChildProcess;
+    /** Read from the bridge ContentProvider during prepare; never leaves the process in a snapshot. */
+    bridgeToken?: string;
 }
 
 export interface DeviceRegistrationManager {
@@ -72,11 +96,23 @@ interface RegistrationManagerOptions {
     loadDevices?: () => Promise<RegisteredDevice[]>;
     stateDirectory?: string;
     fetchImpl?: typeof fetch;
+    /** Every adb call goes through here, so tests never spawn adb. */
+    runCommand?: CommandRunner;
+    /** Android live checks build the chosen driver through this; overridden with a fake in tests. */
+    createDriver?: (device: RegisteredDevice) => DeviceDriver;
 }
 
-const checkNames: RegistrationCheckName[] = [
+const iosCheckNames: RegistrationCheckName[] = [
     'host', 'connection', 'signing', 'developer', 'wda', 'appium', 'video', 'touch', 'tiktok', 'accounts',
 ];
+
+const androidCheckNames: RegistrationCheckName[] = [
+    'host', 'connection', 'developer', 'driver', 'video', 'touch', 'tiktok', 'accounts',
+];
+
+export function checkNamesForPlatform(platform: Platform): RegistrationCheckName[] {
+    return platform === 'android' ? [...androidCheckNames] : [...iosCheckNames];
+}
 
 function now(): string {
     return new Date().toISOString();
@@ -87,8 +123,19 @@ function check(state: RegistrationCheckState, message: string): RegistrationChec
 }
 
 function publicSnapshot(session: RegistrationSession): RegistrationSnapshot {
-    const { passcode: _passcode, supervisor: _supervisor, ...snapshot } = session;
+    const { passcode: _passcode, supervisor: _supervisor, bridgeToken: _bridgeToken, ...snapshot } = session;
     return structuredClone(snapshot);
+}
+
+/** A check the platform does not run reads as `pending`, so callers never need a null test. */
+function stateOf(session: RegistrationSnapshot, name: RegistrationCheckName): RegistrationCheckState {
+    return session.checks[name]?.state ?? 'pending';
+}
+
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+
+function isPng(image: Buffer): boolean {
+    return image.length > PNG_MAGIC.length && image.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC);
 }
 
 function normalizeAccounts(accounts: string[]): string[] {
@@ -142,10 +189,14 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
     private readonly loadDevices: () => Promise<RegisteredDevice[]>;
     private readonly stateDirectory: string;
     private readonly fetch: typeof fetch;
+    private readonly android: AndroidProbe;
+    private readonly createDriver: (device: RegisteredDevice) => DeviceDriver;
     private readonly sessions = new Map<string, RegistrationSession>();
     private activePreparation?: string;
 
     constructor(options: RegistrationManagerOptions = {}) {
+        this.android = createAndroidProbe(options.runCommand ?? runCommand);
+        this.createDriver = options.createDriver ?? ((device) => driverForDevice(device));
         this.workspaceRoot = options.repositoryRoot ?? process.cwd();
         this.packageRoot = fileURLToPath(new URL('../../', import.meta.url));
         this.discoverDevices = options.discoverDevices ?? discoverConnectedDevices;
@@ -165,8 +216,12 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
                 if (!stored.finalized) {
                     const recommendedProfile = stored.recommendedProfile ?? profileForProductType(stored.device.productType);
                     const hasPasscode = Boolean(await passcodeForDevice(stored.id, { allowLegacyFallback: false }));
+                    // Drafts written before the platform split have neither field.
+                    const platform = stored.platform ?? devicePlatform(stored.device);
                     const restored: RegistrationSession & { compatibleProfiles?: CoordinateProfile[] } = {
                     ...stored,
+                    platform,
+                    checkNames: stored.checkNames ?? checkNamesForPlatform(platform),
                     availableProfiles: coordinateProfiles().map(({ name, displayName, screenSize }) => ({ name, displayName, screenSize })),
                     ...(recommendedProfile ? { recommendedProfile } : {}),
                     coordinateProfile: stored.coordinateProfile ?? recommendedProfile,
@@ -195,7 +250,7 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
     async create(udid: string): Promise<RegistrationSnapshot> {
         const existing = this.sessions.get(udid);
         if (existing) {
-            await this.refresh(existing);
+            await this.refreshFor(existing);
             existing.recommendedProfile ??= profileForProductType(existing.device.productType);
             if (!existing.coordinateProfile && existing.recommendedProfile) existing.coordinateProfile = existing.recommendedProfile;
             await this.persist(existing);
@@ -203,15 +258,25 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
         }
         const candidate = (await this.candidates()).find((device) => device.udid === udid);
         if (!candidate) throw new Error('The selected device is not connected or is already registered');
-        const ports = await allocateDevicePorts(await this.loadDevices(), Array.from(this.sessions.values()));
-        const checks = Object.fromEntries(checkNames.map((name) => [name, check('pending', 'Not checked yet')])) as RegistrationSession['checks'];
+        const platform = devicePlatform(candidate);
+        const names = checkNamesForPlatform(platform);
+        // Android phones have no WebDriverAgent, so they claim no host ports.
+        const ports = platform === 'android'
+            ? { wdaLocalPort: 0, mjpegLocalPort: 0 }
+            : await allocateDevicePorts(await this.loadDevices(), Array.from(this.sessions.values()));
+        const checks = Object.fromEntries(names.map((name) => [name, check('pending', 'Not checked yet')])) as RegistrationSession['checks'];
         const session: RegistrationSession = {
             id: udid,
             device: candidate,
             name: candidate.name,
+            platform,
+            checkNames: names,
+            ...(platform === 'android' ? { driver: 'adb' as DriverKind, bridgePort: BRIDGE_DEVICE_PORT } : {}),
             availableProfiles: coordinateProfiles().map(({ name, displayName, screenSize }) => ({ name, displayName, screenSize })),
-            recommendedProfile: profileForProductType(candidate.productType),
-            coordinateProfile: profileForProductType(candidate.productType),
+            ...(platform === 'android' ? {} : {
+                recommendedProfile: profileForProductType(candidate.productType),
+                coordinateProfile: profileForProductType(candidate.productType),
+            }),
             ...ports,
             tiktokAccounts: [],
             hasPasscode: false,
@@ -222,7 +287,7 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
             finalized: false,
         };
         this.sessions.set(udid, session);
-        await this.refresh(session);
+        await this.refreshFor(session);
         return publicSnapshot(session);
     }
 
@@ -245,6 +310,29 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
             }
             session.coordinateProfile = input.coordinateProfile as CoordinateProfile;
         }
+        if (input.driver !== undefined) {
+            if (session.platform !== 'android') throw new Error('Only Android devices choose a driver');
+            if (input.driver !== 'adb' && input.driver !== 'a11y-bridge') throw new Error('driver must be "adb" or "a11y-bridge"');
+            if (session.driver !== input.driver) {
+                session.driver = input.driver;
+                session.bridgeToken = undefined;
+                session.checks.driver = check('pending', input.driver === 'adb'
+                    ? 'Recheck the adb channel' : 'Bootstrap the accessibility bridge');
+            }
+        }
+        if (input.bridgePort !== undefined) {
+            if (session.platform !== 'android') throw new Error('Only Android devices use a bridge port');
+            if (!Number.isInteger(input.bridgePort) || input.bridgePort < 1 || input.bridgePort > 65_535) {
+                throw new Error('Bridge port must be a TCP port number');
+            }
+            session.bridgePort = input.bridgePort;
+        }
+        if (input.bridgeUrl !== undefined) {
+            if (session.platform !== 'android') throw new Error('Only Android devices use a bridge URL');
+            const value = input.bridgeUrl.trim();
+            if (value && !/^https?:\/\/\S+$/.test(value)) throw new Error('Bridge URL must be an http(s) URL');
+            session.bridgeUrl = value || undefined;
+        }
         if (input.tiktokAccounts !== undefined) session.tiktokAccounts = normalizeAccounts(input.tiktokAccounts);
         if (input.passcode !== undefined) {
             if (input.passcode && !/^\d{4,}$/.test(input.passcode)) throw new Error('Device passcode must contain at least four digits');
@@ -260,29 +348,33 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
     async run(id: string, action: RegistrationAction, options: { authorizeTeamRegistration?: boolean } = {}): Promise<RegistrationSnapshot> {
         const session = this.required(id);
         if (session.busy) throw new Error('A registration action is already running');
-        if (action === 'prepare' && this.activePreparation && this.activePreparation !== id) {
+        const usesXcode = action === 'prepare' && session.platform === 'ios';
+        if (usesXcode && this.activePreparation && this.activePreparation !== id) {
             throw new Error('Another device is currently being provisioned by Xcode');
         }
         if (action === 'finalize') {
             session.busy = true;
             try {
-                return await this.finalize(session);
+                return await (session.platform === 'android' ? this.finalizeAndroid(session) : this.finalize(session));
             } finally {
                 session.busy = false;
                 await this.persist(session);
             }
         }
-        if (action === 'prepare') this.activePreparation = id;
+        if (usesXcode) this.activePreparation = id;
+        const android = session.platform === 'android';
         session.busy = true;
         void (async () => {
             try {
-                if (action === 'refresh') await this.refresh(session);
-                if (action === 'prepare') await this.prepare(session, Boolean(options.authorizeTeamRegistration));
-                if (action === 'verify') await this.verify(session);
+                if (action === 'refresh') await this.refreshFor(session);
+                if (action === 'prepare') {
+                    await (android ? this.prepareAndroid(session) : this.prepare(session, Boolean(options.authorizeTeamRegistration)));
+                }
+                if (action === 'verify') await (android ? this.verifyAndroid(session) : this.verify(session));
             } catch (error) {
                 this.log(session, error instanceof Error ? error.message : String(error));
             } finally {
-                if (action === 'prepare' && this.activePreparation === id) this.activePreparation = undefined;
+                if (usesXcode && this.activePreparation === id) this.activePreparation = undefined;
                 session.busy = false;
                 this.recalculate(session);
                 await this.persist(session).catch((error: unknown) => {
@@ -307,6 +399,11 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
         const session = this.sessions.get(id);
         if (!session) throw new Error('Registration draft not found');
         return session;
+    }
+
+    /** The one place that picks a platform's checks; every caller goes through it. */
+    private refreshFor(session: RegistrationSession): Promise<void> {
+        return session.platform === 'android' ? this.refreshAndroid(session) : this.refresh(session);
     }
 
     private async refresh(session: RegistrationSession): Promise<void> {
@@ -339,7 +436,7 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
     }
 
     private async prepare(session: RegistrationSession, authorized: boolean): Promise<void> {
-        if (session.checks.connection.state !== 'passed' || session.checks.host.state !== 'passed') {
+        if (stateOf(session, 'connection') !== 'passed' || stateOf(session, 'host') !== 'passed') {
             throw new Error('Connect and trust the device and complete host setup before preparing WDA');
         }
         session.checks.signing = check('checking', 'Building and provisioning WebDriverAgent');
@@ -376,14 +473,14 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
 
     private async verify(session: RegistrationSession): Promise<void> {
         await this.inspectWda(session);
-        if (session.checks.wda.state !== 'passed') throw new Error('Prepare and start WDA before runtime verification');
+        if (stateOf(session, 'wda') !== 'passed') throw new Error('Prepare and start WDA before runtime verification');
         if (!session.coordinateProfile) throw new Error('Choose a coordinate profile that matches the device screen');
         session.checks.appium = check('checking', 'Creating a no-reset Appium session');
         session.checks.video = check('checking', 'Reading the WDA video stream');
         session.checks.touch = check('checking', 'Checking mapped TikTok touch input');
         session.checks.accounts = check('checking', 'Verifying TikTok accounts with OCR');
         await this.inspectTikTok(session);
-        if (session.checks.tiktok.state !== 'passed') return;
+        if (stateOf(session, 'tiktok') !== 'passed') return;
         const control = new WdaRemoteControl({
             deviceUdid: session.device.udid,
             wdaUrl: `http://127.0.0.1:${session.wdaLocalPort}`,
@@ -444,9 +541,9 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             this.log(session, message);
-            if (session.checks.appium.state === 'checking') session.checks.appium = check('failed', message);
-            else if (session.checks.video.state === 'checking') session.checks.video = check('failed', message);
-            else if (session.checks.touch.state === 'checking') session.checks.touch = check('failed', message);
+            if (stateOf(session, 'appium') === 'checking') session.checks.appium = check('failed', message);
+            else if (stateOf(session, 'video') === 'checking') session.checks.video = check('failed', message);
+            else if (stateOf(session, 'touch') === 'checking') session.checks.touch = check('failed', message);
             else session.checks.accounts = check('blocked', message);
         } finally {
             if (driver) await driver.deleteSession().catch(() => undefined);
@@ -488,6 +585,196 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
         return publicSnapshot(session);
     }
 
+    // ---- Android ----------------------------------------------------------
+    // Same snapshot, check and persist machinery as iOS; only the probes differ.
+
+    /** The devices.json shape this draft will be saved as, and what the live checks drive. */
+    private androidRecord(session: RegistrationSession): RegisteredDevice {
+        const serial = session.device.udid;
+        const driver: DriverKind = session.driver ?? 'adb';
+        return {
+            name: session.name,
+            udid: serial,
+            platform: 'android',
+            driver,
+            android: {
+                serial,
+                ...(driver === 'a11y-bridge' ? {
+                    bridgeUrl: this.bridgeBaseUrl(session),
+                    ...(session.bridgeToken ? { bridgeToken: session.bridgeToken } : {}),
+                } : {}),
+            },
+            pluginData: { 'com.git-agni.tiktok': { accounts: session.tiktokAccounts } },
+        };
+    }
+
+    /** An explicit URL wins (the Wi-Fi APK fork); otherwise the local end of `adb forward`. */
+    private bridgeBaseUrl(session: RegistrationSession): string {
+        return session.bridgeUrl ?? `http://127.0.0.1:${session.bridgePort ?? BRIDGE_DEVICE_PORT}`;
+    }
+
+    private async refreshAndroid(session: RegistrationSession): Promise<void> {
+        session.checks.host = check('checking', 'Looking for adb on PATH');
+        session.checks.connection = check('checking', 'Asking adb about this serial');
+        try {
+            session.checks.host = check('passed', `${await this.android.hostVersion()} is on PATH`);
+        } catch (error) {
+            session.checks.host = check('blocked', `Install Android platform-tools and put adb on PATH: ${errorMessage(error)}`);
+            session.checks.connection = check('pending', 'Waiting for a usable adb');
+            await this.persist(session);
+            return;
+        }
+        await this.inspectAndroidConnection(session);
+        await this.inspectAndroidDriver(session, false);
+        await this.inspectAndroidTikTok(session);
+        await this.persist(session);
+    }
+
+    private async inspectAndroidConnection(session: RegistrationSession): Promise<void> {
+        const serial = session.device.udid;
+        let state: Awaited<ReturnType<AndroidProbe['deviceState']>>;
+        try {
+            state = await this.android.deviceState(serial);
+        } catch (error) {
+            session.checks.connection = check('blocked', `adb devices failed: ${errorMessage(error)}`);
+            session.checks.developer = check('pending', 'Waiting for adb');
+            return;
+        }
+        if (state === 'device') {
+            session.checks.connection = check('passed', `adb sees ${serial} in the device state`);
+            session.checks.developer = check('passed', 'USB debugging is authorised for this computer');
+            const connected = (await this.discoverDevices()).find(({ udid }) => udid === serial);
+            if (connected) session.device = connected;
+            return;
+        }
+        if (state === 'unauthorized') {
+            session.checks.connection = check('blocked', `adb sees ${serial}, but this computer is not authorised yet`);
+            session.checks.developer = check('blocked',
+                'Unlock the phone and tap Allow on the "Allow USB debugging?" prompt — tick "Always allow from this computer" — then recheck');
+            return;
+        }
+        session.checks.connection = check('blocked', state === 'offline'
+            ? `adb reports ${serial} as offline; replug the cable or re-run adb connect for wireless debugging`
+            : `adb cannot see ${serial}; enable Developer options → USB debugging and reconnect`);
+        session.checks.developer = check('pending', 'Waiting for adb to see the phone');
+    }
+
+    /** `bootstrap` also writes the port forward; a plain recheck only reads. */
+    private async inspectAndroidDriver(session: RegistrationSession, bootstrap: boolean): Promise<void> {
+        if (stateOf(session, 'connection') !== 'passed') {
+            session.checks.driver = check('pending', 'Connect and authorise the phone before checking the driver');
+            return;
+        }
+        const serial = session.device.udid;
+        if ((session.driver ?? 'adb') === 'adb') {
+            session.checks.driver = check('passed', 'The adb driver needs nothing installed on the phone');
+            return;
+        }
+        session.checks.driver = check('checking', 'Checking the accessibility bridge');
+        try {
+            if (!await this.android.packageInstalled(serial, BRIDGE_PACKAGE)) {
+                session.checks.driver = check('blocked', `${BRIDGE_PACKAGE} is not installed; adb -s ${serial} install app-release.apk`);
+                return;
+            }
+            if (!await this.android.accessibilityEnabled(serial, BRIDGE_PACKAGE)) {
+                session.checks.driver = check('blocked', 'Enable Settings → Accessibility → sim-use bridge on the phone, then recheck');
+                return;
+            }
+            const token = await this.android.bridgeToken(serial);
+            if (!token) {
+                session.checks.driver = check('blocked', 'The bridge auth_token provider returned nothing; open the bridge app once, then recheck');
+                return;
+            }
+            session.bridgeToken = token;
+            // With the Wi-Fi build of the APK there is nothing to forward.
+            if (bootstrap && !session.bridgeUrl) {
+                await this.android.forwardBridgePort(serial, session.bridgePort ?? BRIDGE_DEVICE_PORT, BRIDGE_DEVICE_PORT);
+            }
+        } catch (error) {
+            session.checks.driver = check('blocked', errorMessage(error));
+            return;
+        }
+        const url = this.bridgeBaseUrl(session);
+        session.checks.driver = await this.endpointReady(bridgePingUrl(url))
+            ? check('passed', `The bridge answers at ${url}`)
+            : check('blocked', `${bridgePingUrl(url)} is not answering; run "Set up the driver" to forward the port, or check the accessibility service`);
+    }
+
+    private async inspectAndroidTikTok(session: RegistrationSession): Promise<void> {
+        if (stateOf(session, 'connection') !== 'passed') {
+            session.checks.tiktok = check('pending', 'Connect the phone before checking TikTok');
+            return;
+        }
+        const packageName = process.env.TIKTOK_ANDROID_PACKAGE ?? 'com.zhiliaoapp.musically';
+        try {
+            session.checks.tiktok = await this.android.packageInstalled(session.device.udid, packageName)
+                ? check('passed', `TikTok (${packageName}) is installed`)
+                : check('blocked', `Install TikTok (${packageName}) from Play, sign in, then recheck`);
+        } catch (error) {
+            session.checks.tiktok = check('blocked', `Could not list installed packages: ${errorMessage(error)}`);
+        }
+    }
+
+    private async prepareAndroid(session: RegistrationSession): Promise<void> {
+        if (stateOf(session, 'connection') !== 'passed') {
+            throw new Error('Connect and authorise the phone over adb before setting up the driver');
+        }
+        await this.inspectAndroidDriver(session, true);
+        await this.persist(session);
+    }
+
+    private async verifyAndroid(session: RegistrationSession): Promise<void> {
+        if (stateOf(session, 'driver') !== 'passed') throw new Error('Finish the driver checks before runtime verification');
+        session.checks.video = check('checking', 'Taking a screenshot through the driver');
+        session.checks.touch = check('checking', 'Sending a harmless Home key through the driver');
+        session.checks.accounts = check('checking', 'Recording the configured TikTok accounts');
+        await this.inspectAndroidTikTok(session);
+        const driver = this.createDriver(this.androidRecord(session));
+        try {
+            const image = await driver.screenshot();
+            if (!isPng(image)) throw new Error('The driver returned something that is not a PNG screenshot');
+            const screen = await driver.screen();
+            session.checks.video = check('passed', `screencap works: ${screen.width} × ${screen.height} px`);
+            // Home is the safest input there is: no content is touched and the phone stays usable.
+            await driver.pressKey('home');
+            session.checks.touch = check('passed', `The phone accepted a Home key through the ${driver.kind} driver`);
+        } catch (error) {
+            const message = errorMessage(error);
+            this.log(session, message);
+            if (stateOf(session, 'video') === 'checking') session.checks.video = check('failed', message);
+            else session.checks.touch = check('failed', message);
+            return;
+        }
+        session.checks.accounts = session.tiktokAccounts.length
+            ? check('passed', `Recorded ${session.tiktokAccounts.length} TikTok account${session.tiktokAccounts.length === 1 ? '' : 's'} for this phone`)
+            : check('passed', 'No TikTok accounts configured; add them later from the device workspace');
+    }
+
+    private async finalizeAndroid(session: RegistrationSession): Promise<RegistrationSnapshot> {
+        this.recalculate(session);
+        if (!session.canFinalize) throw new Error('Every Android readiness check must pass before registration can finish');
+        const record = this.androidRecord(session);
+        const added = await mutateRegisteredDevices((devices) => {
+            if (devices.some(({ udid }) => udid === record.udid)) return false;
+            // Explicit whitelist — never spread a draft session into devices.json.
+            devices.push({
+                name: record.name,
+                udid: record.udid,
+                platform: 'android',
+                driver: record.driver,
+                ...(record.android ? { android: record.android } : {}),
+                pluginData: record.pluginData,
+            });
+            return true;
+        });
+        if (!added) this.log(session, 'This serial is already in devices.json; the existing entry was kept');
+        // Nothing to hand over: there is no WDA supervisor on Android.
+        session.finalized = true;
+        this.recalculate(session);
+        await this.persist(session);
+        return publicSnapshot(session);
+    }
+
     private async inspectWda(session: RegistrationSession): Promise<void> {
         const ready = await this.waitForEndpoint(`http://127.0.0.1:${session.wdaLocalPort}/status`, 5_000);
         session.checks.wda = ready ? check('passed', 'WebDriverAgent is reachable') : check('pending', 'Prepare WebDriverAgent for this device');
@@ -513,7 +800,7 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
     }
 
     private async inspectTikTok(session: RegistrationSession): Promise<void> {
-        if (session.checks.connection.state !== 'passed') {
+        if (stateOf(session, 'connection') !== 'passed') {
             session.checks.tiktok = check('pending', 'Connect the device before checking TikTok');
             return;
         }
@@ -608,8 +895,10 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
     }
 
     private recalculate(session: RegistrationSession): void {
-        session.canFinalize = checkNames.every((name) => session.checks[name].state === 'passed')
-            && Boolean(session.name && session.coordinateProfile);
+        session.canFinalize = session.checkNames.every((name) => stateOf(session, name) === 'passed')
+            && Boolean(session.name)
+            // Coordinate packs are an iOS concept; the Android routine targets the tree.
+            && (session.platform === 'android' || Boolean(session.coordinateProfile));
     }
 
     private log(session: RegistrationSession, value: string): void {

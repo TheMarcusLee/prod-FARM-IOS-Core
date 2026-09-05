@@ -4,16 +4,17 @@ import test from 'node:test';
 
 import { createApp } from '../src/api/app.js';
 import { defaultDashboardTheme } from '../src/dashboard-theme.js';
-import type { DeviceRegistrationManager, RegistrationSnapshot } from '../src/devices/registration.js';
+import { checkNamesForPlatform, type DeviceRegistrationManager, type RegistrationSnapshot } from '../src/devices/registration.js';
 import { PluginRegistry } from '../src/registry.js';
 import type { SchedulerRepository } from '../src/scheduler/repository.js';
 
-const device = { name: 'Test iPhone', osVersion: '16.7', udid: 'test-device', productType: 'iPhone10,1' };
+const device = { name: 'Test iPhone', osVersion: '16.7', udid: 'test-device', platform: 'ios' as const, productType: 'iPhone10,1' };
 
 function snapshot(): RegistrationSnapshot {
     const passed = { state: 'passed' as const, message: 'Ready', updatedAt: new Date(0).toISOString() };
     return {
-        id: device.udid, device, name: device.name, coordinateProfile: 'iphone8',
+        id: device.udid, device, name: device.name, platform: 'ios',
+        checkNames: checkNamesForPlatform('ios'), coordinateProfile: 'iphone8',
         availableProfiles: [{ name: 'iphone8', displayName: 'iPhone 8', screenSize: { width: 375, height: 667 } }],
         recommendedProfile: 'iphone8', wdaLocalPort: 8100, mjpegLocalPort: 9100,
         tiktokAccounts: [], hasPasscode: false, busy: false,

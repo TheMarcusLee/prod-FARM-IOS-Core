@@ -83,6 +83,12 @@ await waitForText(driver, { text: 'Posted' }, { timeoutMs: 60_000, signal });
   natively) plus `A11Y_BRIDGE_URL` / `A11Y_BRIDGE_TOKEN` on Android.
 - `POST /api/devices` accepts `platform`, `driver` and `android` so an Android phone can be
   registered without the iOS registration wizard.
+- The registration wizard (`devices/registration.ts`) runs an Android check set — adb on PATH, the
+  serial's adb state, USB-debugging authorisation, the chosen driver, screencap, one Home key, the
+  TikTok package — and writes `platform`, `driver` and `android` straight into `devices.json`.
+  See `docs/android-dashboard.md`.
+- The device page and the devices grid show platform and driver badges, and for an Android device the
+  screen size, screenshot and remote input all go through `driverForDevice` instead of WDA.
 
-Still open: a platform-aware registration wizard and device page in the dashboard, and the
-Android TikTok routine (the plugin currently fails Android executions with a clear message).
+Still open: the Android TikTok routine (the plugin currently fails Android executions with a clear
+message).

@@ -286,8 +286,17 @@ function useDeviceSummary(summary: HTMLElement): void {
     const height = Number(summary.dataset.screenHeight);
     if (!Number.isFinite(width) || !Number.isFinite(height)) return;
     screenSize = { width, height };
+    const platform = summary.dataset.platform === 'android' ? 'Android' : 'iOS';
     const name = summary.querySelector('h1')?.textContent;
-    if (name) document.title = `${name} · iOS Automation`;
+    if (name) document.title = `${name} · ${platform} Automation`;
+    elements.screen.alt = `Live screen from the connected ${platform} device`;
+    // Lock, wake, unlock and the volume keys are WebDriverAgent verbs with no adb equivalent.
+    if (platform === 'Android') {
+        for (const button of elements.remoteButtons) {
+            const action = button.dataset.remoteAction ?? '';
+            button.hidden = !['up', 'down', 'left', 'right', 'home'].includes(action);
+        }
+    }
     void connectRemote();
 }
 
