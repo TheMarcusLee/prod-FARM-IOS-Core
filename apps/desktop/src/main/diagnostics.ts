@@ -30,13 +30,66 @@ export async function tailFile(file: string, maxBytes = LOG_TAIL_BYTES): Promise
     }
 }
 
+/**
+ * Settings keys whose value is a secret, whatever it happens to be called.
+ *
+ * A key added to `Settings` later is redacted by this the day it is added, rather
+ * than the day somebody remembers to update this file. The Xcode identifiers are
+ * deliberately *not* here: an org id and a signing identity are the two things a
+ * support conversation always needs, and neither is a credential.
+ */
+export const SECRET_KEY_PATTERN = /pass(word|phrase)?$|secret|token|credential|apikey|api_key/i;
+
 /** Everything secret in the settings file, replaced in place. */
 export function redactSettings(settings: Settings): Record<string, unknown> {
-    return {
-        ...settings,
-        embeddedPostgresPassword: settings.embeddedPostgresPassword ? REDACTED : '',
-        databaseUrl: redactUrlPassword(settings.databaseUrl),
-    };
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(settings)) {
+        if (SECRET_KEY_PATTERN.test(key)) out[key] = value ? REDACTED : '';
+        else if (/url$/i.test(key) && typeof value === 'string') out[key] = redactUrlPassword(value);
+        else out[key] = value;
+    }
+    return out;
+}
+
+/**
+ * A function that removes every literal secret from arbitrary text.
+ *
+ * The redaction above only covers the settings file. Secrets also reach the
+ * bundle the long way round: the farm's own children print a connection string
+ * when a query fails, drizzle names the database it could not reach, and all of
+ * that lands in the service logs and in the `recentLogs` of services.json. The
+ * generated Postgres password would then travel out of the machine inside a zip
+ * the operator emails to whoever is helping them.
+ *
+ * Longest first, so a secret that contains another is replaced whole.
+ */
+export function secretScrubber(secrets: readonly string[]): (text: string) => string {
+    // A very short "secret" would match half the log; nothing real is that short.
+    const literals = [...new Set(secrets.filter((secret) => secret.trim().length >= 8))]
+        .sort((left, right) => right.length - left.length);
+    if (literals.length === 0) return (text) => text;
+    return (text) => literals.reduce(
+        (carry, secret) => carry.split(secret).join(REDACTED),
+        text,
+    );
+}
+
+/**
+ * Every form a secret takes on its way into a log line: the password itself, the
+ * connection string built from it, and the percent-encoded spelling of both that
+ * a URL puts on the wire.
+ */
+export function secretsOf(settings: Settings, resolvedDatabaseUrl: string): string[] {
+    const raw = [settings.embeddedPostgresPassword, settings.databaseUrl, resolvedDatabaseUrl];
+    for (const url of [settings.databaseUrl, resolvedDatabaseUrl]) {
+        try {
+            const password = new URL(url).password;
+            if (password) raw.push(password, decodeURIComponent(password));
+        } catch { /* not a URL; the literal itself is still scrubbed */ }
+    }
+    return raw
+        .filter((secret): secret is string => Boolean(secret?.trim()))
+        .flatMap((secret) => [secret, encodeURIComponent(secret)]);
 }
 
 /** Keeps the shape of a connection string (host, port, database) but not its password. */
@@ -70,6 +123,8 @@ export function serviceTable(snapshot: FleetSnapshot): string {
 
 export interface DiagnosticsInput {
     settings: Settings;
+    /** The connection string children are actually given, so it can be scrubbed. */
+    databaseUrl: string;
     snapshot: FleetSnapshot;
     appVersion: string;
     repoRoot: string;
@@ -79,7 +134,8 @@ export interface DiagnosticsInput {
 
 /** The text files in the bundle, keyed by their name inside the archive. */
 export function buildDiagnostics(input: DiagnosticsInput): Record<string, string> {
-    return {
+    const scrub = secretScrubber(secretsOf(input.settings, input.databaseUrl));
+    const files: Record<string, string> = {
         'README.txt': [
             'Phone Farm diagnostics',
             `Collected: ${new Date().toISOString()}`,
@@ -89,7 +145,8 @@ export function buildDiagnostics(input: DiagnosticsInput): Record<string, string
             `Farm root: ${input.repoRoot} (${input.compiled ? 'compiled' : 'TypeScript sources'})`,
             `Data directory: ${input.userData}`,
             '',
-            'settings.json has had its passwords replaced with ' + REDACTED + '.',
+            'Passwords, tokens and connection strings have been replaced with ' + REDACTED
+            + ' throughout, in the logs as well as in settings.json.',
             `logs/ holds the last ${Math.round(LOG_TAIL_BYTES / 1024 / 1024)} MB of each service log, rotated generations included.`,
         ].join('\n') + '\n',
         'settings.json': `${JSON.stringify(redactSettings(input.settings), null, 2)}\n`,
@@ -97,6 +154,9 @@ export function buildDiagnostics(input: DiagnosticsInput): Record<string, string
         'services.json': `${JSON.stringify(input.snapshot.services, null, 2)}\n`,
         'jobs.json': `${JSON.stringify(input.snapshot.jobs, null, 2)}\n`,
     };
+    // Scrubbed as a last pass over everything, including the log lines that
+    // services.json carries: no file leaves this function unfiltered.
+    return Object.fromEntries(Object.entries(files).map(([name, text]) => [name, scrub(text)]));
 }
 
 /**
@@ -110,6 +170,7 @@ export async function writeDiagnosticsZip(
     files: Record<string, string>,
     logs: LogFiles,
     serviceIds: readonly string[],
+    scrub: (text: string) => string = (text) => text,
 ): Promise<void> {
     const staging = await mkdtemp(path.join(os.tmpdir(), 'phone-farm-diagnostics-'));
     try {
@@ -119,7 +180,7 @@ export async function writeDiagnosticsZip(
         await mkdir(path.join(staging, 'logs'), { recursive: true });
         for (const id of serviceIds) {
             for (const file of logs.filesFor(id)) {
-                const tail = await tailFile(file);
+                const tail = scrub(await tailFile(file));
                 if (!tail) continue;
                 await writeFile(path.join(staging, 'logs', path.basename(file)), tail, { mode: 0o600 });
             }

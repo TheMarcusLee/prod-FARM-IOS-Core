@@ -28,7 +28,7 @@ function context(overrides: Partial<ServiceContext['settings']> = {}, devicesCon
     const paths = {
         repoRoot: '/farm', compiled: false, userData: '/data', logsDir: '/data/logs',
         postgresDataDir: '/data/postgres', schedulerDataDir: '/data/scheduler',
-        devicesConfigPath, wdaServiceSocket: '/data/wda.sock',
+        devicesConfigPath, wdaServiceSocket: '/data/wda.sock', appiumHome: '/farm/.appium2',
     } satisfies AppPaths;
     return {
         paths,
@@ -36,6 +36,7 @@ function context(overrides: Partial<ServiceContext['settings']> = {}, devicesCon
         databaseUrl: 'postgresql://x@127.0.0.1:5432/x',
         env: { PATH: process.env.PATH ?? '' },
         nodeExecPath: process.execPath,
+        appVersion: '0.1.0',
     };
 }
 

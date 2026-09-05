@@ -43,7 +43,7 @@ export function wdaService(context: ServiceContext): ServiceDefinition {
             return { ok: true };
         },
         launch: (runContext) => Promise.resolve(
-            spawnService(farmNodeSpawn(context, farmEntryArgs(context, 'src/devices/wda-service.ts')), runContext),
+            spawnService(farmNodeSpawn(context, farmEntryArgs(context, 'src/devices/wda-service.ts')), runContext, 'wda'),
         ),
         // The service talks HTTP over a Unix socket; existence of the socket alone
         // is not enough because a stale file survives a hard kill.

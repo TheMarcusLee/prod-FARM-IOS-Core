@@ -16,6 +16,8 @@ export interface FarmBridge {
     openSettings(): Promise<void>;
     openDataFolder(): Promise<void>;
     exportDiagnostics(): Promise<{ ok: boolean; message: string }>;
+    copyMcpConfig(): Promise<{ ok: boolean; message: string }>;
+    copyDashboardUrl(): Promise<{ ok: boolean; message: string }>;
     prepareWda(udid: string | null): Promise<{ ok: boolean; message: string }>;
     cancelJob(id: string): Promise<void>;
     dismissJob(id: string): Promise<void>;

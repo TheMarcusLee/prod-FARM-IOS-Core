@@ -138,3 +138,15 @@ input[type="text"], input[type="number"], select {
 .page-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 header .actions { flex-wrap: wrap; justify-content: flex-end; }
 .job-page pre.logs { max-height: none; height: calc(100vh - 320px); min-height: 180px; }
+
+/* The dashboard address and the paused notice: the two facts an operator needs
+   before anything else on this page is worth reading. */
+.banner {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+    padding: 8px 12px; margin-bottom: 12px; border-radius: 6px;
+    border: 1px solid var(--line); background: var(--panel);
+}
+.banner .banner-label { color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: .04em; }
+.banner code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.banner.warn { border-color: var(--bad); }
+.banner.warn strong { color: var(--bad); }

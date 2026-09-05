@@ -127,6 +127,7 @@ export interface EnvironmentInput {
     schedulerDataDir: string;
     devicesConfigPath: string;
     wdaServiceSocket: string;
+    appiumHome: string;
 }
 
 /** The environment every farm child process is given. Never inherits a stray .env. */
@@ -149,7 +150,7 @@ export function childEnvironment(input: EnvironmentInput): Record<string, string
         XCODE_SIGNING_ID: settings.xcodeSigningId,
         WDA_BUNDLE_ID: settings.wdaBundleId,
         ANDROID_DISCOVERY: settings.androidDiscovery,
-        APPIUM_HOME: `${input.repoRoot}/.appium2`,
+        APPIUM_HOME: input.appiumHome,
     };
     if (settings.xcodeOrgId) env.XCODE_ORG_ID = settings.xcodeOrgId;
     if (settings.authPlugin) env.PHONE_FARM_AUTH_PLUGIN = settings.authPlugin;

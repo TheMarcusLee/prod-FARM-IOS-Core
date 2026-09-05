@@ -1,4 +1,9 @@
 <meta charset="utf-8">
+<!-- The renderer only ever loads its own bundled files. A `default-src 'none'`
+     policy means a stray URL in a log line or a service detail can never fetch,
+     frame or execute anything remote. `file:` sits beside 'self' because a
+     file:// document has an opaque origin, for which 'self' matches nothing. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data:; font-src 'self' file:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'; object-src 'none'">
 <title>Services</title>
 <link rel="stylesheet" href="app.css">
 <header>
@@ -12,9 +17,22 @@
     </span>
 </header>
 <main>
+    <!-- The first thing an operator needs and could not previously find: where the
+         dashboard is, and whether the farm is actually doing any work. -->
+    <div class="banner" id="dashboard-banner">
+        <span class="banner-label">Dashboard</span>
+        <code id="dashboard-url">not running yet</code>
+        <button id="open-dashboard">Open</button>
+        <button id="copy-dashboard">Copy link</button>
+    </div>
+    <div class="banner warn" id="paused-banner" hidden>
+        <strong>The farm is paused.</strong>
+        <span id="paused-detail"></span>
+    </div>
     <div class="page-actions">
         <button id="data-folder">Open data folder</button>
         <button id="diagnostics">Export diagnostics…</button>
+        <button id="copy-mcp">Copy MCP config</button>
         <span class="status" id="action-status"></span>
     </div>
     <div id="jobs"></div>

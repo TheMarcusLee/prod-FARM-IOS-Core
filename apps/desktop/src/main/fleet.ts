@@ -12,7 +12,7 @@ export function resolveDatabaseUrl(settings: Settings): string {
         || embeddedDatabaseUrl(settings.embeddedPostgresPort, settings.embeddedPostgresPassword);
 }
 
-export function buildServiceContext(paths: AppPaths, settings: Settings): ServiceContext {
+export function buildServiceContext(paths: AppPaths, settings: Settings, appVersion: string): ServiceContext {
     const databaseUrl = resolveDatabaseUrl(settings);
     mkdirSync(paths.schedulerDataDir, { recursive: true, mode: 0o700 });
     const env = childEnvironment({
@@ -22,6 +22,7 @@ export function buildServiceContext(paths: AppPaths, settings: Settings): Servic
         schedulerDataDir: paths.schedulerDataDir,
         devicesConfigPath: paths.devicesConfigPath,
         wdaServiceSocket: paths.wdaServiceSocket,
+        appiumHome: paths.appiumHome,
     });
     return {
         paths,
@@ -35,6 +36,7 @@ export function buildServiceContext(paths: AppPaths, settings: Settings): Servic
             LANG: process.env.LANG ?? 'en_US.UTF-8',
         },
         nodeExecPath: process.execPath,
+        appVersion,
     };
 }
 
@@ -44,8 +46,8 @@ export interface Fleet {
     context: ServiceContext;
 }
 
-export function createFleet(paths: AppPaths, settings: Settings): Fleet {
-    const context = buildServiceContext(paths, settings);
+export function createFleet(paths: AppPaths, settings: Settings, appVersion: string): Fleet {
+    const context = buildServiceContext(paths, settings, appVersion);
     const logs = new LogFiles(paths.logsDir);
     const supervisor = new Supervisor(buildServices(context), {
         onLog: (id, line) => logs.append(id, line),

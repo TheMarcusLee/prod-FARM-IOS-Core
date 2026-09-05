@@ -1,6 +1,18 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 
+import type { ChildRegistry } from './orphans.ts';
 import type { LaunchContext, RunHandle } from './types.ts';
+
+/**
+ * Where spawned pids are recorded so the next launch can kill what a crash left
+ * behind. It is a module-level hook rather than a parameter because every call
+ * site would otherwise have to thread it through, and the tests set it to null.
+ */
+let registry: ChildRegistry | null = null;
+
+export function setChildRegistry(next: ChildRegistry | null): void {
+    registry = next;
+}
 
 export interface SpawnSpec {
     file: string;
@@ -18,7 +30,7 @@ export interface SpawnSpec {
  * `process.execPath` with ELECTRON_RUN_AS_NODE=1 — the Electron binary then
  * behaves exactly like the Node it embeds.
  */
-export function spawnService(spec: SpawnSpec, context: LaunchContext): RunHandle {
+export function spawnService(spec: SpawnSpec, context: LaunchContext, label = spec.file): RunHandle {
     context.log('app', `$ ${spec.file} ${spec.args.join(' ')}`);
     const child = spawn(spec.file, [...spec.args], {
         cwd: spec.cwd,
@@ -27,6 +39,10 @@ export function spawnService(spec: SpawnSpec, context: LaunchContext): RunHandle
         // Own process group, so stopping the service also stops anything it spawned.
         detached: true,
     });
+    // Recorded before anything else can go wrong: a child that survives a crash of
+    // this app is only findable again through the pid file.
+    if (child.pid !== undefined) registry?.add(child.pid, label);
+    child.once('exit', () => { if (child.pid !== undefined) registry?.remove(child.pid); });
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
     child.stdout?.on('data', (chunk: string) => context.log('out', chunk));

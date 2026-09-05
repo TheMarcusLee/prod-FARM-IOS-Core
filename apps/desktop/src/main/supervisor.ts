@@ -14,6 +14,24 @@ const BASE_BACKOFF_MS = 1_000;
 const BACKOFF_RESET_MS = 60_000;
 /** How often a `healthy` service is asked again whether it is still there. */
 export const DEFAULT_REPROBE_INTERVAL_MS = 15_000;
+/**
+ * Consecutive failed sweeps before a healthy service is torn down and restarted.
+ *
+ * One failed probe is not evidence of death. A busy farm runs an Appium session
+ * per phone and an xcodebuild or two; under that load a 2s HTTP probe times out
+ * against a server that is merely slow, and restarting on the strength of it kills
+ * the running jobs of every device the service was serving. Three sweeps in a row
+ * — 45s of silence at the default interval — is a dead service, not a busy one.
+ */
+export const DEFAULT_HEALTH_FAILURES = 3;
+/**
+ * How many automatic restarts a service gets over the whole life of the app.
+ *
+ * `maxRestarts` is reset by BACKOFF_RESET_MS whenever a service manages to run for
+ * a minute, which is right for a flaky child and wrong for a misconfiguration that
+ * kills it just after startup every time: that combination would restart for ever.
+ */
+export const DEFAULT_TOTAL_RESTARTS = 20;
 
 export interface SupervisorClock {
     now(): number;
@@ -34,6 +52,10 @@ export interface SupervisorOptions {
     logPathFor?(serviceId: string): string | null;
     /** Cap on automatic restarts before a service is parked in `failed`. */
     maxRestarts?: number;
+    /** Lifetime cap on automatic restarts, which no quiet period resets. */
+    totalRestarts?: number;
+    /** Consecutive failed re-probes before a healthy service is restarted. */
+    healthFailuresBeforeRestart?: number;
     /**
      * How often `healthy` services are re-probed. 0 disables the sweep entirely.
      * Defaults to 15s.
@@ -56,6 +78,10 @@ interface Runtime {
     /** True while the operator wants this service running. */
     desired: boolean;
     lastExitAt: number;
+    /** Automatic restarts since the app started; never reset by a quiet period. */
+    totalRestarts: number;
+    /** Consecutive failed sweeps while in `healthy`; reset by any success. */
+    healthFailures: number;
 }
 
 /**
@@ -89,6 +115,8 @@ export class Supervisor extends EventEmitter {
                 generation: 0,
                 desired: false,
                 lastExitAt: 0,
+                totalRestarts: 0,
+                healthFailures: 0,
             });
         }
         assertAcyclic(definitions);
@@ -160,7 +188,20 @@ export class Supervisor extends EventEmitter {
             } catch {
                 ok = false;
             }
-            if (ok || generation !== runtime.generation || runtime.state !== 'healthy') continue;
+            if (generation !== runtime.generation || runtime.state !== 'healthy') continue;
+            if (ok) {
+                runtime.healthFailures = 0;
+                continue;
+            }
+            runtime.healthFailures += 1;
+            const allowed = this.options.healthFailuresBeforeRestart ?? DEFAULT_HEALTH_FAILURES;
+            if (runtime.healthFailures < allowed) {
+                this.appendLog(
+                    runtime.definition.id, 'app',
+                    `health probe did not answer (${runtime.healthFailures}/${allowed}); still treating it as healthy`,
+                );
+                continue;
+            }
             await this.onHealthLost(runtime);
         }
     }
@@ -194,6 +235,7 @@ export class Supervisor extends EventEmitter {
     }
 
     private async onHealthLost(runtime: Runtime): Promise<void> {
+        runtime.healthFailures = 0;
         const handle = runtime.handle;
         runtime.handle = null;
         // Retire the handle's own exit listener: this path already owns the restart.
@@ -251,6 +293,10 @@ export class Supervisor extends EventEmitter {
         const runtime = this.runtimeOf(id);
         runtime.desired = true;
         runtime.restarts = 0;
+        // An explicit operator start is a fresh verdict on a service the supervisor
+        // had given up on, so the lifetime cap starts again with it.
+        runtime.totalRestarts = 0;
+        runtime.healthFailures = 0;
         try {
             await this.launch(runtime);
         } finally {
@@ -298,6 +344,7 @@ export class Supervisor extends EventEmitter {
         }
 
         this.transition(runtime, 'starting', '');
+        runtime.healthFailures = 0;
         let handle: RunHandle;
         try {
             handle = await runtime.definition.launch(this.launchContext(id));
@@ -384,12 +431,23 @@ export class Supervisor extends EventEmitter {
         if (runtime.since !== null && now - runtime.since > BACKOFF_RESET_MS) runtime.restarts = 0;
         runtime.lastExitAt = now;
         const max = this.options.maxRestarts ?? 5;
+        const total = this.options.totalRestarts ?? DEFAULT_TOTAL_RESTARTS;
         if (runtime.restarts >= max) {
             this.transition(runtime, 'failed', `${cause}; gave up after ${max} restarts`);
             return;
         }
+        if (runtime.totalRestarts >= total) {
+            // Restarting on a schedule for ever hides a broken configuration behind a
+            // service that looks like it is merely flapping. Stop, and say so.
+            this.transition(
+                runtime, 'failed',
+                `${cause}; gave up after ${total} restarts — this looks like a configuration problem, not a crash`,
+            );
+            return;
+        }
         const delay = backoffMs(runtime.restarts);
         runtime.restarts += 1;
+        runtime.totalRestarts += 1;
         this.transition(runtime, 'starting', `${cause}; restarting in ${Math.round(delay / 1000)}s`);
         runtime.backoffTimer = this.clock.setTimeout(() => {
             runtime.backoffTimer = null;

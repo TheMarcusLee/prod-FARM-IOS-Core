@@ -134,7 +134,7 @@ export class JobRunner extends EventEmitter {
         try {
             handle = spawnService(definition.spawn(), {
                 log: (stream, text) => this.append(definition.id, stream, text),
-            });
+            }, definition.id);
         } catch (error) {
             this.settle(job, 'failed', error instanceof Error ? error.message : String(error), null);
             return this.snapshotOf(definition.id);

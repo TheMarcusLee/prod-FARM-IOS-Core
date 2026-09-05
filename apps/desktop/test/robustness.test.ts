@@ -6,12 +6,13 @@ import path from 'node:path';
 import test from 'node:test';
 
 import {
-    LOG_TAIL_BYTES, REDACTED, buildDiagnostics, redactSettings, redactUrlPassword, serviceTable, tailFile,
+    LOG_TAIL_BYTES, REDACTED, buildDiagnostics, redactSettings, redactUrlPassword, secretScrubber,
+    secretsOf, serviceTable, tailFile,
 } from '../src/main/diagnostics.ts';
 import { postgresReady } from '../src/main/health.ts';
 import { LogFiles, MAX_LOG_BYTES, MAX_LOG_GENERATIONS, rotateLogFile } from '../src/main/logs.ts';
 import { farmEntryExtension } from '../src/main/paths.ts';
-import { normalizeSettings } from '../src/main/settings.ts';
+import { embeddedDatabaseUrl, normalizeSettings } from '../src/main/settings.ts';
 import type { FleetSnapshot } from '../src/main/types.ts';
 
 function temporaryDirectory(prefix: string): string {
@@ -92,7 +93,8 @@ test('diagnostics redact every secret but keep the shape of the connection strin
 test('the diagnostics bundle carries the service table and no secrets', () => {
     const settings = normalizeSettings({ embeddedPostgresPassword: 'super-secret' });
     const files = buildDiagnostics({
-        settings, snapshot, appVersion: '0.1.0', repoRoot: '/farm', userData: '/data', compiled: true,
+        settings, databaseUrl: '', snapshot, appVersion: '0.1.0',
+        repoRoot: '/farm', userData: '/data', compiled: true,
     });
 
     assert.ok(!JSON.stringify(files).includes('super-secret'));
@@ -160,4 +162,60 @@ test('a compiled farm tree is recognised so children run without tsx', () => {
     assert.equal(farmEntryExtension(directory), 'ts');
     writeFileSync(path.join(apiDirectory, 'server.js'), '');
     assert.equal(farmEntryExtension(directory), 'js', 'compiled output wins');
+});
+
+test('a secret that reached a log line is scrubbed out of the whole bundle', () => {
+    // The leak this closes: redacting settings.json is not enough, because the
+    // farm's own children print the connection string when a query fails, and
+    // that lands in the service logs and in services.json's recentLogs.
+    const settings = normalizeSettings({ embeddedPostgresPassword: 'sup3r-s3cret-passphrase' });
+    const databaseUrl = embeddedDatabaseUrl(55_432, settings.embeddedPostgresPassword);
+    const leaky: FleetSnapshot = {
+        ...snapshot,
+        services: [{
+            ...snapshot.services[0]!,
+            detail: `could not connect to ${databaseUrl}`,
+            recentLogs: [{ at: 0, stream: 'err', text: `FATAL: password authentication failed for ${databaseUrl}` }],
+        }],
+    };
+
+    const files = buildDiagnostics({
+        settings, databaseUrl, snapshot: leaky, appVersion: '0.1.0',
+        repoRoot: '/farm', userData: '/data', compiled: true,
+    });
+    const whole = JSON.stringify(files);
+
+    assert.ok(!whole.includes('sup3r-s3cret-passphrase'), 'the password is gone from every file');
+    assert.ok(!whole.includes(databaseUrl), 'and so is the connection string built from it');
+    assert.match(files['services.json'] ?? '', /password authentication failed/, 'the failure itself survives');
+});
+
+test('the scrubber also catches the percent-encoded spelling a URL puts on the wire', () => {
+    const scrub = secretScrubber(secretsOf(
+        normalizeSettings({ embeddedPostgresPassword: 'a+b/c=secret' }), '',
+    ));
+
+    assert.equal(scrub('url=a%2Bb%2Fc%3Dsecret end'), `url=${REDACTED} end`);
+    assert.equal(scrub('raw a+b/c=secret end'), `raw ${REDACTED} end`);
+    assert.equal(scrub('nothing to hide'), 'nothing to hide');
+});
+
+test('the scrubber ignores empty and implausibly short secrets', () => {
+    // An eight-character floor: a two-character "secret" would blank out half the
+    // log and leave the operator with a diagnostics bundle nobody can read.
+    const scrub = secretScrubber(['', '  ', 'abc', 'long-enough-secret']);
+    assert.equal(scrub('abc is fine, long-enough-secret is not'), `abc is fine, ${REDACTED} is not`);
+});
+
+test('redaction is driven by the key name, so a secret added later is covered', () => {
+    const redacted = redactSettings({
+        ...normalizeSettings({}),
+        // A field the app does not have yet, standing in for the next one added.
+        apiToken: 'tok_live_123456',
+        xcodeOrgId: 'ABCDE12345',
+    } as never);
+
+    assert.equal(redacted.apiToken, REDACTED);
+    assert.equal(redacted.xcodeOrgId, 'ABCDE12345', 'an Xcode org id is not a credential');
+    assert.equal(redacted.xcodeSigningId, 'Apple Development');
 });
