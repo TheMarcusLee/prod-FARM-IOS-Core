@@ -194,11 +194,24 @@ body{font:15px system-ui,sans-serif;margin:0;background:#f6f7f9;color:#17202a}na
 <body><nav><a href="/">Devices</a><a href="/tasks">Tasks</a><a href="/docs">API</a>${extra}${logout}</nav><main>${body}</main><footer style="max-width:1100px;margin:24px auto;padding:16px 20px;color:#94a3b8;font-size:12px">${FOOTER_HTML}</footer></body></html>`;
 }
 
+/**
+ * `redactDevice` drops the unlock passcode, but `android.bridgeToken` is a
+ * credential too — it is what authenticates control of the accessibility
+ * bridge on that phone — and it was going out with every device response. Same
+ * treatment: a boolean saying whether one is configured, never the value.
+ */
+export function publicDevice<T extends { passcode?: string; android?: AndroidDeviceConfig }>(device: T) {
+    const redacted = redactDevice(device);
+    if (!redacted.android) return redacted;
+    const { bridgeToken, ...android } = redacted.android;
+    return { ...redacted, android: { ...android, hasBridgeToken: Boolean(bridgeToken) } };
+}
+
 async function registeredWithStatus() {
     const [registered, connected] = await Promise.all([loadRegisteredDevices(), discoverConnectedDevices()]);
     const online = new Map(connected.map((device) => [device.udid, device]));
     return registered.map((device) => ({
-        ...redactDevice(device),
+        ...publicDevice(device),
         connected: device.disabled ? null : online.get(device.udid) ?? null,
     }));
 }
@@ -501,7 +514,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
                 devices.push(device);
                 return device;
             });
-            return reply.code(201).send(redactDevice(created));
+            return reply.code(201).send(publicDevice(created));
         },
     );
     app.patch<{ Params: { udid: string }; Body: { name?: string; wdaLocalPort?: number; mjpegLocalPort?: number; passcode?: string; coordinates?: unknown; disabled?: boolean; coordinateProfile?: string; pluginData?: Record<string, JsonObject>; tags?: unknown } }>(
@@ -541,7 +554,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
                 return device;
             });
             remote.forget(request.params.udid);
-            return redactDevice(updated);
+            return publicDevice(updated);
         },
     );
     app.get<{ Params: { udid: string } }>('/api/devices/:udid/coordinates', async (request, reply) => {
