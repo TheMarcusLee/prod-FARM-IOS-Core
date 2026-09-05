@@ -516,3 +516,44 @@ test('twelve pollers on the summary cost one device enumeration, not twelve', as
     for (let call = 0; call < 5; call++) await inject(app, { method: 'GET', url: '/api/fleet/summary' });
     assert.equal(enumerations, 1);
 });
+
+test('stuck executions are swept on a timer and reported once each', async (context) => {
+    const store = createMemoryEventStore();
+    const executions = [
+        // Five minutes past its deadline plus the grace period.
+        executionRow({ id: 'e-stuck', status: 'running', deadlineAt: new Date(NOW.getTime() - 10 * 60_000) }),
+        executionRow({ id: 'e-fine', status: 'running', deadlineAt: new Date(NOW.getTime() + 60_000) }),
+    ];
+    let listed = 0;
+    const scheduler = fakeScheduler({
+        async listExecutions() { listed++; return executions; },
+        async listSchedules() { return []; },
+    } as unknown as Partial<SchedulerRepository>);
+
+    const app = Fastify();
+    context.after(() => app.close());
+    const { registerFleetRoutes } = await import('../src/api/routes/fleet.js');
+    await registerFleetRoutes(app, {
+        scheduler, events: store, now: () => NOW,
+        loadDevices: async () => [device()],
+        connectedUdids: async () => ['udid-a'],
+        deviceStatuses: async () => [],
+        monitorIntervalMs: 5,
+        notifications: {
+            channels: [], minSeverity: 'warning', digestLocalTime: '08:00',
+            digestTimezone: 'UTC', publicBaseUrl: '',
+        },
+    });
+
+    // The sweep is a background timer, not something a request triggers.
+    const stuck = () => store.events.filter((event) => event.kind === 'execution.stuck');
+    await new Promise((resolve) => { setTimeout(resolve, 120); });
+    assert.ok(listed > 1, `the sweep ran ${listed} times`);
+    assert.deepEqual(stuck().map(({ executionId, severity }) => [executionId, severity]),
+        [['e-stuck', 'error']], 'exactly one execution.stuck, however many sweeps ran');
+    assert.equal(stuck()[0]!.deviceUdid, 'udid-a');
+    assert.equal((stuck()[0]!.detail as { deadlineAt: string }).deadlineAt,
+        executions[0]!.deadlineAt.toISOString());
+    // No secrets: the detail carries the task identity and timings, never the payload.
+    assert.deepEqual(Object.keys(stuck()[0]!.detail!).sort(), ['deadlineAt', 'startedAt', 'task']);
+});
