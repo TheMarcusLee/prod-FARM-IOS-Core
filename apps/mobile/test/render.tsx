@@ -19,15 +19,15 @@ export function Providers({ children }: { children: ReactNode }) {
                 insets: { top: 47, left: 0, right: 0, bottom: 34 },
             }}
         >
-            <ThemeProvider>
-                <SettingsProvider>
+            <SettingsProvider>
+                <ThemeProvider>
                     <FarmProvider>
                         <SafetyProvider>
                             <AlertsProvider>{children}</AlertsProvider>
                         </SafetyProvider>
                     </FarmProvider>
-                </SettingsProvider>
-            </ThemeProvider>
+                </ThemeProvider>
+            </SettingsProvider>
         </SafeAreaProvider>
     );
 }

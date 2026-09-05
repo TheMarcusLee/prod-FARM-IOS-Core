@@ -16,6 +16,9 @@ export interface NotificationPreferences {
     kinds: EventKind[] | null;
 }
 
+/** `system` follows the phone; the other two override it. Light is primary. */
+export type ThemePreference = 'system' | 'light' | 'dark';
+
 export interface PersistedSettings {
     /** The MagicDNS name. Primary. */
     tailscaleUrl: string;
@@ -25,6 +28,7 @@ export interface PersistedSettings {
     biometricLock: boolean;
     /** Name this phone registers under, so one lost phone is one revocation. */
     deviceLabel: string;
+    theme: ThemePreference;
     notifications: NotificationPreferences;
 }
 
@@ -36,6 +40,7 @@ const DEFAULTS: PersistedSettings = {
     demoMode: true,
     biometricLock: true,
     deviceLabel: 'this-phone',
+    theme: 'system',
     notifications: {
         enabled: false,
         minSeverity: 'warning',
@@ -100,6 +105,16 @@ export function useSettings(): SettingsValue {
     const value = useContext(SettingsContext);
     if (!value) throw new Error('useSettings must be used inside SettingsProvider');
     return value;
+}
+
+/**
+ * For `ThemeProvider`, which sits inside `SettingsProvider` in the app but is
+ * also rendered on its own in tests and in the error-state screens. It needs
+ * the theme preference when there is one and the system scheme when there is
+ * not — an exception there would be the wrong answer.
+ */
+export function useOptionalSettings(): SettingsValue | null {
+    return useContext(SettingsContext);
 }
 
 export { DEFAULTS as DEFAULT_SETTINGS };

@@ -436,3 +436,53 @@ export interface Bootstrap {
     unacknowledgedCount: number;
     capabilities: Capabilities;
 }
+
+/* ----------------------------------------------------------------- timeline */
+
+/**
+ * Account identity colours, in the order `docs/design/backline.md` lists them.
+ * An account is assigned one by creation order; the name travels on the wire
+ * and each surface resolves it against its own palette.
+ */
+export type AccountColor = 'sage' | 'lilac' | 'coral' | 'sky' | 'mustard' | 'rose' | 'mint' | 'slate';
+
+export const ACCOUNT_COLORS: AccountColor[] = ['sage', 'lilac', 'coral', 'sky', 'mustard', 'rose', 'mint', 'slate'];
+
+/**
+ * One block on the Schedule timeline. `kind: 'execution'` is a run that exists;
+ * `kind: 'plan'` is a schedule's next fire, which has no execution row yet.
+ */
+export interface TimelineClip {
+    id: string;
+    kind: 'execution' | 'plan';
+    /** ISO. `end` is the deadline for a plan and for a run still going. */
+    start: string;
+    end: string;
+    /** An `ExecutionStatus` for a run, a `ScheduleStatus` for a plan. */
+    status: ExecutionStatus | ScheduleStatus | (string & {});
+    /** The posting account this clip belongs to. */
+    account: string;
+    /** What to write on the clip — already sentence case. */
+    label: string;
+    accountColor: AccountColor | (string & {});
+}
+
+/** A track is a phone. `number` is the operator's 01–99 slot handle. */
+export interface TimelineTrack {
+    udid: string;
+    number: string;
+    name: string;
+    clips: TimelineClip[];
+}
+
+/** `GET /api/schedule/timeline?from=&to=` */
+export interface ScheduleTimeline {
+    tracks: TimelineTrack[];
+    /** The farm's clock, so the playhead is not the phone's idea of now. */
+    now: string;
+}
+
+export interface TimelineQuery {
+    from: string;
+    to: string;
+}

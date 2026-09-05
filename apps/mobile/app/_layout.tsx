@@ -39,15 +39,18 @@ function RootStack() {
             <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
             <Stack
                 screenOptions={{
-                    headerStyle: { backgroundColor: colors.background },
+                    headerStyle: { backgroundColor: colors.bg },
                     headerTintColor: colors.text,
-                    headerTitleStyle: { color: colors.text },
-                    contentStyle: { backgroundColor: colors.background },
+                    headerTitleStyle: { color: colors.text, fontSize: 17, fontWeight: '700' },
+                    headerShadowVisible: false,
+                    contentStyle: { backgroundColor: colors.bg },
                 }}
             >
                 {/* `title` is what the detail screens' back button reads. */}
-                <Stack.Screen name="(tabs)" options={{ headerShown: false, title: 'Fleet' }} />
-                <Stack.Screen name="device/[udid]" options={{ title: 'Device' }} />
+                <Stack.Screen name="(tabs)" options={{ headerShown: false, title: 'Wall' }} />
+                {/* The device screen draws its own header: back · number and
+                    name · state line · Stop, per PhoneDevice.dc.html. */}
+                <Stack.Screen name="device/[udid]" options={{ headerShown: false }} />
                 <Stack.Screen name="execution/[id]" options={{ title: 'Execution' }} />
             </Stack>
         </>
@@ -57,8 +60,10 @@ function RootStack() {
 export default function RootLayout() {
     return (
         <SafeAreaProvider>
-            <ThemeProvider>
-                <SettingsProvider>
+            {/* Settings is outermost: the theme is one of the things the
+                operator sets, so `ThemeProvider` reads from it. */}
+            <SettingsProvider>
+                <ThemeProvider>
                     <FarmProvider>
                         <SafetyProvider>
                             <AlertsProvider>
@@ -66,8 +71,8 @@ export default function RootLayout() {
                             </AlertsProvider>
                         </SafetyProvider>
                     </FarmProvider>
-                </SettingsProvider>
-            </ThemeProvider>
+                </ThemeProvider>
+            </SettingsProvider>
         </SafeAreaProvider>
     );
 }
