@@ -23,6 +23,8 @@ export interface RegisteredDevice {
     coordinates?: DeviceCoordinateOverrides;
     /** When true the farm keeps the entry but stops supervising it — no WDA, no worker, no discovery polling. */
     disabled?: boolean;
+    /** Free-form fleet labels used to filter and bulk-select devices on /fleet. */
+    tags?: string[];
     pluginData: Record<string, JsonObject>;
 }
 

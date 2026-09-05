@@ -74,3 +74,4 @@ export type ScheduleRow = typeof schedules.$inferSelect;
 export type ExecutionRow = typeof executions.$inferSelect;
 
 export * from './schema-content.js';
+export * from './schema-events.js';
