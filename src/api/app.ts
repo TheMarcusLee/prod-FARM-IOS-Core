@@ -22,6 +22,7 @@ import type {
 import { type RemoteAction } from '../devices/wda-remote.js';
 import { requestWdaService } from '../devices/wda-service-client.js';
 import type { DeviceConnectionStatus } from '../devices/connection-manager.js';
+import { SESSION_COOKIE } from '../auth/local.js';
 import type { AuthProvider, PluginNavLink } from '../plugin.js';
 import type { PluginRegistry } from '../registry.js';
 import type { CreateTaskInput, JsonObject, ScheduleTiming } from '../types.js';
@@ -168,6 +169,17 @@ function uploadFileSizeLimit(): number {
     return positiveBytes('PHONE_FARM_UPLOAD_LIMIT', 2 * 1024 * 1024 * 1024);
 }
 
+/**
+ * The CSRF guard steps aside for `Authorization: Bearer …` because a browser
+ * form cannot set that header. A request that also carries a session cookie is
+ * a browser, though, whatever header it managed to attach — so the exemption is
+ * for bearer-only requests, never for anything the cookie could authenticate.
+ */
+function bearerOnlyRequest(request: FastifyRequest): boolean {
+    if (!request.headers.authorization?.startsWith('Bearer ')) return false;
+    return !(request.headers.cookie ?? '').split(';').some((part) => part.trim().startsWith(`${SESSION_COOKIE}=`));
+}
+
 function csrfBlocked(reply: FastifyReply): FastifyReply {
     return reply.code(403).send({
         error: 'Cross-origin write blocked. Send an Authorization: Bearer token for API clients, '
@@ -308,7 +320,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     // launch tasks). A Bearer token means a real API client, not a browser form.
     app.addHook('onRequest', async (request, reply) => {
         if (['GET', 'HEAD', 'OPTIONS'].includes(request.method)) return;
-        if (request.headers.authorization?.startsWith('Bearer ')) return;
+        if (bearerOnlyRequest(request)) return;
         const origin = request.headers.origin;
         if (!origin) return csrfBlocked(reply);
         const configured = [process.env.PUBLIC_ORIGIN, ...(process.env.PHONE_FARM_TRUSTED_ORIGINS ?? '').split(',')]
