@@ -105,7 +105,7 @@
 
 .bl-drop {
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
-    padding: 26px; border-radius: 10px; border: 1.5px dashed var(--bl-line-strong); background: var(--bl-panel-2);
+    padding: 20px; border-radius: 10px; border: 1.5px dashed var(--bl-line-strong); background: var(--bl-panel-2);
     color: var(--bl-text-3); font-size: 12.5px; text-align: center;
 }
 .bl-drop.is-over { border-color: var(--bl-accent); background: var(--bl-accent-soft); color: var(--bl-accent); }
@@ -115,17 +115,17 @@
 .bl-inline-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
 .bl-inline-form .bl-field { flex: 1 1 150px; }
 
-.bl-lib-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 12px; }
+.bl-lib-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(122px, 1fr)); gap: 10px; }
 .bl-lib-card { display: flex; flex-direction: column; gap: 6px; padding: 6px; border-radius: 12px; border: 1.5px solid var(--bl-line); background: var(--bl-panel); }
 .bl-lib-card.is-failed { border-color: var(--bl-bad); }
 .bl-lib-poster { aspect-ratio: 9 / 16; border-radius: 8px; background: var(--bl-panel-2); overflow: hidden; display: flex; align-items: center; justify-content: center; color: var(--bl-text-4); font-size: 11px; position: relative; }
 .bl-lib-poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .bl-lib-badge { position: absolute; right: 6px; bottom: 6px; padding: 2px 6px; border-radius: 6px; background: rgba(30, 36, 48, .72); color: #fff; font-size: 10.5px; font-weight: 600; }
 .bl-lib-title { font-size: 12.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bl-lib-meta { font-size: 11.5px; color: var(--bl-text-3); display: flex; flex-wrap: wrap; gap: 6px; }
+.bl-lib-meta { font-size: 11.5px; color: var(--bl-text-3); display: flex; flex-wrap: wrap; gap: 4px 8px; }
 .bl-lib-tags { display: flex; flex-wrap: wrap; gap: 4px; }
 .bl-tagchip { padding: 2px 7px; border-radius: 999px; border: 1px solid var(--bl-line); font-size: 11px; color: var(--bl-text-3); }
-.bl-lib-actions { display: flex; gap: 6px; }
+.bl-lib-actions { display: flex; gap: 6px; margin-top: auto; }
 .bl-lib-actions .bl-btn { flex: 1; }
 
 .bl-rule { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--bl-line); }
@@ -146,7 +146,7 @@
 .bl-rb-name { min-width: 0; flex: 1; }
 .bl-rb-name a { color: var(--bl-text); font-weight: 500; }
 .bl-rb-name p { color: var(--bl-text-3); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bl-rb-col { width: 96px; color: var(--bl-text-3); flex: none; }
+.bl-rb-col { width: 116px; color: var(--bl-text-3); flex: none; white-space: nowrap; }
 .bl-rb-actions { display: flex; gap: 6px; flex: none; }
 .bl-rb-banner { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: var(--bl-bad-soft); border: 1px solid var(--bl-bad-line); color: #8a2f22; font-size: 12.5px; }
 .bl-rb-banner .bl-rec-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bl-bad); flex: none; animation: bl-pulse 1.6s ease-in-out infinite; }
@@ -156,8 +156,10 @@
 .bl-steps { width: 100%; border-collapse: collapse; font-size: 12px; }
 .bl-steps th { text-align: left; font-weight: 500; color: var(--bl-text-3); padding: 6px 6px; border-bottom: 1px solid var(--bl-line); white-space: nowrap; }
 .bl-steps td { padding: 5px 6px; border-bottom: 1px solid var(--bl-hairline); vertical-align: middle; }
-.bl-steps input[type="text"], .bl-steps input:not([type]), .bl-steps select { width: 100%; min-width: 54px; height: 28px; padding: 0 7px; border-radius: 6px; border: 1px solid var(--bl-line); background: var(--bl-panel); font-size: 12px; }
+.bl-steps input[type="text"], .bl-steps input:not([type]), .bl-steps select { width: 100%; min-width: 56px; height: 28px; padding: 0 7px; border-radius: 6px; border: 1px solid var(--bl-line); background: var(--bl-panel); font-size: 12px; }
 .bl-steps .bl-steps-pair { display: flex; gap: 4px; }
+.bl-steps select { min-width: 92px; }
+.bl-rb-record .bl-field { flex: 0 1 240px; }
 .bl-steps td:first-child { color: var(--bl-text-4); width: 26px; }
 .bl-rb-live { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--bl-text-2); max-height: 220px; overflow: auto; }
 .bl-rb-live li { padding: 4px 0; border-bottom: 1px solid var(--bl-hairline); }

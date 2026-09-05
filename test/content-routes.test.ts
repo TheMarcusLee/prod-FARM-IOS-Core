@@ -10,6 +10,7 @@ import { defaultDashboardTheme } from '../src/dashboard-theme.js';
 import { PluginRegistry } from '../src/registry.js';
 import type { SchedulerRepository } from '../src/scheduler/repository.js';
 import { renderRules, renderSets, renderTemplates } from '../src/content/page.js';
+import { ACCOUNT_PALETTE } from '../src/schedule/accounts.js';
 import type { CaptionTemplateRow, ContentItemRow, ContentSetRow, DripRuleRow } from '../src/database/schema.js';
 import type { ContentStore } from '../src/content/store.js';
 
@@ -133,10 +134,30 @@ test('the dashboard links to /content and the page renders', async (context) => 
     assert.match(page.body, /<h1>Content<\/h1>/);
     assert.doesNotMatch(page.body, /__FOOTER__|__PLUGIN_NAV__|__AUTH_NAV__/);
     assert.match(page.body, /\/assets\/content\.js/);
+    // The page renders through the Backline shell, with the ingest dropzone and
+    // the four HTMX listings the fragments swap themselves into.
+    assert.match(page.body, /<title>Content · Backline<\/title>/);
+    assert.match(page.body, /class="bl-nav"/);
+    assert.match(page.body, /id="upload-drop"/);
+    assert.match(page.body, /Drop clips and images here/);
+    for (const id of ['content-library', 'content-sets', 'caption-templates', 'drip-rules']) {
+        assert.match(page.body, new RegExp(`id="${id}"`), id);
+    }
+    assert.doesNotMatch(page.body, /iOS Farm|Phone Farm|Handler|Agniverse|gethandler/);
 
     const script = await inject(app, { method: 'GET', url: '/assets/content.js' });
     assert.equal(script.statusCode, 200);
     assert.match(String(script.headers['content-type']), /javascript/);
+});
+
+test('a drip rule row carries its account colour and its window', () => {
+    const html = renderRules([{ rule: dripRule(), plans: [] }]);
+    assert.match(html, /id="drip-rules"/);
+    // The first account registered gets the first palette entry, the same one
+    // the Schedule timeline paints its clips with.
+    assert.match(html, new RegExp(`background:${ACCOUNT_PALETTE[0]?.fill}`));
+    assert.match(html, /class="bl-window"/);
+    assert.match(html, /data-toggle-rule="rule-1"/, 'the page script\'s hooks survive the reskin');
 });
 
 test('content API routes answer from an injected store', async (context) => {
