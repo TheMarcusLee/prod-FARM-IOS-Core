@@ -192,8 +192,22 @@ function registerRateLimits(app: FastifyInstance): void {
 
 export const THUMBNAIL_MAX_PX = 320;
 
-function thumbnailCachePath(sha256: string): string {
-    return path.join(dataRoot(), 'thumbnails', `${sha256}.jpg`);
+const CACHE_KEY_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+
+/** The digest names a cache file, so it has to be a bare name and not a relative path. */
+function thumbnailCachePath(sha256: string): string | null {
+    return CACHE_KEY_PATTERN.test(sha256) ? path.join(dataRoot(), 'thumbnails', `${sha256}.jpg`) : null;
+}
+
+/**
+ * `relativePath` comes from the assets table, where the API and the MCP tools
+ * write a generated `uploads/<uuid>`. The content ingest path writes rows too,
+ * so this route reads a value it did not itself produce — resolve it and check
+ * containment the same way the poster route does, rather than trusting it.
+ */
+function containedPath(root: string, relativePath: string): string | null {
+    const resolved = path.resolve(root, relativePath);
+    return resolved === root || resolved.startsWith(`${root}${path.sep}`) ? resolved : null;
 }
 
 async function exists(file: string): Promise<boolean> {
@@ -433,18 +447,19 @@ export async function registerMobileRoutes(app: FastifyInstance, options: Mobile
         const asset = await active.thumbnailAsset(request.params.id);
         if (!asset) return reply.code(404).send({ error: 'Asset not found' });
         const cached = thumbnailCachePath(asset.sha256);
+        if (!cached) return reply.code(404).send({ error: 'The asset file is missing' });
         const send = () => reply.type('image/jpeg').header('cache-control', 'private, max-age=300')
             .send(createReadStream(cached));
         if (await exists(cached)) return send();
 
-        const source = path.resolve(dataRoot(), asset.relativePath);
-        if (!await exists(source)) return reply.code(404).send({ error: 'The asset file is missing' });
+        const source = containedPath(dataRoot(), asset.relativePath);
+        if (!source || !await exists(source)) return reply.code(404).send({ error: 'The asset file is missing' });
         await mkdir(path.dirname(cached), { recursive: true });
         // Rendered beside the cache entry and renamed in, so a crashed ffmpeg
         // never leaves a truncated JPEG that every later request would serve.
         const temporary = `${cached}.${process.pid}.tmp`;
         const item = asset.mimeType.startsWith('video/') ? await active.itemForAsset(asset.id) : null;
-        const poster = item?.posterPath ? path.resolve(contentRoot(), item.posterPath) : null;
+        const poster = item?.posterPath ? containedPath(contentRoot(), item.posterPath) : null;
         try {
             if (poster && await exists(poster)) await writeImageThumbnail(poster, temporary);
             else if (asset.mimeType.startsWith('video/')) await writeVideoThumbnail(source, temporary);
