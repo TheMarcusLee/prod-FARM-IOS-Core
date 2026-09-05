@@ -1,12 +1,13 @@
 # Mobile API contract
 
-The surface the companion app codes against. Endpoints marked **planned** are
-being implemented in parallel (fleet page, events/SSE, drip queue, MCP server);
-their shapes here are the agreed contract, not a proposal. Endpoints marked
-**gap** do not exist yet and are requested by the app — see
-`docs/companion-app-plan.md` §6.
+The surface the companion app codes against. **Everything in this document is
+live today.** The fleet page, events/SSE, the drip queue, the MCP server, push
+registration and event acknowledgement have all landed; where a shape here once
+described a proposal, it now describes the code.
 
-Everything else is live today in `src/api/app.ts`.
+Routes live in `src/api/app.ts` and `src/api/routes/*.ts`. The dashboard's own
+`/docs` page is **not** generated from the routing table — it is a hand-written
+stub in `src/api/app.ts` that names four endpoints. This file is the contract.
 
 ## Base
 
@@ -22,18 +23,21 @@ Everything else is live today in `src/api/app.ts`.
 Tokens are minted on the Mac:
 
 ```sh
-npm run token:create -- --name "marcus-iphone"   # planned CLI, prints the token once
+npm run token:create -- --name marcus-iphone     # prints the token once
 ```
 
 ```http
 GET /api/devices HTTP/1.1
-Authorization: Bearer pf_live_9f3c…
+Authorization: Bearer pf_kJ8vQ2…
 ```
 
-Every token has a name and an id, and every authenticated request carries that
-identity server-side (`request.apiToken`), which is what per-device revocation
-and the rate limits below key on. A cookie session is `{ id: "session",
-name: "local" }`.
+Tokens are `pf_` followed by 43 base64url characters. Names match
+`^[A-Za-z0-9._-]{1,64}$`, so no spaces or quotes. Every token has a name and an
+id, and every authenticated request carries that identity server-side
+(`request.apiToken`), which is what per-device revocation and the rate limits
+below key on. A cookie session is `{ id: "session", name: "local" }`; a request
+to a farm with **no** auth provider configured is `{ id: "local", name: "local" }`.
+Those are three separate identities for acks and rate limits.
 
 Password login exists only for the browser dashboard. The app must never use it.
 
@@ -77,7 +81,7 @@ maps a thrown `statusCode` through, defaulting to `400`.
 | `404` | Unknown device, schedule, execution, or asset |
 | `409` | State conflict — remote input during a run, disabling a busy device, resuming a completed schedule, retrying a non-retryable execution |
 | `429` | Rate limit spent — see below. Carries `x-ratelimit-limit`, `x-ratelimit-remaining`, `x-ratelimit-reset` and `retry-after` |
-| `503` | Subsystem unavailable — device flapping (screenshot), registration not configured, stream down |
+| `503` | Subsystem unavailable — device flapping (screenshot), registration not configured, stream down, a thumbnail that cannot be rendered, or **no scheduler database** (which is what `/api/events*`, `/api/push/*`, `/api/content/queue*` and `/api/assets/:id/thumbnail` all answer without one) |
 
 `503` from `/remote/screenshot` has an **empty body**, not JSON — it is
 deliberately quiet so a 5 s poll does not fill the log. Treat it as "no frame
@@ -85,12 +89,16 @@ right now" and keep the previous image.
 
 ### Pagination
 
-Keyset everywhere, in two dialects:
+Keyset on the three list endpoints that have it, in two dialects:
 
 | Family | Style |
 | --- | --- |
-| `/api/schedules`, `/api/executions` | Keyset (**implemented**). `?limit=` (default and max 200, newest first) plus `?before=<row id or ISO createdAt>`, and the optional `?deviceUdid=`. The next cursor comes back in the **`X-Next-Before`** response header, not in the body. Omit both parameters and the response is exactly what it always was: 200 newest rows and no header. |
-| `/api/events` (planned) | Keyset. `?limit=` (default 50, max 200) plus `?before=<eventId>` to walk backwards, `?since=`/`?until=` for a time window; the cursor is `nextBefore` in the body. |
+| `/api/schedules`, `/api/executions` | `?limit=` (default and max 200, newest first) plus `?before=<row id or ISO createdAt>`, and the optional `?deviceUdid=`. The next cursor comes back in the **`x-next-before`** response header, not in the body — header names are case-insensitive on the wire, but index it lowercase in JavaScript. Omit both parameters and the response is exactly what it always was: 200 newest rows and no header. |
+| `/api/events` | `?limit=` (default 100, max 500) plus `?before=<eventId>` to walk backwards, `?since=`/`?until=` for a time window (both inclusive); the cursor is `nextBefore` in the body. |
+
+Not everything is paginated: `/api/content/queue` is a plain `?limit=` window
+over the last 24 hours with no cursor, and `/api/content/items`,
+`/api/drip/plans` and `/api/runbooks` return everything.
 
 Event ids are monotonic, so `before` is a stable cursor across inserts. For
 schedules and executions the cursor is `(createdAt, id)`, so two rows created in
@@ -180,8 +188,7 @@ is written to be operator-facing.
 ### `PATCH /api/devices/:udid`
 
 Whitelisted fields only: `name`, `wdaLocalPort`, `mjpegLocalPort`, `passcode`,
-`coordinates`, `disabled`, `coordinateProfile`, `pluginData`, and **planned**
-`tags`.
+`coordinates`, `disabled`, `coordinateProfile`, `pluginData`, `tags`.
 
 ```http
 PATCH /api/devices/R58N12ABCDE
@@ -191,11 +198,13 @@ Content-Type: application/json
 { "disabled": true }
 ```
 
-Returns the updated, redacted device. `409` if the device has a queued or
-running execution. `passcode: ""` clears the passcode; omitting it leaves it —
-the app should never send this field.
+Returns the updated, redacted device. `409` —
+`"Stop the running automation before disconnecting this device"` — only when the
+body sets `disabled: true` while an execution is queued or running; every other
+field can be patched during a run. `passcode: ""` clears the passcode; omitting
+it leaves it — the app should never send this field.
 
-`tags` (planned) replaces the whole array:
+`tags` replaces the whole array (trimmed, de-duplicated, at most 20):
 
 ```json
 { "tags": ["warm-up", "us-east", "slot-row-2"] }
@@ -251,81 +260,75 @@ Needed to map a tap in the app's image view back to device coordinates.
 | `home` | — | iOS, Android |
 | `back` | — | Android only |
 | `text` | `text` | Android only |
+| `lock`, `wake`, `unlock` | — | iOS only |
+| `volumeUp`, `volumeDown` | — | iOS only |
 
 Returns `{ "ok": true }`. `409` — `"Remote input is disabled while automation
 is running"` — whenever the device has a queued or running execution. This
 guard is server-side and non-negotiable; the app's safety toggle is a second
 lock, not the first.
 
-`400` with `"\"back\" is an iOS-only remote action"`-style text for an
-unsupported verb on the platform.
+An unsupported verb on **Android** is a clean `400` naming it. Sending an
+Android-only verb (`back`, `text`) to an **iOS** device is not currently
+validated — it falls through to WDA and fails opaquely. Send only what the
+table allows for the device's platform.
 
 `GET /api/devices/:udid/remote/stream` (MJPEG) exists but the app should not
 use it — see the plan's §5 note on battery and background limits.
 
 ---
 
-## Fleet — planned
+## Fleet
 
 ### `GET /api/fleet/summary`
 
-One request that backs the whole Fleet screen. Shape as agreed with the fleet
-page work:
+Aggregate counters only — it carries **no per-device array**:
 
 ```json
 {
   "generatedAt": "2026-09-05T09:41:12.004Z",
-  "counts": { "total": 12, "online": 10, "busy": 3, "offline": 1, "disabled": 1, "error": 1 },
-  "devices": [
-    {
-      "udid": "00008030-001A2B3C0E88802E",
-      "name": "iPhone 8 · slot 1",
-      "platform": "ios",
-      "tags": ["warm-up"],
-      "state": "busy",
-      "connection": { "physical": "connected", "wda": "ready", "message": "WDA is ready" },
-      "currentExecution": {
-        "id": "0b6d…",
-        "taskType": "doomscroll",
-        "status": "running",
-        "startedAt": "2026-09-05T09:38:02.110Z",
-        "summary": "Doomscroll for 12 minutes"
-      },
-      "nextRunAt": "2026-09-05T14:00:00.000Z",
-      "lastError": null
-    }
-  ]
+  "devices": { "total": 12, "online": 10, "offline": 1, "disabled": 1 },
+  "byPlatform": { "ios": 9, "android": 3 },
+  "running": 3,
+  "queued": 2,
+  "stuck": 0,
+  "failedLast24h": 1,
+  "succeededLast24h": 27,
+  "plannedNext24h": 14
 }
 ```
 
-`state` is the single derived badge the app renders: `online | busy | offline |
-disabled | error`. The derivation is one pure function —
-`derivedDeviceState` in `src/fleet/summary.ts`, precedence
-`disabled → offline → error → busy → online` — and
-`GET /api/mobile/bootstrap` already returns it per device, so the app never
-re-derives a badge from four fields.
+The per-device badge the app renders — `online | busy | offline | disabled |
+error` — comes from **`GET /api/mobile/bootstrap`**, which calls the one pure
+function `derivedDeviceState` (`src/fleet/summary.ts`, precedence
+`disabled → offline → error → busy → online`). Use bootstrap for the device
+list and this endpoint for the header counters; do not re-derive a badge from
+four fields.
 
 ### `POST /api/schedules/bulk`
 
-```json
+```jsonc
 {
-  "deviceUdids": ["00008030-…", "R58N12ABCDE"],
-  "tags": ["warm-up"],
+  "deviceUdids": ["00008030-…", "R58N12ABCDE"],   // required, non-empty, max 200
   "task": { "pluginId": "com.git-agni.tiktok", "taskType": "doomscroll", "taskVersion": 1, "payload": { "minutes": 12 } },
   "timing": { "kind": "daily", "localTime": "09:30", "timezone": "America/New_York" },
-  "runWindowMinutes": 30
+  "stagger": { "kind": "fixed", "minutes": 10 },  // or { "kind": "random", "windowMinutes": 45 }; 0–1440
+  "runWindowMinutes": 30,                         // optional
+  "overrides": { "00008030-…": { "account": "@one" } }  // optional per-device payload patch
 }
 ```
 
-`deviceUdids` and `tags` are unioned. Response reports per-device outcome so a
-partial failure is legible:
+There is **no `tags` field** — select the devices client-side and send udids.
+The response reports every device, in order:
 
 ```json
-{
-  "created": [{ "deviceUdid": "00008030-…", "scheduleId": "8c1f…" }],
-  "failed":  [{ "deviceUdid": "R58N12ABCDE", "error": "This device is disabled — activate it before scheduling automation" }]
-}
+{ "created": 1, "failed": 1, "results": [
+  { "deviceUdid": "00008030-…", "ok": true, "scheduleId": "8c1f…", "offsetMinutes": 0, "nextRunAt": "…" },
+  { "deviceUdid": "R58N12ABCDE", "ok": false, "offsetMinutes": 10, "error": "This device is disabled — activate it before scheduling automation" }
+] }
 ```
+
+`201` when at least one schedule was created, `400` when none were.
 
 ---
 
@@ -460,45 +463,53 @@ first and cap what you hold in memory.
 
 ### `POST /api/executions/:id/retry`
 
-Returns the new execution row, or `409` `"Execution is not retryable"`.
+Returns the new execution row, or `409` `"Execution is not retryable"`. Note
+that an **unknown** execution id also answers `409`, not `404` — the repository
+returns the same "no row produced" result for both cases.
 
 ---
 
-## Events — planned
+## Events
 
 ### `GET /api/events`
 
 | Query | Meaning |
 | --- | --- |
 | `since` | ISO timestamp, inclusive lower bound |
-| `until` | ISO timestamp, exclusive upper bound |
-| `kind` | Repeatable; one of the kinds below |
+| `until` | ISO timestamp, **inclusive** upper bound |
+| `kind` | **One** kind, not repeatable — a repeated parameter is a `400` |
 | `deviceUdid` | Filter to one device |
 | `severity` | `info \| warning \| error` |
-| `limit` | Default 50, max 200 |
+| `severityFloor` | Everything at or above a severity |
+| `acknowledged` | `false` returns only events above the caller's ack mark |
+| `limit` | Default 100, max 500 |
 | `before` | Keyset cursor — return events with id < this |
+
+Event ids are **integers** (a Postgres `bigint` identity column), not strings.
 
 ```json
 {
   "events": [
     {
-      "id": "01J9Z3M8QF7B0C2S4T6V8XYZAB",
+      "id": 4218,
       "kind": "execution.failed",
       "severity": "error",
       "deviceUdid": "00008030-001A2B3C0E88802E",
       "executionId": "0b6d1c77-5e1a-4d33-9b8e-2f5a9c0f7e42",
       "scheduleId": "8c1f6b2e-9c0a-4a5f-9a1e-1f0f4b6d7c11",
       "title": "Doomscroll failed on iPhone 8 · slot 1",
-      "message": "TikTok did not reach the feed after 3 attempts",
-      "data": { "attempt": 3, "exitCode": 1 },
+      "detail": { "attempt": 3, "exitCode": 1 },
       "createdAt": "2026-09-05T13:44:02.118Z"
     }
   ],
-  "nextBefore": "01J9Z3M8QF7B0C2S4T6V8XYZAB"
+  "nextBefore": 4218
 }
 ```
 
-`nextBefore` is absent when the page is the last one.
+The two fields are `title` and `detail`; there is no `message` and no `data`.
+`nextBefore` is always present and is `null` unless the page came back full —
+so an exactly-full last page still returns a cursor, and the next request is
+what tells you the list is exhausted.
 
 **Kinds and their default severity**
 
@@ -506,16 +517,16 @@ Returns the new execution row, or `409` `"Execution is not retryable"`.
 | --- | --- | --- |
 | `execution.started` | info | `deviceUdid`, `executionId`, `scheduleId` |
 | `execution.succeeded` | info | as above |
-| `execution.failed` | error | as above + `data.exitCode` |
+| `execution.failed` | error | as above + `detail.exitCode` |
 | `execution.stopped` | warning | as above |
-| `execution.stuck` | warning | as above + `data.stuckForSeconds` |
+| `execution.stuck` | **error** | as above + `detail.task`, `detail.deadlineAt`, `detail.startedAt` |
 | `device.connected` | info | `deviceUdid` |
 | `device.disconnected` | warning | `deviceUdid` |
-| `device.error` | error | `deviceUdid` + `data.message` |
+| `device.error` | error | `deviceUdid` + `detail.message` |
 | `schedule.created` | info | `scheduleId`, `deviceUdid` |
-| `schedule.paused` | info | `scheduleId` |
-| `schedule.cancelled` | info | `scheduleId` |
-| `digest.daily` | info | `data` = roll-up counters, no device |
+| `schedule.paused` | info | `scheduleId`, `deviceUdid` |
+| `schedule.cancelled` | info | `scheduleId`, `deviceUdid` |
+| `digest.daily` | info | `detail` = roll-up counters, no device |
 
 Only `execution.failed`, `device.disconnected`, `device.error` and
 `execution.stuck` should be push-worthy by default.
@@ -525,9 +536,11 @@ Only `execution.failed`, `device.disconnected`, `device.error` and
 Server-Sent Events. `Accept: text/event-stream`, same bearer token.
 
 ```
-id: 01J9Z3M8QF7B0C2S4T6V8XYZAB
+: connected
+
+id: 4218
 event: execution.failed
-data: {"id":"01J9Z3M8QF7B0C2S4T6V8XYZAB","kind":"execution.failed","severity":"error","deviceUdid":"00008030-…","title":"Doomscroll failed on iPhone 8 · slot 1","message":"TikTok did not reach the feed after 3 attempts","createdAt":"2026-09-05T13:44:02.118Z"}
+data: {"id":4218,"kind":"execution.failed","severity":"error","deviceUdid":"00008030-…","title":"Doomscroll failed on iPhone 8 · slot 1","detail":{"exitCode":1},"createdAt":"2026-09-05T13:44:02.118Z"}
 
 : heartbeat
 
@@ -538,8 +551,11 @@ data: {"id":"01J9Z3M8QF7B0C2S4T6V8XYZAB","kind":"execution.failed","severity":"e
 - A comment line (`: heartbeat`) every **15 s** keeps intermediaries and
   Tailscale's idle handling from dropping the socket. Treat >40 s of silence as
   a dead connection and reconnect.
-- Reconnect with `Last-Event-ID: <id>` to replay everything after that id.
-  Persist the last id the app *rendered*, not the last it received.
+- Reconnect with `Last-Event-ID: <id>` — or `?lastEventId=<id>`, for a client
+  that cannot set the header — to replay everything after that id. Persist the
+  last id the app *rendered*, not the last it received.
+- The stream is polled from the table once a second, so an event written by the
+  `worker` process reaches a client attached to `web`.
 
 React Native's `fetch` does not stream. Use `react-native-sse` or an
 `XMLHttpRequest` reader; either way the header must be set manually, since
@@ -547,7 +563,7 @@ React Native's `fetch` does not stream. Use `react-native-sse` or an
 
 ---
 
-## Push registration — gap
+## Push registration
 
 ### `POST /api/push/register`
 
@@ -682,8 +698,8 @@ Alerts tabs need before the first user interaction.
   "recentEvents": [],
   "unacknowledgedCount": 0,
   "capabilities": {
-    "push": false,
-    "eventAck": false,
+    "push": true,
+    "eventAck": true,
     "thumbnails": true,
     "contentQueue": true,
     "tokens": true,
@@ -706,13 +722,14 @@ Notes on the implemented shape, which differs from the first sketch of it:
   `connection` here is only `{ connected }`; the full control-channel record is
   still `GET /api/devices/:udid/connection`.
 - `recentEvents` is the newest 20 events in `/api/events` shape.
-- `unacknowledgedCount` is `0` until event acknowledgement lands; the
-  `eventAck` capability says so, so the app should not render an unread badge
-  while it is `false`.
-- `capabilities` keys are the six above. `push` flips to `true` with
-  `POST /api/push/register`; `eventAck` with `POST /api/events/ack`.
+- `unacknowledgedCount` is computed for real, from the calling token's ack mark.
+- `capabilities` keys are the six above. `push`, `eventAck`, `thumbnails`,
+  `contentQueue` and `tokens` are hard-coded `true` on any farm new enough to
+  serve this endpoint — they are there so an older farm can answer `false`, not
+  because they flip at runtime. `rateLimits` is the one dynamic key: it is
+  `false` when `RATE_LIMITS=off`.
 
-## Event acknowledgement — gap
+## Event acknowledgement
 
 ### `POST /api/events/ack`
 
@@ -726,12 +743,13 @@ Returns `{ "acknowledged": 14, "unacknowledgedCount": 0 }` — `acknowledged` is
 how many events this call newly covered. The mark is monotonic: an older
 `upToId` is ignored rather than rewinding it.
 
-Event ids are **numeric** on the wire (the `scheduler.events` identity column),
-not the ULID strings the examples above show; `upToId` is a number.
+Event ids are numeric on the wire (the `scheduler.events` identity column);
+`upToId` is a number.
 
-Which token is calling comes from the request's token identity. A cookie
-session, or a loopback request with authentication switched off, shares one
-synthetic `local` identity.
+Which token is calling comes from the request's token identity — a bearer token
+is its own bucket, a browser cookie session is `session`, and a farm with no
+auth provider configured at all is `local`. Those are three different marks, not
+one shared `local`.
 
 ### `GET /api/events/unacknowledged-count`
 
@@ -750,7 +768,7 @@ unchanged.
 
 ---
 
-## Content drip — queue implemented
+## Content drip
 
 ### `GET /api/content/queue`
 
@@ -785,8 +803,10 @@ state the drip queue stores — there is no `approved` column and no migration:
 | `cancelled` | `skipped` |
 | `completed`, or the plan is marked used | `posted` |
 
-So the documented `scheduled` and `failed` values are not emitted today; a
-client should treat any unknown status as `planned` and read `scheduleId`.
+`cancelled` is checked **before** the used marker, so a plan that was skipped
+and later marked used still reports `skipped`. Only these four values are
+emitted; a client should treat any unknown status as `planned` and read
+`scheduleId`.
 
 ### `POST /api/content/queue/:id/approve`
 
@@ -881,6 +901,15 @@ the Settings screen's "can I reach the Mac" check — it is cheap and, unlike
 | --- | --- |
 | `/api/devices/:udid/remote/stream` | MJPEG; holds a socket open per viewer and drains the phone battery. Poll thumbnails instead. |
 | `/api/fragments/*`, `/api/devices/:udid/fragments/*` | HTMX HTML fragments for the dashboard. |
-| `/api/device-registrations/*` | Registration needs the Mac, Xcode, and a cable. Desktop-only. |
+| `/api/device-registrations/*`, `POST /api/devices`, `DELETE /api/devices/:udid`, `POST /api/devices/:udid/checks`, `GET /api/devices/discovered`, `GET /api/devices/:udid/coordinates` | Registration and calibration need the Mac, a cable, and (on iOS) Xcode. Desktop-only. |
 | `/mcp` | Agent surface, not a client API. |
-| `/`, `/tasks`, `/devices/:udid`, `/docs` | Server-rendered HTML. |
+| `/`, `/tasks`, `/fleet`, `/content`, `/runbooks`, `/devices/:udid`, `/devices/register`, `/login`, `/auth/logout`, `/assets/*` | Server-rendered HTML and its browser assets. `/docs` is a hand-written stub, not generated from the routing table — this file is the contract. |
+| `/api/content/*` except `/api/content/queue*`, `/api/drip/*`, `/api/notifications/test` | The content library and alert plumbing are operated from the dashboard. |
+
+### Plugin-registered routes on the device namespace
+
+These sit under `/api/devices/:udid/` but come from plugins, not the core:
+`PATCH …/accounts`, `GET …/posts/current`, `POST …/posts` (TikTok plugin) and
+`GET …/runbook-recording` (runbook plugin). They are not part of this contract
+and can disappear with the plugin. The runbook plugin also owns `/api/runbooks*`
+and `/plugins/com.farm.runbook/*` — see `docs/runbooks.md`.

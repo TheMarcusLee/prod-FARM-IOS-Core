@@ -92,7 +92,7 @@ its next request fails; see `docs/auth.md`.
 | `create_tiktok_post` | `deviceUdid`, `account`, `assetIds` (1–3), `caption?`, `musicUrl?`, `destination`, `timing`, `runWindowMinutes?` | Friendly wrapper over `create_schedule` |
 | `create_doomscroll` | `deviceUdid`, `durationMinutes` (1–180), `personality` (`skimmer`\|`casual`\|`engaged`), `likeEnabled`, `saveEnabled`, `account?`, `timing`, `runWindowMinutes?` | |
 | `set_schedule_status` | `id`, `status` (`active`\|`paused`\|`cancelled`) | Mirrors `POST /api/schedules/:id/status`; a completed or cancelled schedule can only be cancelled |
-| `list_executions` | `deviceUdid?`, `limit?` | |
+| `list_executions` | `deviceUdid?`, `limit?` (1–200, default 50) | |
 | `get_execution` | `id` | Includes the durable `logs` |
 | `stop_execution` | `id` | Cancels a queued run; asks a running one to stop if its task supports it |
 | `retry_execution` | `id` | Failed or stopped runs only |

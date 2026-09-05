@@ -5,13 +5,14 @@ export interface TokenIdentity {
     name: string;
 }
 
-/** A cookie session, or loopback with no auth at all, is one shared local identity. */
+/** Loopback with no auth provider at all. A cookie session is `{ id: 'session' }`, not this. */
 export const LOCAL_IDENTITY: TokenIdentity = { id: 'local', name: 'local' };
 
 /**
- * The named-token work decorates the request with `apiToken`. It lands on a
- * sibling branch, so this reads the decoration defensively and falls back to the
- * local identity rather than depending on it.
+ * The auth provider decorates the request with `apiToken` — the token's own
+ * `{ id, name }` for a bearer request, `SESSION_IDENTITY` for a cookie session.
+ * This reads the decoration defensively and falls back to the local identity so
+ * a farm with no auth provider configured still has one stable ack bucket.
  */
 export function tokenIdentity(request: FastifyRequest): TokenIdentity {
     const decorated = (request as FastifyRequest & { apiToken?: { id?: unknown; name?: unknown } }).apiToken;

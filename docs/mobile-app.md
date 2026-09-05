@@ -15,14 +15,19 @@ already have.
 apps/mobile/              Expo app (Expo Router, TypeScript strict)
   app/                    routes — (tabs)/ plus device/[udid] and execution/[id]
   src/screens/            one file per screen; the routes are three-line wrappers
-  src/components/         Card, Badge, Button, StatusDot and four layout scraps
+  src/components/         Card, Badge, Button, StatusDot plus Row, Muted,
+                          SectionTitle, EmptyState, StaleBanner, ErrorBanner, Loading
   src/context/            Settings, Farm, Alerts, Safety — React context, no store
+  src/hooks/              shared hooks
+  src/theme/              colours, spacing, type scale
   src/lib/                secure storage, push registration
   test/                   React Native Testing Library
 packages/farm-client/     the typed API client — no React, no DOM
   src/models.ts           every wire shape, mirrored from docs/mobile-api.md
   src/http.ts             base URL + bearer + timeouts + { error } unwrap
+  src/errors.ts           status → typed error
   src/client.ts           the FarmClient interface both implementations satisfy
+  src/derive.ts           shared derivations (device badge, counters)
   src/sse.ts              SSE parser, Last-Event-ID resume, jittered backoff
   src/event-text.ts       event → human string, shared with the desktop app
   src/mock/               createMockFarm() — 12 fake devices that tick
@@ -77,7 +82,7 @@ knows the difference. It gives you:
   erroring — with tags, so the filter chips have something to filter.
 - Schedules covering all four timing shapes and all four statuses; executions
   covering all seven statuses, with logs.
-- Events ticking every five seconds through the same subscription the SSE client
+- Events ticking every four seconds through the same subscription the SSE client
   uses, so the Alerts tab is live.
 - Real PNG screenshots, generated in-process by a ~100-line encoder, so the
   thumbnails are pictures rather than grey boxes.
@@ -111,7 +116,9 @@ reverse proxy on a VPS. Tailscale is the transport.
 5. Settings → Token → paste. It goes straight to `expo-secure-store`
    (Keychain, `WHEN_UNLOCKED_THIS_DEVICE_ONLY` — never synced to iCloud, never
    restored to a different phone from a backup) and is never shown again: the UI
-   shows `pf_live_…3c4f` and a **Replace** button.
+   shows a masked suffix and a **Replace** button. (The screen's placeholder
+   string still reads `pf_live_…`; real tokens are `pf_` plus 43 base64url
+   characters, with no `live` segment.)
 6. Turn *Use demo data* off.
 
 A second **LAN** URL is supported as a fallback for when you are at home.
@@ -192,18 +199,22 @@ handful of named people.
 npm i -g eas-cli
 eas login
 eas init                       # writes extra.eas.projectId into app.json
-eas build --platform ios --profile preview
+eas build --platform ios          # no eas.json is committed; eas init writes one
 eas submit --platform ios
 ```
+
+There is **no `apps/mobile/eas.json` in the repository**, so there are no build
+profiles and no configured update channels yet — `eas init` / `eas build`
+creates them on first use. Decide the profile and channel names then.
 
 - The bundle identifier and package name are `ai.gethandler.farm.companion`.
   Change both before the first build if that is not your team's namespace.
 - **`extra.eas.projectId` is not committed.** `eas init` adds it; without it
   `getExpoPushTokenAsync` cannot mint a token, which is the first thing that
   breaks on a device build.
-- Two update channels: `preview` (auto-published from `main`) and `production`
-  (published manually, pinned to a build). EAS Update ships JS-only fixes in
-  minutes, which is the common case for an internal tool.
+- EAS Update ships JS-only fixes in minutes, which is the common case for an
+  internal tool. `app.json` has no `updates` block yet; add one with the
+  channels you settle on.
 - Config plugins are already declared in `app.json`: `expo-router`,
   `expo-secure-store`, `expo-local-authentication` (with the Face ID usage
   string), `expo-notifications`.
@@ -214,35 +225,49 @@ eas submit --platform ios
   scrubber that drops screenshot bodies, bearer tokens and any `pluginData` —
   screenshots contain logged-in accounts.
 
-## Contract fields this app had to guess
+## Contract questions, resolved
 
-Everything marked **planned** or **gap** in `docs/mobile-api.md` is being built
-in parallel. Where the document left a shape ambiguous, the app made a choice.
-Each of these is a one-line fix in `packages/farm-client/src/models.ts` if the
-farm lands something different.
+The app was written against `docs/mobile-api.md` while parts of the farm were
+still landing, and it had to guess at a few shapes. The farm has since shipped
+all of them; this is where the guesses ended up. Each correction is a one-line
+change in `packages/farm-client/src/models.ts`.
 
-| # | Guess | Why, and what breaks if it is wrong |
-| --- | --- | --- |
-| 1 | **Event `id` is a string.** `docs/mobile-api.md` shows ULIDs (`01J9Z3M8QF…`); `docs/fleet-and-alerts.md` shows integers (`id: 42`). The client types it as `string` and compares cursors lexicographically. | ULIDs sort correctly as strings; **bare integers do not** (`"9" > "10"`). If the farm ships integer ids, `before` paging and the "is this event newer than the one I rendered" check both need a numeric comparator. This is the guess most worth confirming. |
-| 2 | **`Last-Event-ID` is sent as a header.** `fleet-and-alerts.md` mentions `?lastEventId=` as an alternative. | If only the query parameter is honoured, resume silently replays from the beginning. |
-| 3 | **The SSE endpoint accepts `Authorization: Bearer`.** `EventSource` cannot carry headers, so the client uses an `XMLHttpRequest` reader; the header is set manually. | If the stream only accepts a query-string token, the Alerts tab never goes live. |
-| 4 | **`FleetCurrentExecution.startedAt` is nullable.** The example shows a value, but a `queued` execution has not started. | Cosmetic — a bad relative time. |
-| 5 | **`FleetDevice.platform` is optional and absent means iOS**, mirroring `GET /api/devices`. | An Android device would render as iOS and offer no Back button. |
-| 6 | **`connection.wda` can also be `unavailable`.** The doc lists that value for `appium` but not for `wda`; the client's union accepts it for both. | A widened union — safe either way. |
-| 7 | **`nextBefore` is absent on the last page *and* on an empty page.** | An extra empty request at the end of the list. |
-| 8 | **Keyset paging on `/api/schedules` and `/api/executions`** (`?limit=&before=`, gap 9). The client sends them; a farm that ignores them just returns its 200-row cap. | Nothing breaks today; the Queue tab simply stops at 200 rows. |
-| 9 | **`?width=` on the screenshot is ignored harmlessly by an older farm** (gap 3), returning full resolution. | 12 full-size PNGs per refresh on a phone connection. `capabilities.screenshotThumbnails` is the intended signal; the app reads it. |
-| 10 | **`tags` comes back from `GET /api/devices` as well as the fleet summary** (gap 12), and `PATCH /api/devices { tags }` replaces the whole array. | The tag filter chips come from the fleet summary, so the app survives without it. |
-| 11 | **`remote/info`'s `screen.screenSize` is in points, and `/remote/action`'s `x`/`y` are in the same units** — `scale` is *not* applied. | Every tap lands at the wrong place, by a factor of 2 or 2.625. Untestable without a real phone; flagged in the plan as needing farm time. |
-| 12 | **A `429` maps to a rate-limit error.** The documented status table stops at `503`; rate limits are gap 10. | Without it a `429` would render as a generic validation error. |
-| 13 | **`POST /api/events/ack` returns the post-ack `unacknowledgedCount`.** | The tab badge would be one refresh behind. |
-| 14 | **`POST /api/push/register` returns the registration on both `201` and `200`**, and `tokenSuffix` may appear on the single-registration response too (the doc only promises it on the list). | Cosmetic. |
-| 15 | **`thumbnailUrl` on a content item is server-relative and needs the bearer header** like every other route. The app builds the URL from `assetId` via `assetThumbnailRef()` rather than trusting the field, so a change of shape does not reach the UI. | A broken thumbnail. |
-| 16 | **`POST /api/content/queue/:id/approve` accepts an empty JSON body** when the slot is not being moved. | A `400` on every approve. |
-| 17 | **`POST /api/schedules`'s `assetIds` is optional.** | A `400` on doomscroll-now. |
-| 18 | **A missing `capabilities` key means `false`, but a missing `capabilities` object means "assume everything works".** Otherwise a farm that predates gap 4 would have every tab hidden. | The app 404s rather than hiding a tab — a worse failure, but a loud one. |
-| 19 | **`stopExecution`'s `result: "not-found"` is unreachable** — the doc says `404` for that case. The client models both. | Nothing. |
-| 20 | **`GET /api/mobile/bootstrap`'s `release` is optional**, present only when a `RELEASED` marker exists, matching `/health`. | A `—` in Settings → About. |
+**Wrong, and fixed in the client**
+
+| Guess | Truth |
+| --- | --- |
+| Event `id` is a **string** (ULID), compared lexicographically | It is a **number** — the `scheduler.events` bigint identity, serialised as a JSON number. `models.ts` now types it `number` and compares `before` / `upToId` numerically. |
+| `capabilities.screenshotThumbnails` is the thumbnail signal, and the app reads it | The farm never emits that key. `GET /api/mobile/bootstrap` returns `{ push, eventAck, thumbnails, contentQueue, tokens, rateLimits }`. `?width=` on the screenshot is implemented unconditionally. |
+| A missing `capabilities` **key** means `false` | Every consumer gates on an explicit `false`, so a missing key means *available*. A missing `capabilities` object likewise means "assume everything works". |
+| `POST /api/content/queue/:id/approve` accepts an empty body "when the slot is not being moved" | The handler reads no body at all. Re-timing is not supported in any form; move a slot with `PATCH /api/schedules/:id`. |
+
+**Right, now confirmed against the code**
+
+| Guess | Confirmed |
+| --- | --- |
+| `Last-Event-ID` is sent as a header | The farm honours the header **and** `?lastEventId=`, header first. |
+| The SSE endpoint accepts `Authorization: Bearer` | It does; the `XMLHttpRequest` reader is still needed because `EventSource` cannot set headers. |
+| Keyset paging on `/api/schedules` and `/api/executions` | Shipped: `?limit=` (default and max 200) and `?before=`, cursor in the lowercase `x-next-before` header. |
+| `tags` on `PATCH /api/devices/:udid` replaces the whole array | Shipped: trimmed, de-duplicated, capped at 20. |
+| A `429` maps to a rate-limit error | Rate limits are live, with `x-ratelimit-*` and `retry-after`. |
+| `POST /api/events/ack` returns the post-ack `unacknowledgedCount` | It does. |
+| `POST /api/push/register` returns the registration on both `201` and `200` | It does. |
+| `FleetDevice.platform` absent means iOS | Matches `platformOf()` on the farm. |
+| `POST /api/schedules`'s `assetIds` is optional | It is. |
+| `GET /api/mobile/bootstrap`'s `release` is optional | Present only when a `RELEASED` marker exists. |
+
+**Still open**
+
+- **`remote/info`'s `screen.screenSize` units.** The client assumes points, and
+  that `/remote/action`'s `x`/`y` are the same units with `scale` *not* applied.
+  If that is wrong every tap lands out by a factor of 2 or 2.625. It cannot be
+  settled without a real phone — see
+  [device-testing-checklist.md](device-testing-checklist.md).
+- `nextBefore` on `/api/events` is **always present**, and `null` only when the
+  page was not full. An exactly-full last page still returns a cursor, so the
+  client will make one extra request at the end of a list.
+- `stopExecution`'s `result: "not-found"` is unreachable in practice — the route
+  answers `404` first. The client models both, harmlessly.
 
 ## What is not built yet
 

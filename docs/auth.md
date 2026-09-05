@@ -30,6 +30,7 @@ git — losing it logs everyone out and invalidates every token.
 ```sh
 npm run auth:set-password            # prompts, echo off
 npm run auth:set-password -- --password "$(openssl rand -base64 24)"
+PHONE_FARM_PASSWORD="$(openssl rand -base64 24)" npm run auth:set-password
 ```
 
 The password must be at least 12 characters. Then:
@@ -46,12 +47,15 @@ nav automatically (the provider sets `logoutPath: '/auth/logout'`).
 
 ```sh
 npm run token:create -- --name agent-1      # prints the token once
-npm run token:revoke -- --name agent-1
+npm run token:revoke -- --name agent-1      # matches the name *or* the id
+node --import tsx src/auth/cli.ts token-list   # name, id, createdAt
 ```
 
 The token is shown exactly once; only its sha256 is stored, so a lost token is
-replaced, not recovered. Names may contain letters, numbers, `.`, `-`, and `_`,
-and must be unique. Every mutating request made with a token logs its **name**:
+replaced, not recovered. It looks like `pf_<43 base64url characters>`. Names may
+contain letters, numbers, `.`, `-`, and `_`, are at most 64 characters, and must
+be unique. Note the asymmetry: the CLI's `--name` removes every token whose
+**name or id** matches, while the HTTP delete below matches on id only. Every mutating request made with a token logs its **name**:
 
 ```
 {"level":30,"apiToken":"agent-1","method":"POST","url":"/api/schedules","msg":"authenticated API token request"}
@@ -102,8 +106,14 @@ JSON `401`.
 that guard stays on for cookie sessions: a `POST` with a session cookie and a
 foreign (or missing) `Origin` is rejected with `403`. Requests carrying
 `Authorization: Bearer …` are exempt — a browser form cannot set that header, so
-a bearer request is by definition not browser-originated. Set
-`PHONE_FARM_TRUSTED_ORIGINS` if a proxy rewrites `Host`.
+a bearer request is by definition not browser-originated.
+
+With neither `PUBLIC_ORIGIN` nor `PHONE_FARM_TRUSTED_ORIGINS` set, the guard
+compares the `Origin`'s host against the request's `Host` (ignoring scheme, so a
+TLS-terminating proxy that drops `x-forwarded-proto` still passes). Setting
+**either** variable switches it to strict allow-list matching against the union
+of both — so setting `PUBLIC_ORIGIN` alone can start rejecting writes that used
+to pass. Set them when a proxy rewrites `Host`.
 
 ## Rate limiting
 
@@ -119,15 +129,16 @@ retry loop hammering `remote/action` is a real way to wedge a WDA session.
 
 | Route | Default | Variable |
 |---|---|---|
-| `POST /api/devices/:udid/remote/action` | 10/s per device and token | `RATE_LIMIT_ACTION` |
-| `GET /api/devices/:udid/remote/screenshot` | 5/s per device and token | `RATE_LIMIT_SCREENSHOT` |
+| `/api/devices/:udid/remote/action` | 10/s per device and token | `RATE_LIMIT_ACTION` |
+| `/api/devices/:udid/remote/screenshot` | 5/s per device and token | `RATE_LIMIT_SCREENSHOT` |
 | Other writes | 60/min per token | `RATE_LIMIT_WRITE` |
 | Reads | 300/min per token | `RATE_LIMIT_READ` |
 
 A refusal is a `429` with `x-ratelimit-limit`, `x-ratelimit-remaining`,
 `x-ratelimit-reset` and `retry-after`, and the usual `{ "error": … }` body. The
-counters are in-process and reset with `web`. `RATE_LIMITS=off` disables the
-whole layer — that is what the test suite uses; do not set it in production.
+counters are in-process and reset with `web`. The two per-second buckets are
+matched on the **path**, not the method, so a `GET` on `…/remote/action` also
+lands in the action bucket. `RATE_LIMITS=off` disables the whole layer — that is what the test suite uses; do not set it in production.
 
 ## Settings
 
@@ -138,7 +149,9 @@ whole layer — that is what the test suite uses; do not set it in production.
 | `AUTH_SESSION_HOURS` | `12` | Session cookie lifetime |
 | `AUTH_LOGIN_MAX_ATTEMPTS` | `5` | Failed logins per window, per IP |
 | `AUTH_LOGIN_WINDOW_MINUTES` | `15` | Length of that window |
-| `PHONE_FARM_TRUSTED_ORIGINS` | unset | Comma-separated origins allowed to write |
+| `PHONE_FARM_PASSWORD` | unset | Non-interactive password for `auth:set-password` |
+| `PUBLIC_ORIGIN` | unset | An origin allowed to write. Setting it switches the CSRF guard to allow-list mode |
+| `PHONE_FARM_TRUSTED_ORIGINS` | unset | Comma-separated origins allowed to write, unioned with `PUBLIC_ORIGIN` |
 | `RATE_LIMITS` | on | Set to `off` to disable API rate limiting entirely |
 | `RATE_LIMIT_ACTION` | `10` | `remote/action` requests per second, per device and token |
 | `RATE_LIMIT_SCREENSHOT` | `5` | `remote/screenshot` requests per second, per device and token |

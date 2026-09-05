@@ -1,7 +1,12 @@
 # ADR 0001: Multi-platform device drivers behind one interface
 
-Status: Proposed
+Status: Accepted — implemented
 Date: 2026-09-05
+
+> The decision below is in the code. `src/drivers/` holds all three drivers plus
+> `select.ts` and `verify.ts`; discovery, the executor, the registration wizard
+> and the TikTok plugin all go through it. The "Context" section describes the
+> repository as it was **before** this ADR landed and is kept for the record.
 
 ## Context
 
@@ -15,7 +20,7 @@ locally, which on stock iOS can only be XCUITest / WebDriverAgent.
 
 The fleet is 2 iPhones and roughly 10 Android phones, all run from a single Mac. The Android
 side therefore matters more than the iOS side, and this repository (forked from
-`Git-Agni/prod-FARM-IOS-Core`) is iOS-only today:
+`Git-Agni/prod-FARM-IOS-Core`) **was iOS-only at the time of writing**:
 
 - `src/devices/discovery.ts` enumerates devices through `appium-ios-device`.
 - `src/scheduler/executor.ts` builds a `DeviceAutomation` directly from `WdaRemoteControl` and
@@ -59,8 +64,9 @@ so both modes work unchanged (it only needs a base URL and a token).
 
 2. **The device record gains `platform`, `driver` and `android` fields** (all optional so
    existing `devices.json` files keep loading). iOS devices default to `platform: 'ios'`,
-   `driver: 'wda'`. `src/drivers/select.ts` maps a registered device to a driver factory; the
-   executor will call that instead of constructing `WdaRemoteControl` inline.
+   `driver: 'wda'`. `src/drivers/select.ts` maps a registered device to a driver factory, and the
+   executor calls it (`driverForDevice` / `automationFromDriver`) instead of constructing
+   `WdaRemoteControl` inline.
 
 3. **Verification goes through `src/drivers/verify.ts`**, which tries the accessibility tree
    first (`findByText`, `findById`, `waitForText`) and falls back to OCR via an injected
@@ -87,11 +93,13 @@ so both modes work unchanged (it only needs a base URL and a token).
 
 - The scheduler, queue, run log, retry policy and dashboard are untouched; they already model
   devices by UDID and tasks by plugin/type/version, and an Android serial is just another UDID.
-- `discovery.ts` needs an Android branch (`adb devices -l`), and the registration UI needs a
-  platform picker. Both are follow-ups, tracked separately from this ADR.
-- The TikTok plugin needs an Android routine: different upload flow, resource IDs and layout.
-  Tree-based targeting reduces, but does not remove, the per-platform maintenance when TikTok
-  ships UI changes.
+- `discovery.ts` gained an Android branch (`adb devices -l` plus `getprop`), and the
+  registration wizard gained an Android check set and a driver picker
+  (`src/devices/registration-android.ts`, `docs/android-dashboard.md`).
+- The TikTok plugin gained an Android routine (`src/tiktok/android/post.ts`,
+  `.../doomscroll.ts`), selected by the device's platform: different upload flow, resource ids
+  and layout. Tree-based targeting reduces, but does not remove, the per-platform maintenance
+  when TikTok ships UI changes.
 - `adb`-driven devices expose `Settings.Global.adb_enabled` and developer options to apps;
   the `a11y-bridge` path exposes an enabled accessibility service instead. Neither is invisible,
   the second is quieter. The design lets us measure rather than guess.
