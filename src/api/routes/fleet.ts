@@ -18,6 +18,7 @@ import { renderFleetPage, type FleetCard } from '../../fleet/page.js';
 import { createEventRecorder, type EventRecorder } from '../../fleet/recorder.js';
 import { deviceState, stuckExecutions, summarizeFleet } from '../../fleet/summary.js';
 import { notificationConfigFromEnv, type NotificationConfig } from '../../notifications/config.js';
+import { acknowledgedMark } from '../../push/acks.js';
 import { deliverEvent, type DeliveryOptions, type DeliveryResult } from '../../notifications/deliver.js';
 import { buildDigest, startDigestScheduler } from '../../notifications/digest.js';
 import type { SchedulerRepository } from '../../scheduler/repository.js';
@@ -120,12 +121,19 @@ export async function registerFleetRoutes(app: FastifyInstance, options: FleetRo
         },
         list: async (query) => eventStore()?.list(query) ?? [],
         after: async (id, limit) => eventStore()?.after(id, limit) ?? [],
+        countAfter: async (id) => eventStore()?.countAfter(id) ?? 0,
     }, { notifications, ...(options.delivery ? { delivery: options.delivery } : {}), log: (message) => app.log.warn(message) });
 
     app.get<{ Querystring: Record<string, string | undefined> }>('/api/events', async (request, reply) => {
         const resolved = requireStore(reply);
         if (!resolved) return reply;
         const query = parseEventQuery(request.query);
+        // ?acknowledged=false narrows to what this token has not marked read; with
+        // no ack store attached it degrades to the unfiltered timeline.
+        if (request.query.acknowledged === 'false') {
+            const mark = await acknowledgedMark(app, request);
+            if (mark) query.afterId = mark;
+        }
         const events = await resolved.list(query);
         return {
             events: events.map(serializeEvent),

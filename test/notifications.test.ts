@@ -14,7 +14,10 @@ import {
     backoffDelay, deliverEvent, postJson, shouldNotify, type FetchLike,
 } from '../src/notifications/deliver.js';
 import { buildDigest, nextDigestAt, tallyByDeviceAndAccount } from '../src/notifications/digest.js';
-import { discordPayload, slackPayload, webhookPayload, SEVERITY_COLOURS } from '../src/notifications/payloads.js';
+import {
+    discordPayload, headerSafe, ntfyRequest, slackPayload, webhookPayload,
+    NTFY_PRIORITY, NTFY_TAGS, SEVERITY_COLOURS,
+} from '../src/notifications/payloads.js';
 import type { SchedulerRepository } from '../src/scheduler/repository.js';
 import type { JsonObject } from '../src/types.js';
 
@@ -73,10 +76,12 @@ test('channels, severity floor and digest settings are read from the environment
         NOTIFY_WEBHOOK_URL: 'https://hooks.example/webhook',
         NOTIFY_SLACK_WEBHOOK_URL: 'https://hooks.slack.com/services/x',
         NOTIFY_DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/x',
+        NOTIFY_NTFY_URL: 'https://ntfy.sh/farm-alerts-9f2a', NOTIFY_NTFY_TOKEN: 'tk_secret',
         NOTIFY_MIN_SEVERITY: 'error', NOTIFY_KINDS: 'execution.failed, nonsense ,digest.daily',
         DIGEST_LOCAL_TIME: '07:15', DIGEST_TIMEZONE: 'Europe/London', PUBLIC_BASE_URL: 'https://farm.example/',
     } as NodeJS.ProcessEnv);
-    assert.deepEqual(parsed.channels.map(({ name }) => name), ['webhook', 'slack', 'discord']);
+    assert.deepEqual(parsed.channels.map(({ name }) => name), ['webhook', 'slack', 'discord', 'ntfy']);
+    assert.equal(parsed.channels[3]!.token, 'tk_secret');
     assert.equal(parsed.minSeverity, 'error');
     assert.deepEqual(parsed.kinds, ['execution.failed', 'digest.daily']);
     assert.equal(parsed.digestLocalTime, '07:15');
@@ -306,4 +311,71 @@ test('POST /api/notifications/test reports a per-channel result', async (context
     await registerFleetRoutes(bare, { scheduler, events: createMemoryEventStore(), backgroundTasks: false, notifications: config({ channels: [] }) });
     const none = await inject(bare, { method: 'POST', url: '/api/notifications/test', payload: {} });
     assert.equal(none.statusCode, 409);
+});
+
+test('the ntfy publish maps severity to a priority, kind to an emoji tag, and links back', () => {
+    const request = ntfyRequest(event(), { token: 'tk_secret' }, 'https://farm.example');
+    assert.equal(request.headers.Title, 'Doomscroll failed on udid-a');
+    assert.equal(request.headers.Priority, NTFY_PRIORITY.error);
+    assert.equal(request.headers.Priority, '5');
+    assert.equal(request.headers.Tags, NTFY_TAGS['execution.failed']);
+    assert.equal(request.headers.Click, 'https://farm.example/api/executions/3f8f4e0e-0000-4000-8000-000000000001');
+    assert.equal(request.headers.Authorization, 'Bearer tk_secret');
+    assert.match(String(request.headers['content-type']), /text\/plain/);
+    assert.equal(request.body, 'Doomscroll failed on udid-a\nWDA session died');
+
+    // Warning is priority 4, info is 3, and an unprotected topic sends no Authorization.
+    const warning = ntfyRequest(event({ severity: 'warning', kind: 'device.disconnected', detail: null }), {}, '');
+    assert.equal(warning.headers.Priority, '4');
+    assert.equal(warning.headers.Tags, 'warning');
+    assert.equal(warning.headers.Authorization, undefined);
+    assert.equal(warning.headers.Click, undefined, 'no PUBLIC_BASE_URL, no click-through');
+    assert.equal(warning.body, 'Doomscroll failed on udid-a\ndevice.disconnected · udid-a');
+    assert.equal(ntfyRequest(event({ severity: 'info' }), {}, '').headers.Priority, '3');
+
+    // Header values are one line of printable ASCII, whatever the device is called.
+    assert.equal(headerSafe('iPhone 8 · slot 1\nX-Injected: yes'), 'iPhone 8  slot 1 X-Injected: yes');
+});
+
+test('an ntfy channel posts text with headers while the others still post JSON', async () => {
+    const calls: Array<{ url: string; headers: Record<string, string>; body: string }> = [];
+    const fetchImpl: FetchLike = async (url, init) => {
+        calls.push({ url, headers: init.headers, body: init.body });
+        return { ok: true, status: 200 };
+    };
+    const results = await deliverEvent(event(), config({
+        channels: [
+            { name: 'webhook', url: 'https://hooks.example/webhook' },
+            { name: 'ntfy', url: 'https://ntfy.sh/farm-alerts-9f2a', token: 'tk_secret' },
+        ],
+    }), { fetchImpl, sleep: async () => {} });
+
+    assert.deepEqual(results.map(({ channel, ok }) => [channel, ok]), [['webhook', true], ['ntfy', true]]);
+    assert.equal(calls[0]!.headers['content-type'], 'application/json');
+    assert.equal(calls[1]!.url, 'https://ntfy.sh/farm-alerts-9f2a');
+    assert.equal(calls[1]!.headers.Title, 'Doomscroll failed on udid-a');
+    assert.equal(calls[1]!.body, 'Doomscroll failed on udid-a\nWDA session died');
+});
+
+test('POST /api/notifications/test includes the ntfy channel', async (context) => {
+    const scheduler = { async listExecutions() { return []; }, async listSchedules() { return []; } } as unknown as SchedulerRepository;
+    const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+    const fetchImpl: FetchLike = async (url, init) => {
+        calls.push({ url, headers: init.headers });
+        return { ok: true, status: 200 };
+    };
+    const app = Fastify();
+    context.after(() => app.close());
+    await registerFleetRoutes(app, {
+        scheduler, events: createMemoryEventStore(), backgroundTasks: false,
+        delivery: { fetchImpl, sleep: async () => {} },
+        notifications: config({ channels: [{ name: 'ntfy', url: 'https://ntfy.sh/farm-alerts-9f2a' }] }),
+    });
+
+    const response = await inject(app, { method: 'POST', url: '/api/notifications/test', payload: {} });
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(response.json().channels.map((result: { channel: string; ok: boolean }) => [result.channel, result.ok]),
+        [['ntfy', true]]);
+    assert.equal(calls[0]!.headers.Title, 'Phone Farm notification test');
+    assert.equal(calls[0]!.headers.Tags, NTFY_TAGS['digest.daily']);
 });

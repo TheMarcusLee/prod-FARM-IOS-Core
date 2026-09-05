@@ -535,20 +535,46 @@ Idempotent on `expoPushToken` — re-registering updates preferences and bumps
 {
   "id": "b4a1…",
   "name": "marcus-iphone",
+  "tokenSuffix": "x2q9fa",
   "minSeverity": "warning",
   "kinds": ["execution.failed", "device.disconnected", "device.error", "execution.stuck"],
+  "tokenId": "5d2c…",
   "createdAt": "2026-09-05T09:12:00.000Z",
-  "lastSeenAt": "2026-09-05T09:12:00.000Z"
+  "lastSeenAt": "2026-09-05T09:12:00.000Z",
+  "lastError": null
 }
 ```
 
+`400` when `expoPushToken` is not an `ExponentPushToken[…]` / `ExpoPushToken[…]`,
+when `name` is empty, or when `kinds` holds an unknown kind. `tokenId` is the API
+token identity that registered the phone.
+
 ### `GET /api/push/registrations`
 
-Array of the above, no tokens echoed back beyond a `tokenSuffix` for display.
+```json
+{ "registrations": [ { "id": "b4a1…", "name": "marcus-iphone", "tokenSuffix": "x2q9fa",
+  "minSeverity": "warning", "kinds": ["execution.failed"], "tokenId": "…",
+  "createdAt": "…", "lastSeenAt": "…", "lastError": null } ] }
+```
+
+The Expo token is **never** echoed back — only `tokenSuffix`, its last six
+characters, so a person can tell two phones apart. `lastError` is the most
+recent Expo receipt error for that phone, or `null`.
 
 ### `DELETE /api/push/registrations/:id`
 
 `204`. Also called by the relay when Expo reports `DeviceNotRegistered`.
+
+### `POST /api/push/registrations/:id/error`
+
+```json
+{ "error": "MessageRateExceeded" }
+```
+
+`204`. **Relay-only** — how the push relay records a non-fatal Expo receipt
+error against a registration, since it never touches Postgres directly. The app
+has no reason to call it; it reads the result as `lastError` above. See
+`docs/push-relay.md`.
 
 ---
 
@@ -596,14 +622,36 @@ crashing — the app hides a tab rather than 404-ing. Treat a missing key as
 ### `POST /api/events/ack`
 
 ```json
-{ "upToId": "01J9Z3M8QF7B0C2S4T6V8XYZAB" }
+{ "upToId": 42 }
 ```
 
 Marks everything at or below that id acknowledged for the calling **token**, so
 the operator's phone and the team lead's phone keep separate unread state.
-Returns `{ "acknowledged": 14, "unacknowledgedCount": 0 }`.
+Returns `{ "acknowledged": 14, "unacknowledgedCount": 0 }` — `acknowledged` is
+how many events this call newly covered. The mark is monotonic: an older
+`upToId` is ignored rather than rewinding it.
 
-`GET /api/events` gains `?acknowledged=false` once this lands.
+Event ids are **numeric** on the wire (the `scheduler.events` identity column),
+not the ULID strings the examples above show; `upToId` is a number.
+
+Which token is calling comes from the request's token identity. A cookie
+session, or a loopback request with authentication switched off, shares one
+synthetic `local` identity.
+
+### `GET /api/events/unacknowledged-count`
+
+```json
+{ "unacknowledgedCount": 2, "upToId": 40 }
+```
+
+The badge count, without pulling the events themselves. `upToId` is the caller's
+current mark.
+
+### `GET /api/events?acknowledged=false`
+
+Returns only events above the caller's mark. Every other `/api/events` parameter
+behaves exactly as before, and omitting `acknowledged` leaves the endpoint
+unchanged.
 
 ---
 

@@ -1,6 +1,6 @@
-import { serializeEvent, type EventSeverity, type FarmEvent } from '../fleet/events.js';
+import { serializeEvent, type EventKind, type EventSeverity, type FarmEvent } from '../fleet/events.js';
 import type { JsonObject } from '../types.js';
-import type { ChannelName, NotificationConfig } from './config.js';
+import type { ChannelName, NotificationChannel, NotificationConfig } from './config.js';
 
 /** Discord embed colours, by severity. */
 export const SEVERITY_COLOURS: Record<EventSeverity, number> = {
@@ -70,6 +70,57 @@ export function discordPayload(event: FarmEvent, publicBaseUrl = ''): JsonObject
             ...(link ? { url: link } : {}),
         }],
     };
+}
+
+/** ntfy's `Priority` header, 1 (min) to 5 (max). */
+export const NTFY_PRIORITY: Record<EventSeverity, string> = { info: '3', warning: '4', error: '5' };
+
+/** ntfy renders these shortcodes as the emoji in front of the title. */
+export const NTFY_TAGS: Record<EventKind, string> = {
+    'execution.started': 'arrow_forward',
+    'execution.succeeded': 'white_check_mark',
+    'execution.failed': 'x',
+    'execution.stopped': 'octagonal_sign',
+    'execution.stuck': 'hourglass',
+    'device.connected': 'electric_plug',
+    'device.disconnected': 'warning',
+    'device.error': 'rotating_light',
+    'schedule.created': 'calendar',
+    'schedule.paused': 'pause_button',
+    'schedule.cancelled': 'wastebasket',
+    'digest.daily': 'newspaper',
+};
+
+/**
+ * Header values must be one line of printable ASCII — a device name with an
+ * emoji or a newline in it would otherwise produce an invalid request.
+ */
+export function headerSafe(value: string, limit = 200): string {
+    // eslint-disable-next-line no-control-regex
+    return value.replace(/[\r\n]+/g, ' ').replace(/[^\x20-\x7e]/g, '').trim().slice(0, limit);
+}
+
+export interface NtfyRequest {
+    headers: Record<string, string>;
+    body: string;
+}
+
+/** ntfy publishes over plain HTTP POST: the body is the message, the rest is headers. */
+export function ntfyRequest(
+    event: FarmEvent, channel: Pick<NotificationChannel, 'token'>, publicBaseUrl = '',
+): NtfyRequest {
+    const link = eventLink(event, publicBaseUrl);
+    const error = eventErrorText(event);
+    const detail = error ?? `${event.kind}${event.deviceUdid ? ` · ${event.deviceUdid}` : ''}`;
+    const headers: Record<string, string> = {
+        'content-type': 'text/plain; charset=utf-8',
+        Title: headerSafe(event.title) || event.kind,
+        Priority: NTFY_PRIORITY[event.severity],
+        Tags: NTFY_TAGS[event.kind] ?? 'bell',
+    };
+    if (link) headers.Click = link;
+    if (channel.token) headers.Authorization = `Bearer ${channel.token}`;
+    return { headers, body: `${event.title}\n${detail}`.slice(0, 4_000) };
 }
 
 export function payloadFor(channel: ChannelName, event: FarmEvent, config: Pick<NotificationConfig, 'publicBaseUrl'>): JsonObject {
