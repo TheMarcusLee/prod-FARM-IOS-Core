@@ -15,6 +15,7 @@ import {
     createDeviceMonitorState, diffDeviceStatuses, longOfflineDevices, type DeviceMonitorState,
 } from '../../fleet/device-monitor.js';
 import { renderFleetPage, type FleetCard } from '../../fleet/page.js';
+import { createEventStreamHub, type EventStreamHub } from '../../fleet/sse-hub.js';
 import { createEventRecorder, type EventRecorder } from '../../fleet/recorder.js';
 import { deviceState, stuckExecutions, summarizeFleet } from '../../fleet/summary.js';
 import { notificationConfigFromEnv, type NotificationConfig } from '../../notifications/config.js';
@@ -41,7 +42,6 @@ export interface FleetRouteOptions {
 }
 
 const HEARTBEAT_MS = 15_000;
-const DEFAULT_SSE_POLL_MS = 1_000;
 const DEFAULT_MONITOR_MS = 30_000;
 
 function fleetTags(devices: readonly RegisteredDevice[]): string[] {
@@ -124,6 +124,23 @@ export async function registerFleetRoutes(app: FastifyInstance, options: FleetRo
         countAfter: async (id) => eventStore()?.countAfter(id) ?? 0,
     }, { notifications, ...(options.delivery ? { delivery: options.delivery } : {}), log: (message) => app.log.warn(message) });
 
+    // One poll timer and one query for every subscriber — see sse-hub.ts. Built
+    // lazily so a process without an event store never starts a timer at all.
+    let streams: EventStreamHub | null = null;
+    const hub = (): EventStreamHub => {
+        const resolved = eventStore();
+        if (!resolved) throw new Error('Event store unavailable');
+        streams ??= createEventStreamHub(resolved, {
+            ...(options.ssePollIntervalMs === undefined ? {} : { intervalMs: options.ssePollIntervalMs }),
+            heartbeatMs: HEARTBEAT_MS,
+            log: (message) => app.log.debug(message),
+        });
+        return streams;
+    };
+    // Without this an `app.close()` leaves the poll and heartbeat intervals
+    // running and the sockets open — a leaked timer per test that opened a stream.
+    app.addHook('onClose', async () => { streams?.closeAll(); });
+
     app.get<{ Querystring: Record<string, string | undefined> }>('/api/events', async (request, reply) => {
         const resolved = requireStore(reply);
         if (!resolved) return reply;
@@ -157,28 +174,12 @@ export async function registerFleetRoutes(app: FastifyInstance, options: FleetRo
             connection: 'keep-alive', 'x-accel-buffering': 'no',
         });
         raw.write(': connected\n\n');
-        let closed = false;
-        const push = async (): Promise<void> => {
-            if (closed) return;
-            for (const event of await resolved.after(cursor, 200)) {
-                cursor = event.id;
-                raw.write(`id: ${event.id}\nevent: ${event.kind}\ndata: ${JSON.stringify(serializeEvent(event))}\n\n`);
-            }
-        };
-        const poll = setInterval(() => void push().catch(() => {}), options.ssePollIntervalMs ?? DEFAULT_SSE_POLL_MS);
-        const heartbeat = setInterval(() => { if (!closed) raw.write(': heartbeat\n\n'); }, HEARTBEAT_MS);
-        poll.unref?.();
-        heartbeat.unref?.();
-        const stop = (): void => {
-            if (closed) return;
-            closed = true;
-            clearInterval(poll);
-            clearInterval(heartbeat);
-            raw.end();
-        };
-        request.raw.once('close', stop);
-        request.raw.once('error', stop);
-        await push();
+        const subscription = hub().add(raw, cursor);
+        request.raw.once('close', () => subscription.close());
+        request.raw.once('error', () => subscription.close());
+        raw.once('error', () => subscription.close());
+        // First replay is immediate; everything after it rides the shared poll.
+        await hub().poll();
     });
 
     app.post('/api/notifications/test', async (_request: FastifyRequest, reply: FastifyReply) => {

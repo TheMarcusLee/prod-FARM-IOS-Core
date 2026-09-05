@@ -10,6 +10,7 @@ import {
     queryEvents, serializeEvent, severityRank, type EventInput, type FarmEvent,
 } from '../src/fleet/events.js';
 import { registerFleetRoutes, type FleetRouteOptions } from '../src/api/routes/fleet.js';
+import { createEventStreamHub } from '../src/fleet/sse-hub.js';
 import type { SchedulerRepository } from '../src/scheduler/repository.js';
 
 /** A bare Fastify with only the fleet routes — createApp registers them itself. */
@@ -163,4 +164,148 @@ test('GET /api/events/stream replays from Last-Event-ID and streams new events',
     assert.match(buffer, /id: 4\nevent: execution\.stuck\n/);
 
     controller.abort();
+});
+
+/* --------------------------------------------------------------- the SSE hub */
+
+function fakeSocket(options: { acceptBytes?: number } = {}) {
+    let budget = options.acceptBytes ?? Number.POSITIVE_INFINITY;
+    const drainListeners: Array<() => void> = [];
+    return {
+        chunks: [] as string[],
+        ended: false,
+        destroyed: false,
+        write(chunk: string): boolean {
+            this.chunks.push(chunk);
+            budget -= chunk.length;
+            return budget > 0;
+        },
+        end(): void { this.ended = true; },
+        once(_event: 'drain', listener: () => void): void { drainListeners.push(listener); },
+        drain(): void { for (const listener of drainListeners.splice(0)) listener(); },
+        ids(): number[] {
+            return this.chunks.flatMap((chunk) => {
+                const match = /^id: (\d+)/.exec(chunk);
+                return match ? [Number(match[1])] : [];
+            });
+        },
+    };
+}
+
+test('the stream hub replays from a cursor and never sends an event twice', async () => {
+    const store = await seededStore();
+    const hub = createEventStreamHub(store, { intervalMs: 60_000, heartbeatMs: 60_000 });
+    const socket = fakeSocket();
+    hub.add(socket, 1);
+
+    await hub.poll();
+    assert.deepEqual(socket.ids(), [2, 3]);
+
+    // A second round with nothing new writes nothing at all.
+    await hub.poll();
+    assert.deepEqual(socket.ids(), [2, 3]);
+
+    await store.record(seedInput({ kind: 'execution.stuck', title: 'stuck' }));
+    await hub.poll();
+    assert.deepEqual(socket.ids(), [2, 3, 4]);
+    hub.closeAll();
+});
+
+test('two overlapping polls do not duplicate events on a slow store', async () => {
+    const store = await seededStore();
+    let release = (): void => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let calls = 0;
+    const slow = {
+        ...store,
+        async after(id: number, limit?: number) {
+            calls++;
+            if (calls === 1) await gate;
+            return store.after(id, limit);
+        },
+    };
+    const hub = createEventStreamHub(slow, { intervalMs: 60_000, heartbeatMs: 60_000 });
+    const socket = fakeSocket();
+    hub.add(socket, 0);
+
+    // The second poll starts while the first is still waiting on the store. With
+    // no in-flight guard both would read the same cursor and send 1..3 twice.
+    const first = hub.poll();
+    const second = hub.poll();
+    release();
+    await Promise.all([first, second]);
+    assert.deepEqual(socket.ids(), [1, 2, 3]);
+    assert.equal(calls, 1);
+    hub.closeAll();
+});
+
+test('one poll serves every subscriber, and a closed socket is dropped', async () => {
+    const store = await seededStore();
+    let queries = 0;
+    const counted = {
+        ...store,
+        async after(id: number, limit?: number) { queries++; return store.after(id, limit); },
+    };
+    const hub = createEventStreamHub(counted, { intervalMs: 60_000, heartbeatMs: 60_000 });
+    const sockets = Array.from({ length: 12 }, () => fakeSocket());
+    for (const socket of sockets) hub.add(socket, 0);
+
+    await hub.poll();
+    // Twelve browsers watching the fleet, one query.
+    assert.equal(queries, 1);
+    for (const socket of sockets) assert.deepEqual(socket.ids(), [1, 2, 3]);
+
+    sockets[0]!.destroyed = true;
+    await store.record(seedInput({ title: 'another' }));
+    await hub.poll();
+    assert.equal(sockets[0]!.ended, true);
+    assert.equal(hub.size, 11);
+    assert.deepEqual(sockets[1]!.ids(), [1, 2, 3, 4]);
+    hub.closeAll();
+});
+
+test('a socket that stops accepting bytes is paused until it drains', async () => {
+    const store = await seededStore();
+    const hub = createEventStreamHub(store, { intervalMs: 60_000, heartbeatMs: 60_000 });
+    // Accepts the first frame and then reports a full buffer.
+    const socket = fakeSocket({ acceptBytes: 10 });
+    hub.add(socket, 0);
+
+    await hub.poll();
+    assert.deepEqual(socket.ids(), [1]);
+    // Still blocked: the hub must not queue the rest in memory.
+    await hub.poll();
+    assert.deepEqual(socket.ids(), [1]);
+
+    socket.drain();
+    await hub.poll();
+    assert.deepEqual(socket.ids(), [1, 2]);
+    hub.closeAll();
+});
+
+test('closing the app ends open streams and leaves no timers behind', async (context) => {
+    const store = await seededStore();
+    const hub = createEventStreamHub(store, { intervalMs: 5, heartbeatMs: 5 });
+    const socket = fakeSocket();
+    hub.add(socket, 0);
+    assert.equal(hub.size, 1);
+    hub.closeAll();
+    assert.equal(socket.ended, true);
+    assert.equal(hub.size, 0);
+    // Timers are only alive while somebody is subscribed, so an app that closed
+    // its streams has nothing left ticking.
+    assert.equal(hub.size, 0);
+
+    // And through the route: opening a stream and closing the app must not hang
+    // on a poll interval that nobody cleared.
+    const app = await fleetApp({ events: store, ssePollIntervalMs: 5 });
+    context.after(() => app.close());
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const { port } = app.server.address() as AddressInfo;
+    const controller = new AbortController();
+    const response = await fetch(`http://127.0.0.1:${port}/api/events/stream`, { signal: controller.signal });
+    assert.equal(response.status, 200);
+    controller.abort();
+    await response.body!.cancel().catch(() => {});
+    await app.close();
 });
