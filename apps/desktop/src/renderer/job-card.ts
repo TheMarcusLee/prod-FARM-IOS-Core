@@ -47,6 +47,7 @@ export function createJobCard(id: string, options: { showLogs: boolean }): JobCa
     const state = document.createElement('span');
     state.className = 'state';
 
+    // Only one kind of job exists so far; the button knows how to restart that one.
     const rerun = button('Run again', () => window.farm.prepareWda(null));
     const cancel = button('Cancel', () => window.farm.cancelJob(id));
     const dismiss = button('Dismiss', () => window.farm.dismissJob(id));
