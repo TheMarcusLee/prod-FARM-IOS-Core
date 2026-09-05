@@ -117,12 +117,21 @@ function envNumber(name: string, fallback: number): number {
 
 const REMOTE_ROUTE = /^\/api\/devices\/([^/]+)\/remote\/(action|screenshot)$/;
 
+/** Where `registerMcpRoutes` mounts, and the one path the rate-limit hook cares about outside /api. */
+export const MCP_PATH = '/mcp';
+
 /**
  * These protect the *phones*, not the server: a retry loop hammering
  * `remote/action` is a real way to wedge a WDA session, so the two device
  * routes are counted per second and per device as well as per token.
  */
 export function bucketFor(method: string, url: string): Bucket {
+    // Every MCP call is one POST to the same path, so without a bucket of its own an agent's
+    // normal tool loop lands in the 60/min write budget and stalls after a minute of work. The
+    // point here is a ceiling on a runaway agent, not throttling: 600/min is ten calls a second.
+    if (url === MCP_PATH || url.startsWith(`${MCP_PATH}/`)) {
+        return { name: 'mcp', max: envNumber('RATE_LIMIT_MCP', 600), windowMs: 60_000, scope: '' };
+    }
     const remote = REMOTE_ROUTE.exec(url);
     if (remote?.[2] === 'action') {
         return { name: 'action', max: envNumber('RATE_LIMIT_ACTION', 10), windowMs: 1_000, scope: remote[1] ?? '' };
@@ -169,7 +178,9 @@ function registerRateLimits(app: FastifyInstance): void {
     app.addHook('onRequest', async (request, reply) => {
         // The dashboard's own HTMX fragments and static assets are not the
         // threat here, and a 1 s polling fragment would trip a read budget.
-        if (!pathOf(request).startsWith('/api/')) return;
+        // `/mcp` is not under /api but is a token endpoint, so it is counted too.
+        const path = pathOf(request);
+        if (!path.startsWith('/api/') && path !== MCP_PATH && !path.startsWith(`${MCP_PATH}/`)) return;
         limiter ??= app.createRateLimit({
             keyGenerator: rateKey,
             max: (candidate) => bucketFor(candidate.method, pathOf(candidate)).max,
