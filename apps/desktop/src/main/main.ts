@@ -5,6 +5,8 @@ import { createFleet, type Fleet } from './fleet.ts';
 import { buildDiagnostics, secretScrubber, secretsOf, writeDiagnosticsZip } from './diagnostics.ts';
 import { resetEmbeddedPostgres } from './embedded-postgres.ts';
 import { JobRunner } from './jobs.ts';
+import { MIGRATION_STAMP_FILE } from './services/migrations.ts';
+import { clearStamp } from './migration-stamp.ts';
 import { ChildRegistry } from './orphans.ts';
 import { setChildRegistry } from './process.ts';
 import { appPaths, resolveRepoRoot, type AppPaths } from './paths.ts';
@@ -60,7 +62,7 @@ function onFleetChanged(): void {
 /** Rebuilds the fleet from the current settings; used after a settings change. */
 function rebuildFleet(settings: Settings): void {
     fleet.logs.close();
-    fleet = createFleet(paths, settings);
+    fleet = createFleet(paths, settings, app.getVersion());
     fleet.supervisor.on('change', onFleetChanged);
     fleet.supervisor.on('log', () => windows?.broadcast('fleet:changed', currentSnapshot()));
     dashboardUrl = null;
@@ -144,6 +146,8 @@ function registerIpc(): void {
         let backupDir: string | null;
         try {
             ({ backupDir } = await resetEmbeddedPostgres(paths.postgresDataDir, paths.userData));
+            // The new, empty cluster has none of the migrations the stamp claims.
+            clearStamp(path.join(paths.userData, MIGRATION_STAMP_FILE));
         } catch (error) {
             return { ok: false, message: error instanceof Error ? error.message : String(error) };
         }
@@ -346,7 +350,7 @@ async function bootstrap(): Promise<void> {
     // Jobs outlive a fleet rebuild on purpose: a running WebDriverAgent build must
     // not be forgotten because the operator saved Settings.
     jobs = new JobRunner();
-    fleet = createFleet(paths, settingsStore.get());
+    fleet = createFleet(paths, settingsStore.get(), app.getVersion());
 
     if (smokeMode) {
         const code = await runSmoke(fleet.supervisor, `http://127.0.0.1:${settingsStore.get().webPort}`);

@@ -11,6 +11,8 @@ export interface ServiceContext {
     env: Record<string, string>;
     /** Node-compatible executable: `process.execPath` with ELECTRON_RUN_AS_NODE. */
     nodeExecPath: string;
+    /** The app's own version, part of the migration stamp's fingerprint. */
+    appVersion: string;
 }
 
 /** `node --import tsx <script>` in the farm checkout, run through the Electron binary. */
