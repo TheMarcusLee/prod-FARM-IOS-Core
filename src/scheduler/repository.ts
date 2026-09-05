@@ -59,6 +59,24 @@ export type SchedulerLifecycleEvent =
 
 export type SchedulerEventHook = (event: SchedulerLifecycleEvent) => void;
 
+/**
+ * The event hook is an observer: it writes the fleet event log and fans out
+ * notifications. None of that may decide whether a schedule was created or an
+ * execution finished, so a hook that throws — or hands back a promise that
+ * rejects — is logged and dropped rather than unwinding the caller.
+ */
+export function notifyEventHook(
+    hook: SchedulerEventHook,
+    event: SchedulerLifecycleEvent,
+    onError: (error: unknown) => void = (error) => console.error(`Scheduler event hook failed for ${event.kind}:`, error),
+): void {
+    try {
+        void Promise.resolve(hook(event) as unknown).catch(onError);
+    } catch (error) {
+        onError(error);
+    }
+}
+
 export class SchedulerRepository {
     constructor(
         readonly connection: DatabaseConnection,
@@ -67,6 +85,10 @@ export class SchedulerRepository {
         /** Optional observer; defaults to a no-op so nothing else has to change. */
         readonly onEvent: SchedulerEventHook = () => {},
     ) {}
+
+    private emit(event: SchedulerLifecycleEvent): void {
+        notifyEventHook(this.onEvent, event);
+    }
 
     async createTask(
         input: CreateTaskInput,
@@ -91,7 +113,7 @@ export class SchedulerRepository {
         if (!schedule) throw new Error('Unable to create schedule');
         await this.attachAssets(schedule.id, assetIds);
         if (schedule.nextRunAt && schedule.nextRunAt <= now) await this.materializeDue(now, schedule.id);
-        this.onEvent({ kind: 'schedule.created', schedule });
+        this.emit({ kind: 'schedule.created', schedule });
         return schedule;
     }
 
@@ -131,8 +153,11 @@ export class SchedulerRepository {
             ...(before ? [olderThan(schedules.createdAt, schedules.id, before)] : []),
         ];
         const query = this.connection.db.select().from(schedules);
+        // The cursor breaks a createdAt tie with the id, so the sort has to as
+        // well — otherwise rows sharing an instant come back in an arbitrary
+        // order and the page boundary silently skips or repeats them.
         return (conditions.length ? query.where(and(...conditions)) : query)
-            .orderBy(desc(schedules.createdAt)).limit(limit);
+            .orderBy(desc(schedules.createdAt), desc(schedules.id)).limit(limit);
     }
 
     async schedule(id: string): Promise<ScheduleRow | null> {
@@ -147,7 +172,7 @@ export class SchedulerRepository {
         ];
         const query = this.connection.db.select().from(executions);
         return (conditions.length ? query.where(and(...conditions)) : query)
-            .orderBy(desc(executions.createdAt)).limit(limit);
+            .orderBy(desc(executions.createdAt), desc(executions.id)).limit(limit);
     }
 
     async execution(id: string): Promise<ExecutionDetail | null> {
@@ -221,7 +246,7 @@ export class SchedulerRepository {
                 .where(and(eq(executions.scheduleId, id), eq(executions.status, 'queued')));
             await this.purgeScheduleAssetsIfIdle(id);
         }
-        if (updated && status !== 'active') this.onEvent({ kind: `schedule.${status}`, schedule: updated });
+        if (updated && status !== 'active') this.emit({ kind: `schedule.${status}`, schedule: updated });
         return updated ?? null;
     }
 
@@ -275,7 +300,7 @@ export class SchedulerRepository {
         }).where(and(eq(executions.id, id), inArray(executions.status, ['queued', 'running']))).returning();
         if (!row) return null;
         await this.connection.db.insert(executionAttempts).values({ executionId: id, attempt }).onConflictDoNothing();
-        this.onEvent({ kind: 'execution.started', execution: row });
+        this.emit({ kind: 'execution.started', execution: row });
         return row;
     }
 
@@ -292,7 +317,7 @@ export class SchedulerRepository {
         const [finished] = await this.connection.db.update(executions).set({
             status, exitCode, error, finishedAt: new Date(), updatedAt: new Date(),
         }).where(eq(executions.id, id)).returning();
-        if (finished && status !== 'cancelled') this.onEvent({ kind: `execution.${status}`, execution: finished });
+        if (finished && status !== 'cancelled') this.emit({ kind: `execution.${status}`, execution: finished });
         // Keep the media for retryable outcomes — the dashboard Retry button
         // accepts failed/stopped and would otherwise hit "asset is missing".
         // failed/stopped media is reclaimed by cleanup() once it ages out.
