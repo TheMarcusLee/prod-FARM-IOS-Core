@@ -228,7 +228,12 @@ export function Chip({
                 borderWidth: StyleSheet.hairlineWidth,
                 borderRadius: radius.pill,
                 paddingHorizontal: spacing.md,
-                paddingVertical: 6,
+                // A fixed height, so the horizontal `flexGrow: 0` row that holds
+                // these measures to something stable rather than clipping the
+                // descenders on the first layout pass.
+                height: 30,
+                alignItems: 'center',
+                justifyContent: 'center',
                 opacity: pressed ? 0.75 : 1,
             })}
         >

@@ -110,10 +110,14 @@ function bodyFor(event: FarmEvent): string {
             return exitCode === undefined ? 'The run failed.' : `The run failed with exit ${exitCode}.`;
         }
         case 'execution.stuck': {
-            const deadline = stringOr(detail.deadlineAt);
-            return Number.isFinite(Date.parse(deadline))
-                ? `No progress since its deadline ${formatRelative(deadline)}.`
-                : 'The run has stopped making progress.';
+            // The farm only records this once the run is past its deadline, so
+            // the interesting number is how long *over* it is. A deadline that
+            // reads as being in the future means the clocks disagree; say the
+            // plain thing rather than "no progress since its deadline in 59m".
+            const overBy = Date.now() - Date.parse(stringOr(detail.deadlineAt));
+            return Number.isFinite(overBy) && overBy > 0
+                ? `Still running ${formatDuration(overBy)} past its deadline.`
+                : 'Still running past its deadline.';
         }
         case 'execution.stopped':
             return error || 'The run was stopped.';

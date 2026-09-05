@@ -243,13 +243,15 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
             };
         }
         if (kind.startsWith('device.')) {
-            const state = states.get(execution.deviceUdid) ?? 'online';
-            const base = mockConnectionForState(state);
+            // Keyed off the *event*, not the device's state now: a
+            // `device.disconnected` from ten minutes ago must not describe a
+            // phone that has since come back as "WDA is ready".
+            const base = mockConnectionForState(kind === 'device.connected' ? 'online' : kind === 'device.error' ? 'error' : 'offline');
             return {
                 physical: base.physical,
                 wda: base.wda,
                 message: base.message,
-                ...(kind === 'device.error' ? { error: 'The bridge stopped responding after 3 retries' } : {}),
+                ...(kind === 'device.error' ? { error: base.message } : {}),
             };
         }
         return { task, status: execution.status };

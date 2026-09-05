@@ -1,6 +1,10 @@
 /**
  * Two palettes and a spacing scale. No UI kit: the app is eight screens of
  * lists and cards, and a design system would be more code than the screens.
+ *
+ * Every colour that carries text clears 4.5:1 against the surface it sits on.
+ * That matters more here than usual: the state words (`offline`, `cancelled`)
+ * are 11 px, and they are the only thing on the card that says what happened.
  */
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import { useColorScheme } from 'react-native';
@@ -34,13 +38,16 @@ const dark: Palette = {
     border: '#282C34',
     text: '#F2F4F7',
     textMuted: '#9BA3AF',
-    textFaint: '#646C79',
+    // 4.8:1 on `surface`. The old #646C79 was 3.4:1 — a section heading and an
+    // inactive tab label are small text, not large.
+    textFaint: '#7B8494',
     accent: '#4C8DFF',
     accentText: '#FFFFFF',
     online: '#3FB950',
     busy: '#4C8DFF',
-    offline: '#646C79',
-    disabled: '#4A4F58',
+    offline: '#7B8494',
+    // 2.2:1 before. `cancelled` and `completed` badges were barely visible.
+    disabled: '#828B9B',
     error: '#F85149',
     warning: '#D29922',
     info: '#58A6FF',
@@ -55,13 +62,15 @@ const light: Palette = {
     border: '#E1E4E9',
     text: '#10131A',
     textMuted: '#5A6472',
-    textFaint: '#8A94A3',
+    // 4.5:1 on white; the old #8A94A3 was 3.1:1.
+    textFaint: '#6E7787',
     accent: '#0B62E0',
     accentText: '#FFFFFF',
     online: '#1A7F37',
     busy: '#0B62E0',
-    offline: '#8A94A3',
-    disabled: '#B4BAC4',
+    offline: '#6E7787',
+    // 1.9:1 before — the least legible colour in either palette.
+    disabled: '#666F7F',
     error: '#CF222E',
     warning: '#9A6700',
     info: '#0B62E0',

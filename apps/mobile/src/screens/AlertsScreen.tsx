@@ -78,7 +78,7 @@ export function AlertsScreen() {
                 horizontal
                 showsHorizontalScrollIndicator={false}
                 style={{ flexGrow: 0 }}
-                contentContainerStyle={{ paddingHorizontal: spacing.lg, gap: spacing.sm, paddingVertical: spacing.sm }}
+                contentContainerStyle={{ paddingHorizontal: spacing.lg, gap: spacing.sm, paddingVertical: spacing.sm, alignItems: 'center' }}
             >
                 {(['all', 'error', 'warning', 'info'] as const).map((option) => (
                     <Chip
