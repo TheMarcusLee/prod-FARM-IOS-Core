@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import type { RegisteredDevice } from '../src/devices/registry.js';
 import type { DeviceDriver } from '../src/drivers/types.js';
-import { automationFromDriver, pluginEnvironment, readinessProblem } from '../src/scheduler/executor.js';
+import { automationFromDriver, createLogRedactor, pluginEnvironment, readinessProblem } from '../src/scheduler/executor.js';
 
 const ios: RegisteredDevice = { name: 'iphone', udid: 'UDID-1', wdaLocalPort: 8101, pluginData: {} };
 const adb: RegisteredDevice = { name: 'pixel', udid: 'R58N1', platform: 'android', pluginData: {} };
@@ -66,4 +66,28 @@ test('the legacy automation surface forwards to the driver', async () => {
         ['swipe', { from: { x: 0, y: 0 }, to: { x: 10, y: 20 }, durationMs: 300 }],
         ['pause'],
     ]);
+});
+
+test('run logs never carry the bridge token or the passcode the child process was given', () => {
+    const redact = createLogRedactor(['b3a1f0de-4c2d-4f0a-9b77-11ee22ff33aa', '4821', undefined]);
+    assert.equal(
+        redact('POST http://192.168.1.40:8080/tap authorization=Bearer b3a1f0de-4c2d-4f0a-9b77-11ee22ff33aa'),
+        'POST http://192.168.1.40:8080/tap authorization=Bearer <redacted>',
+    );
+    assert.equal(redact('env: A11Y_BRIDGE_TOKEN=whatever-else IOS_PASSCODE="4821"'),
+        'env: A11Y_BRIDGE_TOKEN=<redacted> IOS_PASSCODE=<redacted>');
+    assert.equal(redact("a11y_bridge_token: 'nested value'"), 'a11y_bridge_token=<redacted>');
+    // Exact-value replacement is not limited to an assignment: a token pasted into a URL goes too.
+    assert.equal(redact('curl http://x/?token=b3a1f0de-4c2d-4f0a-9b77-11ee22ff33aa&y=1'),
+        'curl http://x/?token=<redacted>&y=1');
+    assert.equal(redact('unlocking with 4821'), 'unlocking with <redacted>');
+    assert.equal(redact('nothing secret here'), 'nothing secret here');
+});
+
+test('the redactor tolerates a device with no secrets at all', () => {
+    const redact = createLogRedactor([undefined, '', '12']);
+    assert.equal(redact('plain line'), 'plain line');
+    // Too short to be a secret, so it is not blanked out everywhere it appears.
+    assert.equal(redact('12 items'), '12 items');
+    assert.equal(redact('A11Y_BRIDGE_TOKEN=abc'), 'A11Y_BRIDGE_TOKEN=<redacted>');
 });

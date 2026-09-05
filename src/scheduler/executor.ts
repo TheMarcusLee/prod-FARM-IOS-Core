@@ -106,6 +106,28 @@ export function pluginEnvironment(registered: RegisteredDevice, passcode: string
     };
 }
 
+/**
+ * The plugin child process is handed A11Y_BRIDGE_TOKEN and IOS_PASSCODE, and everything it
+ * prints is appended verbatim to the execution log the dashboard renders and PostgreSQL keeps.
+ * One routine echoing its environment, or a stack trace carrying an Authorization header, would
+ * put a live credential in storage for good — so every line goes through here on the way out.
+ */
+export function createLogRedactor(secrets: Array<string | undefined>): (line: string) => string {
+    // Short values would match half the log; a bridge token is a uuid and a passcode is four
+    // digits at minimum, so the floor only excludes what was never a usable secret anyway.
+    const values = [...new Set(secrets.filter((secret): secret is string => typeof secret === 'string' && secret.length >= 4))]
+        // Longest first, so a token that contains another secret is replaced whole.
+        .sort((left, right) => right.length - left.length);
+    return (line) => {
+        let value = line.replace(
+            /\b(A11Y_BRIDGE_TOKEN|IOS_PASSCODE)(\s*[:=]\s*)("[^"]*"|'[^']*'|\S+)/gi,
+            (_match, name: string) => `${name}=<redacted>`,
+        );
+        for (const secret of values) value = value.split(secret).join('<redacted>');
+        return value;
+    };
+}
+
 async function runPluginProcess(
     specification: PluginProcessSpecification,
     environment: NodeJS.ProcessEnv,
@@ -186,6 +208,7 @@ export async function executeAutomation(
         const definition = plugins.task(task);
         const passcode = platformOf(registered) === 'ios' ? await passcodeForDevice(device.udid) : undefined;
         const driver = driverForDevice(registered, { passcode });
+        const redact = createLogRedactor([passcode, registered.android?.bridgeToken]);
         const environment: NodeJS.ProcessEnv = { ...process.env, ...pluginEnvironment(registered, passcode) };
         const context: TaskExecutionContext = {
             executionId: execution.id,
@@ -198,7 +221,10 @@ export async function executeAutomation(
             assets: await repository.executionAssets(execution),
             signal: controller.signal,
             log: (line) => repository.appendLogs(execution.id, attempt, [line]),
-            runProcess: (specification) => runPluginProcess(specification, environment, controller.signal, (lines) => repository.appendLogs(execution.id, attempt, lines)),
+            runProcess: (specification) => runPluginProcess(
+                specification, environment, controller.signal,
+                (lines) => repository.appendLogs(execution.id, attempt, lines.map(redact)),
+            ),
         };
         return await definition.execute(context, execution.payload);
     } catch (error) {
