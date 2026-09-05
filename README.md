@@ -16,6 +16,7 @@ It runs locally as-is; authentication is optional on a loopback bind. Harden it 
 - [docs/content-queue.md](docs/content-queue.md) — content library, FFmpeg normalisation, and the drip queue
 - [docs/coordinates.md](docs/coordinates.md) — tap-layout profiles and how to add one
 - [docs/android-dashboard.md](docs/android-dashboard.md) — registering an Android phone from the dashboard
+- [docs/mobile-app.md](docs/mobile-app.md) — the companion phone app: demo mode, Tailscale, push, EAS builds
 - [PLUGIN_DEVELOPMENT.md](PLUGIN_DEVELOPMENT.md) — plugin trust and compatibility rules
 - [SECURITY.md](SECURITY.md) — before exposing the dashboard beyond loopback
 

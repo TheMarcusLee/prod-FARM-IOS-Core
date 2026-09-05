@@ -1,0 +1,37 @@
+{
+  "expo": {
+    "name": "Farm",
+    "slug": "farm-companion",
+    "scheme": "farm",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "ai.gethandler.farm.companion",
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "Face ID unlocks remote control of a phone in the farm."
+      }
+    },
+    "android": {
+      "package": "ai.gethandler.farm.companion",
+      "adaptiveIcon": {
+        "backgroundColor": "#0B0C0E",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": { "favicon": "./assets/favicon.png", "bundler": "metro" },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      ["expo-local-authentication", { "faceIDPermission": "Face ID unlocks remote control of a phone in the farm." }],
+      "expo-notifications"
+    ],
+    "experiments": { "typedRoutes": false }
+  }
+}
