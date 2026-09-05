@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { bridgePingUrl, createA11yBridgeDriver, decodeScreenshot, normaliseBridgeNode, screenFromTree } from '../src/drivers/a11y-bridge.js';
+import {
+    BRIDGE_RETRY_BACKOFF_MS, bridgePingUrl, createA11yBridgeDriver, decodeScreenshot, normaliseBridgeNode, screenFromTree,
+} from '../src/drivers/a11y-bridge.js';
 import { createAdbDriver, discoverAdbDevices, escapeForInputText, parseAdbDevices, parseWmSize } from '../src/drivers/adb.js';
 import { driverForDevice, driverKindOf, platformOf } from '../src/drivers/select.js';
 import { parseUiautomatorXml } from '../src/drivers/uiautomator-xml.js';
@@ -187,6 +189,109 @@ test('a bridge that answers with something other than its envelope is a driver e
         createA11yBridgeDriver({ serial: 'R58N1', baseUrl: 'http://127.0.0.1:18300', token: 't', fetchImpl: failure }).pressKey('home'),
         /bridge \/keyboard\/key failed: service not bound/,
     );
+});
+
+test('a busy bridge is retried with backoff, and gives up with a message that says why', async () => {
+    const slept: number[] = [];
+    const sleep = async (milliseconds: number) => { slept.push(milliseconds); };
+    let calls = 0;
+    const busyThenFine = (async () => {
+        calls += 1;
+        return calls < 3
+            ? new Response(JSON.stringify({ status: 'error', code: 'server_busy' }), { status: 503 })
+            : new Response(JSON.stringify({ status: 'success', result: 'ok' }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const driver = createA11yBridgeDriver({
+        serial: 'R58N1', baseUrl: 'http://127.0.0.1:18300', token: 't', fetchImpl: busyThenFine, sleep,
+    });
+    await driver.tap({ x: 1, y: 1 });
+    assert.equal(calls, 3, 'two 503s, then the answer');
+    assert.deepEqual(slept, [200, 400]);
+
+    // Busy for good: four attempts in all, then a step failure naming the cause.
+    slept.length = 0;
+    let attempts = 0;
+    const alwaysBusy = (async () => {
+        attempts += 1;
+        return new Response(JSON.stringify({ status: 'error', code: 'server_busy' }), { status: 503 });
+    }) as unknown as typeof fetch;
+    await assert.rejects(
+        createA11yBridgeDriver({ serial: 'R58N1', baseUrl: 'http://127.0.0.1:18300', token: 't', fetchImpl: alwaysBusy, sleep })
+            .tap({ x: 1, y: 1 }),
+        /still busy after 4 attempts.*server_busy/s,
+    );
+    assert.equal(attempts, 4);
+    assert.deepEqual(slept, [200, 400, 800]);
+    assert.deepEqual([...BRIDGE_RETRY_BACKOFF_MS], [200, 400, 800]);
+});
+
+test('a connection reset is retried; a timeout is not', async () => {
+    const slept: number[] = [];
+    const sleep = async (milliseconds: number) => { slept.push(milliseconds); };
+    let calls = 0;
+    const resetThenFine = (async () => {
+        calls += 1;
+        if (calls < 3) throw Object.assign(new TypeError('fetch failed'), { cause: new Error('read ECONNRESET') });
+        return new Response(JSON.stringify({ status: 'success', result: 'ok' }), { status: 200 });
+    }) as unknown as typeof fetch;
+    await createA11yBridgeDriver({
+        serial: 'R58N1', baseUrl: 'http://127.0.0.1:18300', token: 't', fetchImpl: resetThenFine, sleep,
+    }).pressKey('home');
+    assert.equal(calls, 3);
+    assert.deepEqual(slept, [200, 400]);
+
+    // A deadline is the caller's own budget; burning it three more times helps nobody.
+    let timeouts = 0;
+    const slow = (async () => { timeouts += 1; throw new DOMException('The operation timed out.', 'TimeoutError'); }) as unknown as typeof fetch;
+    await assert.rejects(
+        createA11yBridgeDriver({ serial: 'R58N1', baseUrl: 'http://127.0.0.1:18300', token: 't', fetchImpl: slow, sleep })
+            .pressKey('home'),
+        /is unavailable/,
+    );
+    assert.equal(timeouts, 1);
+});
+
+test('408 and 411 from the bridge are surfaced as what they mean, not as a bare status', async () => {
+    const answering = (status: number, body: string) => (async () => new Response(body, { status })) as unknown as typeof fetch;
+    const sleep = async () => { /* nothing is retried here */ };
+
+    await assert.rejects(
+        createA11yBridgeDriver({
+            serial: 'R58N1', baseUrl: 'http://127.0.0.1:18300', token: 't', sleep,
+            fetchImpl: answering(408, 'request timeout'),
+        }).tap({ x: 1, y: 1 }),
+        /timed out reading the request \(408\).*request timeout/s,
+    );
+
+    await assert.rejects(
+        createA11yBridgeDriver({
+            serial: 'R58N1', baseUrl: 'http://127.0.0.1:18300', token: 't', sleep,
+            fetchImpl: answering(411, 'length required'),
+        }).tap({ x: 1, y: 1 }),
+        /rejected a chunked request \(411\).*Content-Length/s,
+    );
+
+    // Anything else keeps the old shape: the URL and the status.
+    await assert.rejects(
+        createA11yBridgeDriver({
+            serial: 'R58N1', baseUrl: 'http://127.0.0.1:18300', token: 't', sleep,
+            fetchImpl: answering(401, 'bad token'),
+        }).tap({ x: 1, y: 1 }),
+        /http:\/\/127\.0\.0\.1:18300\/tap returned 401: bad token/,
+    );
+});
+
+test('every bridge request asks for the connection to be closed afterwards', async () => {
+    const headers: Array<Record<string, string>> = [];
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+        headers.push(init?.headers as Record<string, string>);
+        return new Response(JSON.stringify({ status: 'success', result: 'ok' }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const driver = createA11yBridgeDriver({ serial: 'R58N1', baseUrl: 'http://127.0.0.1:18300', token: 't', fetchImpl });
+    await driver.tap({ x: 1, y: 1 });
+    await driver.pressKey('back');
+    assert.equal(headers.length, 2);
+    for (const header of headers) assert.equal(header.connection, 'close');
 });
 
 test('a screenshot that is not a PNG is rejected, and a data: prefix is tolerated', () => {
