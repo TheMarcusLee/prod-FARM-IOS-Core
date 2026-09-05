@@ -29,6 +29,7 @@ import { ScheduleTransitionError, type SchedulerRepository } from '../scheduler/
 import { registerContentRoutes } from './routes/content.js';
 import { registerFleetRoutes } from './routes/fleet.js';
 import { registerMcpRoutes } from './routes/mcp.js';
+import { clampScreenshotWidth, keysetPage, registerMobileRoutes, resizeScreenshot, type KeysetQuery } from './routes/mobile.js';
 
 export interface CreateAppOptions {
     plugins: PluginRegistry;
@@ -452,11 +453,15 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         }
         return { device, screen: await remote.getScreenInfo(device.udid) };
     });
-    app.get<{ Params: { udid: string } }>('/api/devices/:udid/remote/screenshot', async (request, reply) => {
+    app.get<{ Params: { udid: string }; Querystring: { width?: string } }>('/api/devices/:udid/remote/screenshot', async (request, reply) => {
         try {
             const android = await androidDevice(request.params.udid);
             const image = android ? await createDriver(android).screenshot() : await remote.getScreenshot(request.params.udid);
-            return reply.header('cache-control', 'no-store').type('image/png').send(image);
+            // ?width= keeps a 12-card grid on a phone connection from pulling
+            // ~30 MB of full-resolution PNG per refresh.
+            const width = clampScreenshotWidth(request.query.width);
+            return reply.header('cache-control', 'no-store').type('image/png')
+                .send(width === null ? image : await resizeScreenshot(image, width));
         } catch {
             // A flapping device shouldn't spew 500s into the log every 5s from the grid poll.
             return reply.code(503).header('cache-control', 'no-store').send();
@@ -529,12 +534,18 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         return reply.code(202).send({ ok: true, message: 'The shared WDA supervisor will reconnect automatically' });
     });
 
-    app.get<{ Querystring: { deviceUdid?: string } }>('/api/schedules', async (request) => ({
-        schedules: await options.scheduler.listSchedules(200, request.query.deviceUdid),
-    }));
-    app.get<{ Querystring: { deviceUdid?: string } }>('/api/executions', async (request) => ({
-        executions: await options.scheduler.listExecutions(200, request.query.deviceUdid),
-    }));
+    app.get<{ Querystring: KeysetQuery }>('/api/schedules', async (request, reply) => {
+        const page = await keysetPage(request.query, (id) => options.scheduler.schedule(id),
+            (limit, deviceUdid, before) => options.scheduler.listSchedules(limit, deviceUdid, before));
+        if (page.nextBefore) reply.header('x-next-before', page.nextBefore);
+        return { schedules: page.rows };
+    });
+    app.get<{ Querystring: KeysetQuery }>('/api/executions', async (request, reply) => {
+        const page = await keysetPage(request.query, (id) => options.scheduler.execution(id),
+            (limit, deviceUdid, before) => options.scheduler.listExecutions(limit, deviceUdid, before));
+        if (page.nextBefore) reply.header('x-next-before', page.nextBefore);
+        return { executions: page.rows };
+    });
     app.get<{ Params: { id: string } }>('/api/executions/:id', async (request, reply) => {
         const execution = await options.scheduler.execution(request.params.id);
         return execution ?? reply.code(404).send({ error: 'Execution not found' });
@@ -634,6 +645,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     await registerMcpRoutes(app, {
         scheduler: options.scheduler, plugins: options.plugins, screenshot: (udid) => remote.getScreenshot(udid),
     });
+    await registerMobileRoutes(app, options);
 
     for (const plugin of options.plugins.list()) {
         if (plugin.registerRoutes) await plugin.registerRoutes({
