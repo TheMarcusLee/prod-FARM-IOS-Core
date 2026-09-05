@@ -29,7 +29,7 @@ export const DEFAULT_SEVERITY: Record<EventKind, EventSeverity> = {
     'execution.failed': 'error',
     'execution.stopped': 'warning',
     'execution.cancelled': 'info',
-    'execution.stuck': 'warning',
+    'execution.stuck': 'error',
     'device.connected': 'info',
     'device.disconnected': 'warning',
     'device.error': 'error',

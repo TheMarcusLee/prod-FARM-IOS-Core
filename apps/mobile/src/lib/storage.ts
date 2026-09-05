@@ -33,7 +33,7 @@ export async function writeToken(token: string | null): Promise<void> {
     });
 }
 
-/** `pf_live_9f3c…802e` — what Settings shows instead of the value. */
+/** `pf_<43 base64url characters>` — what Settings shows instead of the value. */
 export function maskToken(token: string | null): string {
     if (!token) return 'not set';
     if (token.length <= 12) return `…${token.slice(-4)}`;

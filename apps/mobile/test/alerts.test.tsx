@@ -20,13 +20,16 @@ describe('Alerts', () => {
         const all = screen.getAllByTestId(/^event-/).length;
 
         await fireEvent.press(screen.getByTestId('alerts-severity-error'));
+        // The list virtualises to a window, so compare kinds rather than counts:
+        // only error-severity kinds survive the filter.
         await waitFor(() => {
             const errors = screen.getAllByTestId(/^event-/);
             expect(errors.length).toBeGreaterThan(0);
-            expect(errors.length).toBeLessThan(all);
+            expect(errors.length).toBeLessThanOrEqual(all);
+            expect(screen.queryByText('Run finished')).toBeNull();
+            expect(screen.queryByText('Run started')).toBeNull();
         });
-        // Only error-severity kinds survive the filter.
-        expect(screen.queryByText('Run finished')).toBeNull();
+        expect(screen.getAllByText(/Run failed|Run stuck|Device error/).length).toBeGreaterThan(0);
     });
 
     it('narrows to device events when the group chip is tapped', async () => {
