@@ -9,6 +9,7 @@ import {
     assets, contentItems, executionAttempts, executionLogs, executions, schedules,
     type ExecutionRow, type ScheduleRow,
 } from '../database/schema.js';
+import { STUCK_GRACE_MS } from '../fleet/summary.js';
 import type { PluginRegistry } from '../registry.js';
 import type { CreateTaskInput, JsonObject, ScheduleTiming, StoredAsset, TaskEnvelope } from '../types.js';
 import { ensureDeviceQueue, queueNameForDevice } from './queue.js';
@@ -16,6 +17,9 @@ import { initialRunAt, latestDueOccurrence } from './recurrence.js';
 import { DEFAULT_MIN_SCHEDULE_GAP_MINUTES, estimatedTaskWindow, validateTaskInput, windowsTooClose } from './validation.js';
 
 export interface ExecutionDetail extends ExecutionRow { logs: string[] }
+
+/** The error a give-up sweep writes; the timeline and the dashboard show it verbatim. */
+export const STUCK_EXECUTION_ERROR = 'Timed out past its execution window';
 
 /**
  * Keyset cursor for the newest-first listings. `createdAt` alone is ambiguous
@@ -335,6 +339,26 @@ export class SchedulerRepository {
         // accepts failed/stopped and would otherwise hit "asset is missing".
         // failed/stopped media is reclaimed by cleanup() once it ages out.
         if (status === 'succeeded' || status === 'cancelled') await this.purgeTerminalAssets(id);
+    }
+
+    /**
+     * Nothing else moves an execution off `running`: if the worker that owned it
+     * died, or the plugin process wedged past the point pg-boss will wait, the
+     * row sits there for ever and the device looks busy. `execution.stuck` (the
+     * fleet sweep) is the warning; this is the give-up, on the same threshold so
+     * the two agree about what "past its window" means.
+     *
+     * The update is conditional, so two workers sweeping at once fail each
+     * execution exactly once — only the transaction that moved the row off
+     * `running` gets it back from `returning()`.
+     */
+    async failStuckExecutions(now = new Date(), graceMs = STUCK_GRACE_MS): Promise<ExecutionRow[]> {
+        const cutoff = new Date(now.getTime() - graceMs);
+        const failed = await this.connection.db.update(executions).set({
+            status: 'failed', error: STUCK_EXECUTION_ERROR, finishedAt: now, updatedAt: now,
+        }).where(and(eq(executions.status, 'running'), lt(executions.deadlineAt, cutoff))).returning();
+        for (const execution of failed) this.emit({ kind: 'execution.failed', execution });
+        return failed;
     }
 
     async resetForRetry(id: string, error: string): Promise<void> {
