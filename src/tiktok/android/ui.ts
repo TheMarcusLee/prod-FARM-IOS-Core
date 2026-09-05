@@ -66,7 +66,14 @@ export async function locate(driver: DeviceDriver, selectors: SelectorList, reco
 /** Taps the first selector that resolves, and logs it the way the iOS routines log taps. */
 export async function tapFirst(driver: DeviceDriver, label: string, selectors: SelectorList, recognize?: Recognize): Promise<void> {
     const point = await locate(driver, selectors, recognize);
-    if (!point) throw new DriverError(`TikTok control not found: ${label} (tried ${describe(selectors)})`);
+    if (!point) {
+        // A selector list that no longer matches is the routine's most common failure, and it is
+        // unfixable without knowing what the phone was actually showing.
+        throw new DriverError(
+            `TikTok control not found: ${label} (tried ${describe(selectors)}). `
+            + `Screen showed: ${screenSummary(await driver.uiTree())}`,
+        );
+    }
     await driver.tap(point);
     console.log(`Tapped ${label} at (${Math.round(point.x)}, ${Math.round(point.y)})`);
 }

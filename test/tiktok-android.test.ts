@@ -6,7 +6,9 @@ import test from 'node:test';
 
 import type { DeviceDriver, MediaFile, Point, Rect, UiNode } from '../src/drivers/types.js';
 import type { PostManifest } from '../src/tiktok/post-manifest.js';
-import { POST_SELECTORS, galleryCells, postOnAndroid, switchAccount } from '../src/tiktok/android/post.js';
+import {
+    MAX_CAPTION_LENGTH, POST_SELECTORS, galleryCells, postOnAndroid, switchAccount,
+} from '../src/tiktok/android/post.js';
 import { doomscrollOnAndroid } from '../src/tiktok/android/doomscroll.js';
 import { driverFromEnv, driverKindFromEnv } from '../src/tiktok/android/driver-from-env.js';
 import { createTikTokPlugin } from '../src/tiktok-plugin.js';
@@ -337,4 +339,88 @@ test('configured Android entrypoints override the built-in ones', async () => {
     } finally {
         await rm(workspace, { recursive: true, force: true });
     }
+});
+
+test('a non-ASCII caption fails before anything is pushed or opened', async () => {
+    const fake = fakeDriver(postFlowScreens('Posted'));
+    await assert.rejects(
+        postOnAndroid(fake.driver, manifest({ caption: 'summer vibes 🌴' }), FAST),
+        /adb shell input text.*cannot type.*a11y-bridge/s,
+    );
+    // Nothing was pushed and TikTok was never opened, so there is no half-finished draft to clean up.
+    assert.deepEqual(fake.pushed, []);
+    assert.deepEqual(fake.launched, []);
+});
+
+test('the same caption is fine on the bridge driver, which types UTF-8', async () => {
+    const fake = fakeDriver(postFlowScreens('Posted'));
+    const bridge = { ...fake.driver, kind: 'a11y-bridge' as const };
+    await postOnAndroid(bridge, manifest({ caption: 'summer vibes 🌴' }), FAST);
+    assert.deepEqual(fake.typed, ['summer vibes 🌴']);
+});
+
+test('an over-long caption is rejected rather than silently truncated by TikTok', async () => {
+    const fake = fakeDriver(postFlowScreens('Posted'));
+    await assert.rejects(
+        postOnAndroid(fake.driver, manifest({ caption: 'a'.repeat(MAX_CAPTION_LENGTH + 1) }), FAST),
+        /2,?200/,
+    );
+});
+
+test('a control the selector table no longer matches reports what was on screen', async () => {
+    const fake = fakeDriver([screen({ text: 'For You' }, { text: 'Following' })]);
+    await assert.rejects(
+        postOnAndroid(fake.driver, manifest(), FAST),
+        /Screen showed: For You, Following/,
+    );
+});
+
+test('a handle that is a prefix of the active one is not read as already active', async () => {
+    // The phone is on @bobby; the manifest wants @bob. A substring match would post from @bobby.
+    const fake = fakeDriver([
+        screen({ text: 'Profile', bounds: { left: 900, top: 2200, right: 1040, bottom: 2320 } }),
+        screen({ id: 'com.zhiliaoapp.musically:id/tv_nickname', text: '@bobby', bounds: { left: 40, top: 300, right: 400, bottom: 380 } }),
+        screen({ text: '@bob', bounds: { left: 40, top: 600, right: 400, bottom: 680 } }),
+        screen({ text: 'Profile', bounds: { left: 900, top: 2200, right: 1040, bottom: 2320 } }),
+        screen({ text: '@bob', clickable: false, bounds: { left: 40, top: 300, right: 400, bottom: 380 } }),
+    ]);
+    await switchAccount(fake.driver, '@bob', FAST);
+    assert.ok(fake.taps.includes('@bob'), `expected the @bob row to be tapped, got ${fake.taps.join(' → ')}`);
+});
+
+test('a gallery cell whose container and image both match counts once', () => {
+    const root = element({
+        type: 'android.widget.FrameLayout', bounds: SCREEN, clickable: false,
+        children: [element({
+            id: 'com.zhiliaoapp.musically:id/album_image', description: 'video',
+            bounds: { left: 10, top: 300, right: 360, bottom: 650 },
+            children: [element({
+                id: 'com.zhiliaoapp.musically:id/iv_image', description: 'video, 12 seconds',
+                bounds: { left: 10, top: 300, right: 360, bottom: 650 },
+            })],
+        })],
+    });
+    assert.equal(galleryCells(root).length, 1);
+});
+
+test('the picker refusing to show enough media names the count and the screen', async () => {
+    const screens = postFlowScreens('Posted');
+    const fake = fakeDriver(screens);
+    await assert.rejects(
+        postOnAndroid(fake.driver, manifest({
+            files: [
+                { path: '/tmp/a.jpg', name: 'a.jpg', mimeType: 'image/jpeg' },
+                { path: '/tmp/b.jpg', name: 'b.jpg', mimeType: 'image/jpeg' },
+                { path: '/tmp/c.jpg', name: 'c.jpg', mimeType: 'image/jpeg' },
+                { path: '/tmp/d.jpg', name: 'd.jpg', mimeType: 'image/jpeg' },
+            ],
+        }), FAST),
+        /showed 3 selectable item\(s\) but 4 are needed.*Screen showed/s,
+    );
+});
+
+test('driverFromEnv refuses an a11y-bridge device with no token, and rejects an unknown driver', () => {
+    assert.throws(() => driverFromEnv({ ANDROID_SERIAL: 'R58N1', DEVICE_DRIVER: 'a11y-bridge', A11Y_BRIDGE_URL: 'http://127.0.0.1:18300' }), /A11Y_BRIDGE_TOKEN/);
+    assert.throws(() => driverKindFromEnv({ DEVICE_DRIVER: 'wda' }), /must be adb or a11y-bridge/);
+    assert.throws(() => driverFromEnv({ DEVICE_DRIVER: 'adb' }), /ANDROID_SERIAL/);
 });

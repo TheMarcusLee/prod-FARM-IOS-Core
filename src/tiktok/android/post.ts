@@ -13,6 +13,9 @@ import {
 
 export const TIKTOK_ANDROID_PACKAGE = 'com.zhiliaoapp.musically';
 
+/** TikTok's own limit; the plugin enforces it too, but a manifest can be handed to us directly. */
+export const MAX_CAPTION_LENGTH = 2_200;
+
 /**
  * Every on-screen control this routine touches, in one table.
  *
@@ -96,6 +99,26 @@ function timingOf(options: PostOnAndroidOptions): Timing {
     };
 }
 
+/**
+ * The adb driver cannot type anything outside printable ASCII, and finding that out after the
+ * media is pushed and the editor is open leaves a half-finished draft on the phone. Check first.
+ */
+export function assertCaptionIsTypeable(driver: DeviceDriver, caption: string): void {
+    if (caption.length > MAX_CAPTION_LENGTH) {
+        throw new DriverError(`Caption is ${caption.length} characters; TikTok accepts at most ${MAX_CAPTION_LENGTH}`);
+    }
+    if (driver.kind !== 'adb') return;
+    const offending = [...caption].find((character) => {
+        const code = character.codePointAt(0)!;
+        return code < 0x20 || code > 0x7e;
+    });
+    if (offending === undefined) return;
+    throw new DriverError(
+        `The caption contains ${JSON.stringify(offending)}, which "adb shell input text" cannot type. `
+        + 'Switch this device to the a11y-bridge driver, or use an ASCII-only caption.',
+    );
+}
+
 /** Picker cells, ordered the way they are laid out: top-left (newest) first. */
 export function galleryCells(root: UiNode): UiNode[] {
     const matches = [...walk(root)].filter((node) => {
@@ -105,8 +128,16 @@ export function galleryCells(root: UiNode): UiNode[] {
             && POST_SELECTORS.galleryCellDescriptions.some((word) => description.includes(word));
         return byId || byDescription;
     });
+    const seen = new Set<string>();
     return matches
         .filter(({ bounds }) => bounds.right > bounds.left && bounds.bottom > bounds.top)
+        // A cell whose container and image both match the table is still one cell.
+        .filter(({ bounds }) => {
+            const key = `${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        })
         .sort((a, b) => a.bounds.top - b.bounds.top || a.bounds.left - b.bounds.left);
 }
 
@@ -132,7 +163,9 @@ export async function switchAccount(driver: DeviceDriver, handle: string, option
     await driver.pause(timing.settleMs, timing.signal);
 
     const handleSelector: SelectorList = [{ text: handle }];
-    if (await isPresent(driver, handleSelector)) {
+    // Exact here on purpose: a substring match would read "@bobby" as "@bob" and post from the
+    // wrong account, which is the one outcome that cannot be undone.
+    if (await isPresent(driver, [{ text: handle, exact: true }])) {
         console.log(`Already on TikTok account ${handle}`);
         return;
     }
@@ -214,6 +247,7 @@ export async function postOnAndroid(driver: DeviceDriver, manifest: PostManifest
     const timing = timingOf(options);
     const packageName = options.packageName ?? TIKTOK_ANDROID_PACKAGE;
 
+    if (manifest.caption) assertCaptionIsTypeable(driver, manifest.caption);
     await pushAllMedia(driver, manifest);
 
     console.log(`Launching ${packageName} on ${driver.udid}`);
@@ -249,13 +283,14 @@ export async function postOnAndroid(driver: DeviceDriver, manifest: PostManifest
 }
 
 /** The manifest's `musicUrl` is an iOS-only deep-link flow and is ignored on Android. */
-export async function runFromManifest(manifestPath: string): Promise<void> {
+export async function runFromManifest(manifestPath: string, signal?: AbortSignal): Promise<void> {
     const manifest = JSON.parse(await readFile(path.resolve(manifestPath), 'utf8')) as PostManifest;
     if (manifest.musicUrl) console.log('Ignoring musicUrl: the Android routine does not drive the sound deep link yet');
     const driver = driverFromEnv();
     await postOnAndroid(driver, manifest, {
         packageName: process.env.TIKTOK_PACKAGE?.trim() || TIKTOK_ANDROID_PACKAGE,
         recognize: recognizeOnDevice,
+        ...(signal ? { signal } : {}),
     });
 }
 
@@ -263,5 +298,9 @@ export async function runFromManifest(manifestPath: string): Promise<void> {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     const manifestPath = process.argv[2];
     if (!manifestPath) throw new Error('A post manifest path is required');
-    await runFromManifest(manifestPath);
+    // The executor stops a routine with SIGTERM; every pause races the abort so it lands promptly
+    // instead of the process being torn down between two taps.
+    const controller = new AbortController();
+    for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => controller.abort());
+    await runFromManifest(manifestPath, controller.signal);
 }
