@@ -2,7 +2,7 @@ import { app, dialog, ipcMain, Menu, shell } from 'electron';
 import path from 'node:path';
 
 import { createFleet, type Fleet } from './fleet.ts';
-import { buildDiagnostics, writeDiagnosticsZip } from './diagnostics.ts';
+import { buildDiagnostics, secretScrubber, secretsOf, writeDiagnosticsZip } from './diagnostics.ts';
 import { resetEmbeddedPostgres } from './embedded-postgres.ts';
 import { JobRunner } from './jobs.ts';
 import { ChildRegistry } from './orphans.ts';
@@ -187,11 +187,13 @@ async function exportDiagnostics(): Promise<{ ok: boolean; message: string }> {
         filters: [{ name: 'Zip archive', extensions: ['zip'] }],
     });
     if (chosen.canceled || !chosen.filePath) return { ok: false, message: 'Cancelled.' };
+    const settings = settingsStore.get();
     try {
         await writeDiagnosticsZip(
             chosen.filePath,
             buildDiagnostics({
-                settings: settingsStore.get(),
+                settings,
+                databaseUrl: fleet.context.databaseUrl,
                 snapshot: currentSnapshot(),
                 appVersion: app.getVersion(),
                 repoRoot: paths.repoRoot,
@@ -200,6 +202,7 @@ async function exportDiagnostics(): Promise<{ ok: boolean; message: string }> {
             }),
             fleet.logs,
             fleet.supervisor.ids(),
+            secretScrubber(secretsOf(settings, fleet.context.databaseUrl)),
         );
         return { ok: true, message: `Wrote ${chosen.filePath}` };
     } catch (error) {
