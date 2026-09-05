@@ -1,6 +1,10 @@
 import type { JobWithMetadata } from 'pg-boss';
 
 import { assertDatabaseReady, createDatabaseConnection } from '../database/client.js';
+import { createEventStore } from '../fleet/events.js';
+import { createEventRecorder } from '../fleet/recorder.js';
+import { schedulerEventHook } from '../fleet/scheduler-events.js';
+import { notificationConfigFromEnv } from '../notifications/config.js';
 import { activeDevices, loadRegisteredDevices } from '../devices/registry.js';
 import { configuredPluginModules, loadPlugins } from '../loader.js';
 import { PluginRegistry } from '../registry.js';
@@ -16,7 +20,9 @@ export async function startWorker(plugins: PluginRegistry): Promise<WorkerRuntim
     await assertDatabaseReady(connection);
     const boss = createQueue();
     await boss.start();
-    const repository = new SchedulerRepository(connection, boss, plugins);
+    const repository = new SchedulerRepository(connection, boss, plugins, schedulerEventHook(
+        createEventRecorder(createEventStore(connection), { notifications: notificationConfigFromEnv() }),
+    ));
     const workingQueues = new Set<string>();
 
     const registerDeviceWorkers = async (): Promise<void> => {

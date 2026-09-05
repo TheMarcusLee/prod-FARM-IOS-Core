@@ -39,11 +39,20 @@ function taskEnvelope(row: Pick<ScheduleRow, 'pluginId' | 'taskType' | 'taskVers
     return { pluginId: row.pluginId, taskType: row.taskType, taskVersion: row.taskVersion, payload: row.payload };
 }
 
+/** Lifecycle signals for the fleet event log. Mapped to `events` rows in src/fleet. */
+export type SchedulerLifecycleEvent =
+    | { kind: 'execution.started' | 'execution.succeeded' | 'execution.failed' | 'execution.stopped'; execution: ExecutionRow }
+    | { kind: 'schedule.created' | 'schedule.paused' | 'schedule.cancelled'; schedule: ScheduleRow };
+
+export type SchedulerEventHook = (event: SchedulerLifecycleEvent) => void;
+
 export class SchedulerRepository {
     constructor(
         readonly connection: DatabaseConnection,
         readonly boss: PgBoss,
         readonly plugins: PluginRegistry,
+        /** Optional observer; defaults to a no-op so nothing else has to change. */
+        readonly onEvent: SchedulerEventHook = () => {},
     ) {}
 
     async createTask(
@@ -69,6 +78,7 @@ export class SchedulerRepository {
         if (!schedule) throw new Error('Unable to create schedule');
         await this.attachAssets(schedule.id, assetIds);
         if (schedule.nextRunAt && schedule.nextRunAt <= now) await this.materializeDue(now, schedule.id);
+        this.onEvent({ kind: 'schedule.created', schedule });
         return schedule;
     }
 
@@ -192,6 +202,7 @@ export class SchedulerRepository {
                 .where(and(eq(executions.scheduleId, id), eq(executions.status, 'queued')));
             await this.purgeScheduleAssetsIfIdle(id);
         }
+        if (updated && status !== 'active') this.onEvent({ kind: `schedule.${status}`, schedule: updated });
         return updated ?? null;
     }
 
@@ -245,6 +256,7 @@ export class SchedulerRepository {
         }).where(and(eq(executions.id, id), inArray(executions.status, ['queued', 'running']))).returning();
         if (!row) return null;
         await this.connection.db.insert(executionAttempts).values({ executionId: id, attempt }).onConflictDoNothing();
+        this.onEvent({ kind: 'execution.started', execution: row });
         return row;
     }
 
@@ -258,9 +270,10 @@ export class SchedulerRepository {
     }
 
     async finishExecution(id: string, status: 'succeeded' | 'failed' | 'cancelled' | 'stopped', exitCode: number | null, error?: string): Promise<void> {
-        await this.connection.db.update(executions).set({
+        const [finished] = await this.connection.db.update(executions).set({
             status, exitCode, error, finishedAt: new Date(), updatedAt: new Date(),
-        }).where(eq(executions.id, id));
+        }).where(eq(executions.id, id)).returning();
+        if (finished && status !== 'cancelled') this.onEvent({ kind: `execution.${status}`, execution: finished });
         // Keep the media for retryable outcomes — the dashboard Retry button
         // accepts failed/stopped and would otherwise hit "asset is missing".
         // failed/stopped media is reclaimed by cleanup() once it ages out.
