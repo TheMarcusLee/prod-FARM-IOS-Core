@@ -103,8 +103,15 @@ function createRow(model: RigRow): Row {
     const state = document.createElement('span');
 
     head.append(dot, grow, state);
-    // The push relay is not this app's to start or stop, so it gets no menu.
-    if (model.id || model.logIds.length > 0) head.append(createMenu(model));
+    // The push relay is not this app's to start or stop, so it gets no menu — but
+    // it keeps the space one would take, so every state word lines up.
+    if (model.id || model.logIds.length > 0) {
+        head.append(createMenu(model));
+    } else {
+        const spacer = document.createElement('span');
+        spacer.className = 'bl-row-menu';
+        head.append(spacer);
+    }
     root.append(head);
 
     return {

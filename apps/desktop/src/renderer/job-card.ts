@@ -47,8 +47,14 @@ export function createJobCard(id: string, options: { showOpen: boolean }): JobCa
     const dismiss = button('Dismiss', () => window.farm.dismissJob(id));
     const open = button('Open window', () => window.farm.openJob(id));
 
-    head.append(dot, grow, state, rerun, cancel, dismiss);
-    if (options.showOpen) head.append(open);
+    // The same empty slot a service row keeps for its menu, so the states line up.
+    const slot = document.createElement('span');
+    slot.className = 'bl-row-menu';
+    head.append(dot, grow, state, slot);
+    const buttons = document.createElement('div');
+    buttons.className = 'bl-row-buttons';
+    buttons.append(rerun, cancel, dismiss);
+    if (options.showOpen) buttons.append(open);
 
     const disclosure = document.createElement('details');
     const summary = document.createElement('summary');
@@ -64,7 +70,7 @@ export function createJobCard(id: string, options: { showOpen: boolean }): JobCa
     body.append(checks, command, note);
     disclosure.append(summary, body);
 
-    root.append(head, disclosure);
+    root.append(head, buttons, disclosure);
 
     let opened = false;
     return {
@@ -98,8 +104,9 @@ export function createJobCard(id: string, options: { showOpen: boolean }): JobCa
             command.textContent = job.command;
             note.textContent = job.note;
             // A job that stopped because something is missing is exactly the case
-            // where the checklist is the answer, so open it once, on its own.
-            if (!opened && (job.state === 'blocked' || job.state === 'failed')) {
+            // where the checklist is the answer, so open it once, on its own — in
+            // the job's own window, which is where there is room to read it.
+            if (!opened && !options.showOpen && (job.state === 'blocked' || job.state === 'failed')) {
                 opened = true;
                 disclosure.open = true;
             }
