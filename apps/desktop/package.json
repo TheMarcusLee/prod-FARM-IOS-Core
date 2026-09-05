@@ -1,0 +1,38 @@
+{
+  "name": "@git-agni/phone-farm-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "macOS desktop supervisor for the Phone Farm services",
+  "type": "module",
+  "main": "dist/main/main.cjs",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "npm run build && electron .",
+    "smoke": "npm run build && electron . --smoke",
+    "dist": "npm run build && electron-builder --mac --config electron-builder.yml",
+    "pack": "npm run build && electron-builder --dir --config electron-builder.yml",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.ts",
+    "check": "npm run typecheck && npm test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "embedded-postgres": "17.10.0-beta.17"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "electron": "^44.2.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.25.12",
+    "typescript": "^5.9.3"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true,
+    "@embedded-postgres/darwin-arm64@17.10.0-beta.17": true,
+    "@embedded-postgres/darwin-x64@17.10.0-beta.17": true,
+    "electron@44.2.0": true
+  },
+  "productName": "Phone Farm"
+}

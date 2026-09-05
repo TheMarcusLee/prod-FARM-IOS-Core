@@ -1,0 +1,57 @@
+<meta charset="utf-8">
+<title>Settings</title>
+<link rel="stylesheet" href="app.css">
+<header>
+    <h1>Settings</h1>
+    <span class="status" id="status"></span>
+</header>
+<main>
+    <form id="settings">
+        <fieldset>
+            <legend>Dashboard</legend>
+            <label><span>WEB_PORT</span><input type="number" name="webPort" min="1" max="65535" required></label>
+            <label><span>PHONE_FARM_PLUGINS (comma-separated ESM packages)</span><input type="text" name="plugins" placeholder="empty is a valid fleet-only install"></label>
+            <label><span>PHONE_FARM_AUTH_PLUGIN</span><input type="text" name="authPlugin" placeholder="only needed off loopback"></label>
+            <p class="hint">The dashboard is always bound to 127.0.0.1 by this app.</p>
+        </fieldset>
+
+        <fieldset>
+            <legend>Database</legend>
+            <label><span>External DATABASE_URL (leave empty to use the bundled Postgres)</span><input type="text" name="databaseUrl" placeholder="postgresql://user:password@host:5432/phone_farm"></label>
+            <label><span>Bundled Postgres port</span><input type="number" name="embeddedPostgresPort" min="1" max="65535" required></label>
+        </fieldset>
+
+        <fieldset>
+            <legend>Devices</legend>
+            <label><span>APPIUM_PORT</span><input type="number" name="appiumPort" min="1" max="65535" required></label>
+            <label><span>ANDROID_DISCOVERY</span>
+                <select name="androidDiscovery"><option value="on">on</option><option value="off">off (iOS-only host)</option></select>
+            </label>
+            <label><span>XCODE_ORG_ID</span><input type="text" name="xcodeOrgId" placeholder="required for WebDriverAgent signing"></label>
+            <label><span>XCODE_SIGNING_ID</span><input type="text" name="xcodeSigningId"></label>
+            <label><span>WDA_BUNDLE_ID</span><input type="text" name="wdaBundleId"></label>
+            <label><span>IOS_PLATFORM_VERSION</span><input type="text" name="iosPlatformVersion"></label>
+            <label><span>TIKTOK_BUNDLE_ID</span><input type="text" name="tiktokBundleId"></label>
+        </fieldset>
+
+        <fieldset>
+            <legend>Application</legend>
+            <label class="inline"><input type="checkbox" name="launchAtLogin"><span>Launch at login</span></label>
+        </fieldset>
+
+        <div class="actions">
+            <button type="submit" class="primary">Save</button>
+            <span class="status" id="save-status"></span>
+        </div>
+    </form>
+
+    <fieldset class="danger" style="margin-top:18px;max-width:560px">
+        <legend>Danger zone</legend>
+        <p class="hint">Deletes the bundled Postgres cluster: every device, schedule and execution. You will be asked to confirm.</p>
+        <div class="actions">
+            <button id="reset-db" type="button">Reset the embedded database…</button>
+            <span class="status" id="reset-status"></span>
+        </div>
+    </fieldset>
+</main>
+<script type="module" src="settings.js"></script>
