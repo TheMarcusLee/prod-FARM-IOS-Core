@@ -2,7 +2,10 @@ import crypto from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import type { AuthenticatedUser, AuthProvider } from '../plugin.js';
-import { defaultAuthStatePath, readAuthState, touchApiToken, tokenForAuthorization, verifyPassword } from './state.js';
+import {
+    defaultAuthStatePath, readAuthState, revokeSession, sessionRevoked, touchApiToken, tokenForAuthorization,
+    verifyPassword, type AuthState,
+} from './state.js';
 import { SESSION_IDENTITY } from './types.js';
 
 export const SESSION_COOKIE = 'phone_farm_session';
@@ -22,23 +25,35 @@ function positiveNumber(value: string | undefined, fallback: number): number {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function signSession(secret: string, expiresAt: number): string {
-    const payload = Buffer.from(JSON.stringify({ exp: expiresAt })).toString('base64url');
+interface SessionPayload { exp: number; sid: string }
+
+/** The `sid` is what makes one cookie revocable without invalidating every other one. */
+function signSession(secret: string, expiresAt: number, sid: string): string {
+    const payload = Buffer.from(JSON.stringify({ exp: expiresAt, sid })).toString('base64url');
     const signature = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
     return `${payload}.${signature}`;
 }
 
-function sessionValid(secret: string, value: string | undefined, now: number): boolean {
+/** The signed, unexpired payload a cookie carries, or null. Revocation is checked by the caller. */
+function sessionPayload(secret: string, value: string | undefined, now: number): SessionPayload | null {
     const [payload, signature] = (value ?? '').split('.');
-    if (!payload || !signature) return false;
+    if (!payload || !signature) return null;
     const expected = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
     const given = Buffer.from(signature);
     const want = Buffer.from(expected);
-    if (given.length !== want.length || !crypto.timingSafeEqual(given, want)) return false;
+    if (given.length !== want.length || !crypto.timingSafeEqual(given, want)) return null;
     try {
-        const { exp } = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { exp?: number };
-        return typeof exp === 'number' && exp > now;
-    } catch { return false; }
+        const { exp, sid } = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as Partial<SessionPayload>;
+        // A cookie minted before sessions carried an id cannot be revoked, so it
+        // is not honoured: the operator signs in once more and gets one that can.
+        if (typeof exp !== 'number' || typeof sid !== 'string' || !sid || exp <= now) return null;
+        return { exp, sid };
+    } catch { return null; }
+}
+
+function sessionValid(state: AuthState, value: string | undefined, now: number): boolean {
+    const payload = sessionPayload(state.sessionSecret, value, now);
+    return payload !== null && !sessionRevoked(state, payload.sid, now);
 }
 
 function readCookie(header: string | undefined, name: string): string | undefined {
@@ -115,6 +130,11 @@ export function createLocalAuthProvider(options: LocalAuthOptions = {}): AuthPro
         return bucket.count >= maxAttempts;
     };
     const recordFailure = (key: string, now: number): void => {
+        // Every distinct source address that ever fails a login would otherwise
+        // stay in this map for the life of the process.
+        if (attempts.size > 1_000) {
+            for (const [candidate, bucket] of attempts) if (bucket.resetAt <= now) attempts.delete(candidate);
+        }
         const bucket = attempts.get(key);
         if (!bucket || bucket.resetAt <= now) attempts.set(key, { count: 1, resetAt: now + windowMinutes * 60_000 });
         else bucket.count += 1;
@@ -151,11 +171,19 @@ export function createLocalAuthProvider(options: LocalAuthOptions = {}): AuthPro
                 }
                 attempts.delete(request.ip);
                 const maxAge = Math.round(sessionHours * 3600);
-                setSessionCookie(request, reply, signSession(state.sessionSecret, now + maxAge * 1000), maxAge);
+                const sid = crypto.randomBytes(16).toString('base64url');
+                setSessionCookie(request, reply, signSession(state.sessionSecret, now + maxAge * 1000, sid), maxAge);
                 return reply.redirect(next, 303);
             });
 
             app.get('/auth/logout', async (request, reply) => {
+                // Clearing the browser's copy is not sign-out: the cookie is a
+                // self-contained HMAC, so the farm has to remember the revocation.
+                const now = Date.now();
+                const state = await readAuthState(statePath).catch(() => null);
+                const payload = state
+                    && sessionPayload(state.sessionSecret, readCookie(request.headers.cookie, SESSION_COOKIE), now);
+                if (payload) await revokeSession(statePath, payload.sid, payload.exp, now).catch(() => undefined);
                 setSessionCookie(request, reply, '', 0);
                 return reply.redirect('/login', 303);
             });
@@ -181,7 +209,7 @@ export function createLocalAuthProvider(options: LocalAuthOptions = {}): AuthPro
             if (request.headers.authorization) return null;
 
             const state = await readAuthState(statePath).catch(() => null);
-            if (state && sessionValid(state.sessionSecret, readCookie(request.headers.cookie, SESSION_COOKIE), Date.now())) {
+            if (state && sessionValid(state, readCookie(request.headers.cookie, SESSION_COOKIE), Date.now())) {
                 request.apiToken = SESSION_IDENTITY;
                 return { id: 'local', roles: ['operator'] };
             }
