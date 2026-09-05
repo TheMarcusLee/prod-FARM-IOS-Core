@@ -182,6 +182,8 @@ export function allocateDevicePorts(devices: RegisteredDevice[], reserved: Array
     })();
 }
 
+let persistSequence = 0;
+
 export class DeviceRegistrationService implements DeviceRegistrationManager {
     private readonly workspaceRoot: string;
     private readonly packageRoot: string;
@@ -915,7 +917,9 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
     private async persist(session: RegistrationSession): Promise<void> {
         await mkdir(this.stateDirectory, { recursive: true });
         const target = this.statePath(session.id);
-        const temporary = `${target}.${process.pid}.tmp`;
+        // Two persists of the same session can overlap (a check finishing while the UI polls);
+        // a shared temp name makes the second rename fail with ENOENT, so make each unique.
+        const temporary = `${target}.${process.pid}.${persistSequence++}.tmp`;
         await writeFile(temporary, `${JSON.stringify(publicSnapshot(session), null, 2)}\n`, { mode: 0o600 });
         await rename(temporary, target);
     }
