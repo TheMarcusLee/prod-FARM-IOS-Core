@@ -211,9 +211,18 @@ test('the schedule page renders a track per active phone through the shell', asy
 
 test('the retired /tasks page redirects to Schedule', async (context) => {
     const app = await createApp({
-        plugins: new PluginRegistry([]),
+        plugins: new PluginRegistry([{
+            id: 'com.example.stats', version: '1.0.0', displayName: 'Stats', tasks: [],
+            navLinks: [{ label: 'Stats', href: '/stats' }],
+        }]),
         scheduler: {} as SchedulerRepository,
         dashboardTheme: defaultDashboardTheme,
+        authProvider: {
+            id: 'test', logoutPath: '/auth/logout',
+            registerRoutes() {},
+            async authenticate() { return { id: 'u', roles: [] }; },
+            isPublicPath() { return true; },
+        },
     });
     context.after(() => app.close());
 
@@ -225,4 +234,7 @@ test('the retired /tasks page redirects to Schedule', async (context) => {
     const page = await inject(app, { method: 'GET', url: '/schedule' });
     assert.equal(page.statusCode, 200);
     assert.match(page.body, /No phones are active/);
+    // The shell's slots are filled from the same options app.ts already has.
+    assert.match(page.body, /href="\/stats"[^>]*>Stats</);
+    assert.match(page.body, /href="\/auth\/logout"[^>]*>Log out</);
 });

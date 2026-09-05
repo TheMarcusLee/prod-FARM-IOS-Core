@@ -16,6 +16,7 @@ import { connectedFleetUdids } from '../../fleet/connectivity.js';
 import { createEventStore, type EventStore } from '../../fleet/events.js';
 import { loadRegisteredDevices, type RegisteredDevice } from '../../devices/registry.js';
 import { createContentStore, type ContentStore } from '../../content/store.js';
+import type { AuthProvider } from '../../plugin.js';
 import type { PluginRegistry } from '../../registry.js';
 import type { SchedulerRepository } from '../../scheduler/repository.js';
 import { renderSchedulePage } from '../../schedule/page.js';
@@ -23,7 +24,7 @@ import {
     buildTimeline, hhmm, windowForRange,
     type PlanView, type PlannerStatus, type TimelineEvent, type TimelinePayload, type TimelineRange,
 } from '../../schedule/timeline.js';
-import type { RigStatus } from '../../ui/shell.js';
+import { escapeHtml, type RigStatus } from '../../ui/shell.js';
 
 /** Structurally satisfied by CreateAppOptions, so app.ts passes its own options straight through. */
 export interface ScheduleRouteOptions {
@@ -35,8 +36,8 @@ export interface ScheduleRouteOptions {
     contentStore?: ContentStore | null;
     events?: EventStore | null;
     now?: () => Date;
-    pluginNavHtml?: string;
-    authNavHtml?: string;
+    /** Present on CreateAppOptions; its logout path becomes the shell's sign-out link. */
+    authProvider?: AuthProvider | null;
 }
 
 const STATIC_ROOT = fileURLToPath(new URL('../../../static/dashboard/', import.meta.url));
@@ -222,6 +223,17 @@ export async function registerScheduleRoutes(app: FastifyInstance, options: Sche
         });
     };
 
+    // The shell's own slots. Plugins contribute nav entries; a configured auth
+    // provider contributes the way out.
+    const pluginNav = (options.plugins?.list() ?? [])
+        .flatMap((plugin) => plugin.navLinks ?? [])
+        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+        .map((link) => `<a href="${escapeHtml(link.href)}">${escapeHtml(link.label)}</a>`)
+        .join('');
+    const logoutPath = options.authProvider?.logoutPath;
+    const authNav = logoutPath
+        ? `<a class="bl-btn" style="margin-top:10px" href="${escapeHtml(logoutPath)}">Log out</a>` : '';
+
     const rigStatus = (payload: TimelinePayload): RigStatus => {
         const online = payload.tracks.filter(({ state }) => state === 'online').length;
         return {
@@ -238,8 +250,8 @@ export async function registerScheduleRoutes(app: FastifyInstance, options: Sche
         const payload = await timeline(request.query);
         return reply.type('text/html').send(renderSchedulePage({
             payload, rig: rigStatus(payload), assetVersion: version,
-            ...(options.pluginNavHtml ? { pluginNav: options.pluginNavHtml } : {}),
-            ...(options.authNavHtml ? { authNav: options.authNavHtml } : {}),
+            ...(pluginNav ? { pluginNav } : {}),
+            ...(authNav ? { authNav } : {}),
         }));
     });
 
