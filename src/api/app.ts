@@ -1016,6 +1016,8 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
     await registerContentRoutes(app, { scheduler: options.scheduler, navHtml: pluginNavHtml, footerHtml: '' });
     await registerFleetRoutes(app, options);
+    // Schedule routes register here, alongside the others.
+
     await registerPushRoutes(app, options);
     await registerMcpRoutes(app, {
         scheduler: options.scheduler, plugins: options.plugins, screenshot: (udid) => remote.getScreenshot(udid),
