@@ -90,32 +90,42 @@ alternates tried in order, kept in one table per routine:
 - posting: `POST_SELECTORS` at the top of `src/tiktok/android/post.ts`
 - doomscroll feed: `FEED_SELECTORS` at the top of `src/tiktok/android/doomscroll.ts`
 
-| Control | Selectors tried, in order | Confirmed? |
+| Control | Selectors tried, in order | Marked GUESS in source? |
 |---|---|---|
-| Profile tab | `#profile_tab`, "Profile", "Me" | guess |
-| Account switcher | `#account_switch`, `#title_container`, `#tv_nickname`, "Switch account", "Switch accounts" | guess |
-| Create (+) | `#create_tab`, `#iv_create`, "Create", "Add" | guess |
-| Upload | `#upload`, `#tv_upload`, "Upload", "Gallery" | guess |
-| Select multiple | `#multi_select`, "Select multiple", "Multiple" | guess — optional, skipped when absent |
-| Next (picker, then editor) | `#btn_next`, `#next`, "Next" | guess |
-| Caption field | `#caption_edit_view`, `#et_caption`, `#edit_text`, "Add a caption", "Describe your video", "Add description" | guess |
-| Post | `#btn_post`, `#publish_button`, "Post" | guess |
-| Drafts | `#btn_draft`, `#draft_button`, "Drafts", "Save draft" | guess |
-| Upload confirmation | "Your video is being uploaded", "being uploaded", "Posted", "Uploading", "Your post is being uploaded" | guess |
-| Draft confirmation | "Saved to Drafts", "Draft saved", "Drafts" | guess |
-| Gallery cell | `resource-id` ending `iv_image`, `iv_cover`, `image_view`, `album_image`, `cover`; or a `content-desc` containing video/photo/image | guess |
-| Home tab | `#home_tab`, "Home", "For You" | guess |
-| Like | `#ivm_like`, `#like_button`, "Like", "Liked" | guess |
-| Save / Favourites | `#ivm_collect`, `#favorite_button`, "Add to Favorites", "Favorites", "Save" | guess |
+| Profile tab | `#profile_tab`, "Profile", "Me" | unmarked |
+| Account switcher | `#account_switch`, `#title_container`, `#tv_nickname`, "Switch account", "Switch accounts" | **GUESS** |
+| Create (+) | `#create_tab`, `#iv_create`, "Create", "Add" | unmarked |
+| Upload | `#upload`, `#tv_upload`, "Upload", "Gallery" | unmarked |
+| Select multiple | `#multi_select`, "Select multiple", "Multiple" | **GUESS** — optional, skipped when absent |
+| Next (picker, then editor) | `#btn_next`, `#next`, "Next" | unmarked |
+| Caption field | `#caption_edit_view`, `#et_caption`, `#edit_text`, "Add a caption", "Describe your video", "Add description" | unmarked |
+| Post | `#btn_post`, `#publish_button`, "Post" | unmarked |
+| Drafts | `#btn_draft`, `#draft_button`, "Drafts", "Save draft" | unmarked |
+| Upload confirmation | "Your video is being uploaded", "being uploaded", "Posted", "Uploading", "Your post is being uploaded" | **GUESS** |
+| Draft confirmation | "Saved to Drafts", "Draft saved", "Drafts" | **GUESS** |
+| Gallery cell | `resource-id` ending `iv_image`, `iv_cover`, `image_view`, `album_image`, `cover`; or a `content-desc` containing video/photo/image | **GUESS** |
+| Home tab | `#home_tab`, "Home", "For You" | unmarked |
+| Like | `#ivm_like`, `#like_button`, "Like", "Liked" | **GUESS** |
+| Save / Favourites | `#ivm_collect`, `#favorite_button`, "Add to Favorites", "Favorites", "Save" | **GUESS** |
 
-**Every row above is a best guess.** TikTok's Android labels and resource-ids differ by build,
-region and A/B bucket, and they were written without a phone attached. Confirm them once against
-a real device and correct the tables — the flow itself does not need to change. The fastest way
-to read the real values:
+**No row above has been confirmed against a real device.** The rows marked
+**GUESS** carry that marker in the source too (`POST_SELECTORS` in
+`src/tiktok/android/post.ts`, `FEED_SELECTORS` in `.../doomscroll.ts`); the rows
+marked *unmarked* are the more conventional ids and labels, but they were also
+written with no phone attached. TikTok's Android labels and resource-ids differ
+by build, region and A/B bucket. Confirm them once against a real device and
+correct the tables — the flow itself does not need to change.
+
+The fastest way to read the real values:
 
 ```sh
-adb -s <serial> shell uiautomator dump /sdcard/dump.xml && adb -s <serial> shell cat /sdcard/dump.xml
+adb -s <serial> shell uiautomator dump /dev/tty        # straight to your terminal
+adb -s <serial> shell uiautomator dump /sdcard/dump.xml \
+  && adb -s <serial> shell cat /sdcard/dump.xml         # if /dev/tty is refused
 ```
+
+The full first-hardware-session procedure is
+[device-testing-checklist.md](device-testing-checklist.md).
 
 Each failure message already lists the alternates that were tried and the texts that were on
 screen, so a wrong guess tells you what to put in its place.

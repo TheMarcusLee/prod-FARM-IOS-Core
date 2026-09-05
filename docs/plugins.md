@@ -103,12 +103,13 @@ export const likeTask: TaskDefinition<LikePayload> = {
 | `executionId`, `attempt` | Identity / retry number |
 | `device` | `{ udid, name, osVersion?, productType? }` |
 | `devicePluginData` | `devices.json` → `pluginData[yourPluginId]` for this device |
-| `automation` | `activateApp`, `terminateApp`, `pause(ms, signal)`, `screenshot`, `tap(x,y)`, `swipe(x1,y1,x2,y2,ms)` — points, via WDA |
+| `driver` | The platform-neutral `DeviceDriver` for this device — WDA on iOS, `adb` or the accessibility bridge on Android. `launchApp`, `terminateApp`, `tap`, `swipe`, `type`, `pressKey`, `screenshot`, `uiTree`, `screen`, `pushMedia`, `pause`. **New routines should use this.** See `src/drivers/README.md`. |
+| `automation` | The iOS-era subset kept for existing plugins: `activateApp`, `terminateApp`, `pause(ms, signal)`, `screenshot`, `tap(x,y)`, `swipe(x1,y1,x2,y2,ms)` — points. It is built from the same driver, so it works on Android too. |
 | `assets` | `StoredAsset[]` — uploaded files for this task, already on disk (`asset.path`) |
 | `workspaceDirectory` | Private temp dir, deleted after the run |
 | `signal` | `AbortSignal` — fires on stop request or deadline. **Check it and return `{ stopped: true }` promptly.** |
 | `log(line)` | Append one line to the durable execution log |
-| `runProcess(spec)` | Spawn `node --import tsx <entrypoint>`; stdout/stderr stream into the execution log; killed on abort. Returns `{ exitCode, stopped, error? }` |
+| `runProcess(spec)` | Spawn a farm entry point — `node --import tsx <entrypoint>.ts` from a checkout, or the compiled `<entrypoint>.js` with no loader in the packaged desktop app. stdout/stderr stream into the execution log; killed on abort. Returns `{ exitCode, stopped, error? }` |
 
 `execute` returns `TaskExecutionResult`: `{ exitCode: number | null, stopped:
 boolean, error?: string }`. `exitCode === 0 && !error` is success.
@@ -178,13 +179,16 @@ registrationChecks: [{
     },
 }]
 ```
-Run during the device registration wizard.
+These run on demand against an **already-registered** device, through
+`POST /api/devices/:udid/checks`. They are not part of the registration wizard's
+own check set.
 
 ### Namespaced routes
 ```ts
 registerRoutes(ctx) {
     // ctx.app, ctx.routePrefix === `/plugins/${plugin.id}`
     // ctx.scheduler, ctx.remote, ctx.loadDevices(), ctx.saveDevices(),
+    // ctx.mutateDevices(fn)  <- prefer this over load+save; it is atomic
     // ctx.renderActivity(udid, message?)
     ctx.app.post(`${ctx.routePrefix}/enqueue`, async (req, reply) => {
         await ctx.scheduler.createTask(/* CreateTaskInput */, devicePluginData);
