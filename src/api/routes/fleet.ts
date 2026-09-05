@@ -268,7 +268,9 @@ export async function registerFleetRoutes(app: FastifyInstance, options: FleetRo
     if (options.backgroundTasks === false || (!options.events && !options.scheduler?.connection)) return;
     const monitorState: DeviceMonitorState = createDeviceMonitorState();
     const readStatuses = options.deviceStatuses ?? wdaServiceStatuses;
-    const reportedStuck = new Set<string>();
+    // Rebuilt from the still-stuck set on every sweep, so an execution that
+    // finishes drops out of it instead of accumulating for the process lifetime.
+    let reportedStuck = new Set<string>();
 
     const sweep = async (): Promise<void> => {
         const now = clock();
@@ -276,7 +278,10 @@ export async function registerFleetRoutes(app: FastifyInstance, options: FleetRo
             for (const input of diffDeviceStatuses(monitorState, await readStatuses(), now)) await recorder.record(input);
         } catch (error) { app.log.debug(`Fleet device poll failed: ${String(error)}`); }
         try {
-            for (const execution of stuckExecutions(await options.scheduler.listExecutions(500), now)) {
+            const stuck = stuckExecutions(await options.scheduler.listExecutions(500), now);
+            const seen = new Set(stuck.map(({ id }) => id));
+            reportedStuck = new Set([...reportedStuck].filter((id) => seen.has(id)));
+            for (const execution of stuck) {
                 if (reportedStuck.has(execution.id)) continue;
                 reportedStuck.add(execution.id);
                 await recorder.record({

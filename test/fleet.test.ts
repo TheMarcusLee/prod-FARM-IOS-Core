@@ -17,7 +17,7 @@ import {
 } from '../src/fleet/bulk.js';
 import { createDeviceMonitorState, diffDeviceStatuses, longOfflineDevices } from '../src/fleet/device-monitor.js';
 import { createMemoryEventStore } from '../src/fleet/events.js';
-import { lifecycleEventInput } from '../src/fleet/scheduler-events.js';
+import { createStartedDeduplicator, lifecycleEventInput, schedulerEventHook } from '../src/fleet/scheduler-events.js';
 import { deviceState, stuckExecutions, summarizeFleet } from '../src/fleet/summary.js';
 import type { CreateTaskInput, ScheduleTiming } from '../src/types.js';
 import type { SchedulerRepository } from '../src/scheduler/repository.js';
@@ -316,29 +316,86 @@ test('device status polling turns connection changes into events', () => {
         udid: 'udid-a', physical: 'connected', wda: 'ready', appium: 'ready', managed: true,
         message: 'WDA is ready', retryCount: 0, updatedAt: NOW.toISOString(), ...overrides,
     });
+    const down = status({ physical: 'disconnected', wda: 'disconnected', message: 'Reconnect the USB cable' });
+    const at = (seconds: number): Date => new Date(NOW.getTime() + seconds * 1_000);
     const state = createDeviceMonitorState();
 
     // First sighting is only a baseline.
     assert.deepEqual(diffDeviceStatuses(state, [status()], NOW), []);
     assert.deepEqual(diffDeviceStatuses(state, [status()], NOW), []);
 
-    const offline = diffDeviceStatuses(state, [status({ physical: 'disconnected', wda: 'disconnected', message: 'Reconnect the USB cable' })], NOW);
+    // A change is proposed, then has to hold for the debounce before it counts.
+    assert.deepEqual(diffDeviceStatuses(state, [down], at(0)), []);
+    const offline = diffDeviceStatuses(state, [down], at(60));
     assert.deepEqual(offline.map(({ kind, severity, deviceUdid }) => [kind, severity, deviceUdid]),
         [['device.disconnected', 'warning', 'udid-a']]);
 
-    const back = diffDeviceStatuses(state, [status()], new Date(NOW.getTime() + 60_000));
+    assert.deepEqual(diffDeviceStatuses(state, [status()], at(70)), []);
+    const back = diffDeviceStatuses(state, [status()], at(130));
     assert.deepEqual(back.map(({ kind, severity }) => [kind, severity]), [['device.connected', 'info']]);
 
-    const failed = diffDeviceStatuses(state, [status({ wda: 'error', message: 'xcodebuild exited 65' })], NOW);
+    const broken = status({ wda: 'error', message: 'xcodebuild exited 65' });
+    assert.deepEqual(diffDeviceStatuses(state, [broken], at(140)), []);
+    const failed = diffDeviceStatuses(state, [broken], at(200));
     assert.deepEqual(failed.map(({ kind, severity }) => [kind, severity]), [['device.error', 'error']]);
     assert.equal((failed[0]!.detail as { error: string }).error, 'xcodebuild exited 65');
     // The same error is not re-reported on every poll.
-    assert.deepEqual(diffDeviceStatuses(state, [status({ wda: 'error', message: 'xcodebuild exited 65' })], NOW), []);
+    assert.deepEqual(diffDeviceStatuses(state, [broken], at(400)), []);
 
     // Devices offline for over an hour feed the digest.
-    const later = new Date(NOW.getTime() + 3 * 3_600_000);
-    assert.deepEqual(longOfflineDevices(state, later).map(({ deviceUdid, minutes }) => [deviceUdid, minutes]), [['udid-a', 180]]);
+    const later = new Date(NOW.getTime() + 3 * 3_600_000 + 200_000);
+    assert.deepEqual(longOfflineDevices(state, later).map(({ deviceUdid }) => deviceUdid), ['udid-a']);
     assert.deepEqual(longOfflineDevices(state, NOW), []);
+});
+
+test('a flapping USB cable produces no events at all', () => {
+    const status = (physical: 'connected' | 'disconnected'): DeviceConnectionStatus => ({
+        udid: 'udid-a', physical, wda: physical === 'connected' ? 'ready' : 'disconnected', appium: 'ready',
+        managed: true, message: '', retryCount: 0, updatedAt: NOW.toISOString(),
+    });
+    const state = createDeviceMonitorState();
+    diffDeviceStatuses(state, [status('connected')], NOW);
+
+    // Ten polls over five minutes, alternating every 30 s: nothing ever holds
+    // for the debounce window, so nothing reaches the timeline.
+    const produced: unknown[] = [];
+    for (let poll = 1; poll <= 10; poll++) {
+        const physical = poll % 2 === 0 ? 'connected' : 'disconnected';
+        produced.push(...diffDeviceStatuses(state, [status(physical)], new Date(NOW.getTime() + poll * 30_000)));
+    }
+    assert.deepEqual(produced, []);
+
+    // Once it stays down, the disconnect is reported exactly once.
+    const settled = [11, 12, 13].flatMap((poll) =>
+        diffDeviceStatuses(state, [status('disconnected')], new Date(NOW.getTime() + poll * 30_000)));
+    assert.deepEqual(settled.map(({ kind }) => kind), ['device.disconnected']);
+});
+
+test('a retried execution reports one execution.started, not one per attempt', () => {
+    const isFirstStart = createStartedDeduplicator();
+    const started = { kind: 'execution.started', execution: executionRow({ status: 'running' }) } as const;
+    assert.equal(isFirstStart(started), true);
+    assert.equal(isFirstStart(started), false);
+    assert.equal(isFirstStart(started), false);
+
+    // A terminal signal always passes and releases the id for the next run.
+    assert.equal(isFirstStart({ kind: 'execution.failed', execution: executionRow({ status: 'failed' }) }), true);
+    assert.equal(isFirstStart(started), true);
+
+    // Schedule signals are never deduplicated.
+    const created = { kind: 'schedule.created', schedule: scheduleRow() } as const;
+    assert.equal(isFirstStart(created), true);
+    assert.equal(isFirstStart(created), true);
+});
+
+test('the scheduler hook swallows a mapping failure instead of taking the scheduler down', () => {
+    const logged: string[] = [];
+    const hook = schedulerEventHook({ record: async () => null }, (message) => logged.push(message));
+    // A lifecycle signal with no execution row at all: lifecycleEventInput throws
+    // reading through it, and the hook must absorb that.
+    assert.doesNotThrow(() => hook({ kind: 'execution.started' } as never));
+    assert.equal(logged.length, 1);
+    assert.match(logged[0]!, /execution\.started/);
 });
 
 test('scheduler lifecycle signals map onto the event contract', () => {
