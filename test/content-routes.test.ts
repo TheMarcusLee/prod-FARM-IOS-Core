@@ -9,6 +9,7 @@ import { registerContentRoutes } from '../src/api/routes/content.js';
 import { defaultDashboardTheme } from '../src/dashboard-theme.js';
 import { PluginRegistry } from '../src/registry.js';
 import type { SchedulerRepository } from '../src/scheduler/repository.js';
+import { renderRules, renderSets, renderTemplates } from '../src/content/page.js';
 import type { CaptionTemplateRow, ContentItemRow, ContentSetRow, DripRuleRow } from '../src/database/schema.js';
 import type { ContentStore } from '../src/content/store.js';
 
@@ -19,6 +20,17 @@ function contentItem(overrides: Partial<ContentItemRow> = {}): ContentItemRow {
         tags: ['fitness'], caption: 'Leg day', hashtags: ['gym'], posterPath: null,
         createdAt: new Date('2026-02-01T00:00:00Z'), usedCount: 2, lastUsedAt: null,
         status: 'ready', error: null, ...overrides,
+    };
+}
+
+function dripRule(overrides: Partial<DripRuleRow> = {}): DripRuleRow {
+    return {
+        id: 'rule-1', deviceUdid: 'device-1', account: '@handle', enabled: true, postsPerDay: 2,
+        windowStart: '09:00', windowEnd: '21:00', timezone: 'UTC', minGapMinutes: 120,
+        destination: 'draft', source: 'tag', setId: null, tag: 'fitness', captionTemplateId: null,
+        pickOrder: 'random', avoidReuseDays: 30, lastPlannedDate: null,
+        createdAt: new Date('2026-02-01T00:00:00Z'), updatedAt: new Date('2026-02-01T00:00:00Z'),
+        ...overrides,
     };
 }
 
@@ -67,15 +79,26 @@ function fakeStore(): { store: ContentStore; state: { items: ContentItemRow[]; r
             state.rules.push(row);
             return row;
         },
-        updateRule: async () => null,
+        updateRule: async (id: string, patch: Partial<DripRuleRow>) => {
+            const index = state.rules.findIndex((entry) => entry.id === id);
+            if (index < 0) return null;
+            state.rules[index] = { ...state.rules[index] as DripRuleRow, ...patch, updatedAt: new Date() };
+            return state.rules[index] as DripRuleRow;
+        },
         deleteRule: async () => false,
+        unstartedPlans: async () => [
+            { planId: 'plan-1', scheduleId: 'schedule-1' },
+            { planId: 'plan-2', scheduleId: 'schedule-1' },
+        ],
+        deletePlans: async (ids: string[]) => ids.length,
         candidateItems: async () => [],
         plansForDates: async () => [],
         upcomingPlans: async () => [],
         insertPlan: unused,
         unstartedScheduleIds: async () => [],
         succeededUnmarkedPlans: async () => [],
-        markPlanUsed: async () => {},
+        markPlanUsed: async () => true,
+        withPlannerLock: async <T>(body: () => Promise<T>) => body(),
     } as unknown as ContentStore;
     return { store, state };
 }
@@ -88,9 +111,8 @@ function fakeStore(): { store: ContentStore; state: { items: ContentItemRow[]; r
 async function contentApi(): Promise<{ app: FastifyInstance; state: ReturnType<typeof fakeStore>['state'] }> {
     const { store, state } = fakeStore();
     const app = Fastify();
-    await registerContentRoutes(app, {
-        scheduler: {} as SchedulerRepository, store, plannerIntervalMinutes: 0,
-    });
+    const scheduler = { async setScheduleStatus() { return null; } } as unknown as SchedulerRepository;
+    await registerContentRoutes(app, { scheduler, store, plannerIntervalMinutes: 0 });
     return { app, state };
 }
 
@@ -229,4 +251,85 @@ test('URL ingest reports 501 when yt-dlp is not configured', async (context) => 
 
     const bad = await inject(app, { method: 'POST', url: '/api/content/ingest-url', payload: { url: 'ftp://x/y' } });
     assert.equal(bad.statusCode, 400);
+});
+
+test('library, set, template and rule fragments escape every stored value', async (context) => {
+    const payload = '"><img src=x onerror=alert(1)>';
+    const { app, state } = await contentApi();
+    context.after(() => app.close());
+    state.items = [contentItem({
+        caption: payload, tags: [payload], hashtags: [payload], status: 'failed', error: payload,
+    })];
+
+    const library = await inject(app, {
+        method: 'GET', url: '/api/content/items', headers: { 'hx-request': 'true' },
+    });
+    assert.equal(library.statusCode, 200);
+    assert.ok(!library.body.includes('<img src=x'), 'no raw tag reaches the document');
+    assert.match(library.body, /&lt;img src=x onerror=alert\(1\)&gt;/);
+    // The escaped value is still inside the attribute it belongs to.
+    assert.match(library.body, /data-caption="&quot;&gt;&lt;img/);
+
+    assert.equal(renderSets([{
+        id: 'set-1', name: payload, notes: payload, createdAt: new Date(0), itemCount: 1,
+    }]).includes('<img src=x'), false);
+    assert.equal(renderTemplates([{
+        id: 'tpl-1', name: payload, template: payload, createdAt: new Date(0),
+    }]).includes('<img src=x'), false);
+    const rules = renderRules([{ rule: dripRule({ account: payload, tag: payload, timezone: payload }), plans: [] }]);
+    assert.equal(rules.includes('<img src=x'), false);
+    assert.match(rules, /&lt;img src=x/);
+});
+
+test('a fragment request without a database answers in the element the page is waiting for', async (context) => {
+    const app = Fastify();
+    context.after(() => app.close());
+    // No store, and a scheduler with no connection — exactly a web process
+    // started before the database is reachable.
+    await registerContentRoutes(app, { scheduler: {} as SchedulerRepository, plannerIntervalMinutes: 0 });
+
+    for (const [url, id] of [
+        ['/api/content/items', 'content-library'],
+        ['/api/content/sets', 'content-sets'],
+        ['/api/content/templates', 'caption-templates'],
+        ['/api/drip/rules', 'drip-rules'],
+    ]) {
+        const fragment = await inject(app, { method: 'GET', url: url as string, headers: { 'hx-request': 'true' } });
+        // htmx does not swap a non-2xx body, so a 503 here left a spinner up forever.
+        assert.equal(fragment.statusCode, 200, url);
+        assert.match(fragment.body, new RegExp(`id="${id}"`), url);
+        assert.match(fragment.body, /needs a database connection/);
+
+        const asJson = await inject(app, { method: 'GET', url: url as string });
+        assert.equal(asJson.statusCode, 503, url);
+    }
+});
+
+test('editing a rule releases its unrun posts so the change reaches today', async (context) => {
+    const { app, state } = await contentApi();
+    context.after(() => app.close());
+    state.rules = [dripRule()];
+
+    const moved = await inject(app, {
+        method: 'PATCH', url: '/api/drip/rules/rule-1', payload: { windowStart: '06:00' },
+    });
+    assert.equal(moved.statusCode, 200);
+    assert.equal(moved.json().windowStart, '06:00');
+    assert.deepEqual(moved.json().replanned, { cancelled: 1, released: 2 });
+
+    // Pausing is handled by the planner itself, so it releases nothing here.
+    const paused = await inject(app, {
+        method: 'PATCH', url: '/api/drip/rules/rule-1', payload: { enabled: false },
+    });
+    assert.equal(paused.statusCode, 200);
+    assert.deepEqual(paused.json().replanned, { cancelled: 0, released: 0 });
+
+    const missing = await inject(app, { method: 'PATCH', url: '/api/drip/rules/nope', payload: { enabled: false } });
+    assert.equal(missing.statusCode, 404);
+
+    const invalid = await inject(app, {
+        method: 'PATCH', url: '/api/drip/rules/rule-1', payload: { timezone: 'Mars/Olympus_Mons' },
+    });
+    assert.equal(invalid.statusCode, 400);
+    assert.match(invalid.json().error, /IANA time zone/);
 });
