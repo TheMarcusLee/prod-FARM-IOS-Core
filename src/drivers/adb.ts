@@ -33,6 +33,9 @@ export function createAdbDriver(options: AdbDriverOptions): DeviceDriver {
     const mediaDirectory = options.mediaDirectory ?? '/sdcard/DCIM/Camera';
     const adb = (...args: string[]) => run('adb', ['-s', serial, ...args]);
     const shell = (...args: string[]) => adb('shell', ...args);
+    // A minute-long clip over USB 2 takes far longer than the 30s default command deadline.
+    const push = (localPath: string, remotePath: string) =>
+        run('adb', ['-s', serial, 'push', localPath, remotePath], { timeoutMs: 10 * 60_000 });
     let cachedScreen: ScreenGeometry | undefined;
 
     return {
@@ -50,7 +53,7 @@ export function createAdbDriver(options: AdbDriverOptions): DeviceDriver {
         screenshot: () => screenshotViaScreencap(serial, run),
         uiTree: () => uiTreeViaUiautomator(shell),
         screen: async () => { cachedScreen ??= await screenViaWm(shell); return cachedScreen; },
-        pushMedia: (file) => pushMediaViaAdb(file, mediaDirectory, adb, shell),
+        pushMedia: (file) => pushMediaViaAdb(file, mediaDirectory, push, shell),
         pause,
     };
 }
@@ -175,11 +178,13 @@ async function launcherComponent(packageName: string, shell: Shell): Promise<str
     return component;
 }
 
-async function pushMediaViaAdb(file: MediaFile, mediaDirectory: string, adb: Shell, shell: Shell): Promise<void> {
+type Push = (localPath: string, remotePath: string) => ReturnType<CommandRunner>;
+
+async function pushMediaViaAdb(file: MediaFile, mediaDirectory: string, push: Push, shell: Shell): Promise<void> {
     const fileName = file.fileName ?? path.basename(file.localPath);
     const remotePath = `${mediaDirectory}/${fileName}`;
     // `adb push` takes its arguments as argv, so spaces in either path need no quoting here.
-    await adb('push', file.localPath, remotePath);
+    await push(file.localPath, remotePath);
     await scanMedia(remotePath, shell);
 }
 
