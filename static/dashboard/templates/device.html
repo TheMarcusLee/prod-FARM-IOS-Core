@@ -76,6 +76,12 @@
                     <p>Upload a video or ordered slideshow, then save it as a draft or publish it.</p>
                     <button id="open-post" class="button secondary" type="button">Prepare post</button>
                 </section>
+                <!-- Runbook recorder, served by the com.farm.runbook plugin. -->
+                <section id="runbook-panel" class="panel"
+                    hx-get="/plugins/com.farm.runbook/devices/__DEVICE_UDID__/panel" hx-trigger="load" hx-swap="outerHTML">
+                    <h2>Runbooks</h2>
+                    <p class="muted">Loading runbooks…</p>
+                </section>
                 <section class="panel activity-card">
                     <div><span class="eyebrow">Device activity</span><h2>Automation log</h2></div>
                     <p>Live output from the latest doomscroll or post automation on this device.</p>
