@@ -3,7 +3,8 @@
  * parsers for their output so the whole Android path can be tested without adb on the host.
  * See docs/adr/0001-multi-platform-device-drivers.md and docs/android-dashboard.md.
  */
-import { runCommand, type CommandRunner } from '../drivers/common.js';
+import { parseAdbDevices } from '../drivers/adb.js';
+import { errorMessage, runCommand, type CommandRunner } from '../drivers/common.js';
 
 /** sim-use device bridge APK; see src/drivers/README.md for the bootstrap steps. */
 export const BRIDGE_PACKAGE = 'com.linecorp.simuse.devicebridge';
@@ -16,15 +17,29 @@ export const BRIDGE_TOKEN_URI = `content://${BRIDGE_PACKAGE}/auth_token`;
 
 export type AdbDeviceState = 'device' | 'unauthorized' | 'offline' | 'missing';
 
-/** `adb devices -l` lists one device per line after a header: `<serial>\t<state> [key:value ...]`. */
+/**
+ * `adb devices -l` lists one device per line after a header, behind the daemon banner adb prints
+ * the first time it starts its server. Anything that is neither `device` nor `unauthorized`
+ * (`offline`, `recovery`, `sideload`, `no permissions`, ...) is not usable, so it reads as offline.
+ */
 export function parseAdbDeviceState(stdout: string, serial: string): AdbDeviceState {
-    for (const line of stdout.split(/\r?\n/).slice(1)) {
-        const [listed, state] = line.trim().split(/\s+/);
-        if (listed !== serial || !state) continue;
-        if (state === 'device' || state === 'unauthorized' || state === 'offline') return state;
-        return 'offline';
+    const listed = parseAdbDevices(stdout).find((device) => device.serial === serial);
+    if (!listed) return 'missing';
+    return listed.state === 'device' || listed.state === 'unauthorized' ? listed.state : 'offline';
+}
+
+/** The local end of an `adb forward` bridge URL, when the URL is one (rather than a Wi-Fi address). */
+export function localBridgePort(bridgeUrl: string | undefined): number | undefined {
+    if (!bridgeUrl) return undefined;
+    let url: URL;
+    try {
+        url = new URL(bridgeUrl);
+    } catch {
+        return undefined;
     }
-    return 'missing';
+    if (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') return undefined;
+    const port = Number(url.port);
+    return Number.isInteger(port) && port > 0 ? port : undefined;
 }
 
 /** `pm list packages <name>` prints `package:<name>` for every match, nothing for none. */
@@ -37,23 +52,47 @@ export function parseAccessibilityEnabled(stdout: string, packageName: string): 
     return stdout.trim().split(':').some((entry) => entry.trim().startsWith(`${packageName}/`));
 }
 
-/** `content query` prints `Row: 0 auth_token=<value>` (column name unknown, so take the last `=`). */
+/** `content query` prints one `Row: 0 name=value, name=value` line per row. */
+export function parseContentRow(row: string): Map<string, string> {
+    const columns = new Map<string, string>();
+    // Split only where a new `name=` starts, so a value containing ", " stays in one piece.
+    for (const column of row.split(/,\s+(?=[\w:.-]+=)/)) {
+        const separator = column.indexOf('=');
+        if (separator > 0) columns.set(column.slice(0, separator).trim(), column.slice(separator + 1).trim());
+    }
+    return columns;
+}
+
+/** Columns that could hold the token, most specific first; anything else is a last resort. */
+const TOKEN_COLUMNS = ['result', 'auth_token', 'token', 'value'];
+
 /**
  * The provider answers `Row: 0 result={"status":"success","result":"<uuid>"}` (the same JSON
- * envelope the bridge's HTTP routes use); older builds print the bare token. Accept both.
+ * envelope the bridge's HTTP routes use); older builds print the bare token, and a provider that
+ * returns several columns puts an `_id` in front of it. Accept all three.
  */
 export function parseBridgeToken(stdout: string): string | undefined {
     for (const line of stdout.split(/\r?\n/)) {
-        const match = line.match(/^Row:\s*\d+\s+\S+?=(.+)$/);
-        const value = match?.[1]?.trim();
-        if (!value || value === 'NULL') continue;
-        if (!value.startsWith('{')) return value;
-        try {
-            const envelope = JSON.parse(value) as { status?: string; result?: unknown };
-            if (envelope.status === 'success' && typeof envelope.result === 'string' && envelope.result) return envelope.result;
-        } catch {
-            // Not JSON after all; fall through to the next row.
+        const row = line.trim().match(/^Row:\s*\d+\s+(.*)$/)?.[1];
+        if (!row) continue;
+        const columns = parseContentRow(row);
+        const names = [...TOKEN_COLUMNS.filter((name) => columns.has(name)), ...columns.keys()];
+        for (const name of names) {
+            const token = tokenFromColumn(columns.get(name));
+            if (token) return token;
         }
+    }
+    return undefined;
+}
+
+function tokenFromColumn(value: string | undefined): string | undefined {
+    if (!value || value === 'NULL') return undefined;
+    if (!value.startsWith('{')) return value;
+    try {
+        const envelope = JSON.parse(value) as { status?: string; result?: unknown };
+        if (envelope.status === 'success' && typeof envelope.result === 'string' && envelope.result) return envelope.result;
+    } catch {
+        // Not JSON after all; the caller tries the next column.
     }
     return undefined;
 }
@@ -89,7 +128,17 @@ export function createAndroidProbe(run: CommandRunner = runCommand): AndroidProb
             parseAccessibilityEnabled(await shell(serial, 'settings', 'get', 'secure', 'enabled_accessibility_services'), packageName),
         bridgeToken: async (serial) => parseBridgeToken(await shell(serial, 'content', 'query', '--uri', BRIDGE_TOKEN_URI)),
         forwardBridgePort: async (serial, localPort, devicePort) => {
-            await run('adb', ['-s', serial, 'forward', `tcp:${localPort}`, `tcp:${devicePort}`], { timeoutMs: 10_000 });
+            try {
+                await run('adb', ['-s', serial, 'forward', `tcp:${localPort}`, `tcp:${devicePort}`], { timeoutMs: 10_000 });
+            } catch (error) {
+                // adb says "cannot bind listener" when something else — often another phone's
+                // forward — already owns the port, which is not obvious from the raw message.
+                throw new Error(
+                    `Could not forward local port ${localPort} to ${serial}:${devicePort}. `
+                    + `Something else may already be listening on 127.0.0.1:${localPort} `
+                    + `(check "adb forward --list"); choose a different bridge port. ${errorMessage(error)}`,
+                );
+            }
         },
     };
 }

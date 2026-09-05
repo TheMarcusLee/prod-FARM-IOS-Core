@@ -237,3 +237,93 @@ test('the adb output parsers read states, packages, services and tokens', async 
     assert.equal(parseBridgeToken('Row: 0 result={"status":"error","error":"denied"}\n'), undefined);
     assert.equal(parseBridgeToken('No result found.\n'), undefined);
 });
+
+test('the adb parsers survive the daemon banner, multi-column rows and odd states', async () => {
+    const { parseAdbDeviceState, parseBridgeToken, localBridgePort } = androidParsers;
+
+    const banner = '* daemon not running; starting now at tcp:5037 *\n* daemon started successfully *\n'
+        + `List of devices attached\n${SERIAL}\tdevice product:panther\n192.168.1.40:5555\toffline\nsideloader\tsideload\n`;
+    assert.equal(parseAdbDeviceState(banner, SERIAL), 'device');
+    // A Wi-Fi debugging serial has a colon in it and must not be split on.
+    assert.equal(parseAdbDeviceState(banner, '192.168.1.40:5555'), 'offline');
+    // Anything that is neither device nor unauthorized cannot be driven.
+    assert.equal(parseAdbDeviceState(banner, 'sideloader'), 'offline');
+    assert.equal(parseAdbDeviceState('List of devices attached\n', SERIAL), 'missing');
+
+    // A provider that returns an _id column first used to hand back "1, auth_token=abc123".
+    assert.equal(parseBridgeToken('Row: 0 _id=1, auth_token=abc123\n'), 'abc123');
+    assert.equal(parseBridgeToken('Row: 0 _id=1, result={"status":"success","result":"1f0a-uuid"}\n'), '1f0a-uuid');
+    assert.equal(parseBridgeToken('Row: 0 auth_token=NULL\n'), undefined);
+
+    assert.equal(localBridgePort('http://127.0.0.1:18300'), 18_300);
+    assert.equal(localBridgePort('http://192.168.1.40:8080'), undefined);
+    assert.equal(localBridgePort('not a url'), undefined);
+    assert.equal(localBridgePort(undefined), undefined);
+});
+
+test('each Android phone gets its own bridge forward port', async () => {
+    const directory = path.join(workspace, 'ports');
+    const second = 'R58N2ZZZZZZ';
+    const registered: RegisteredDevice[] = [{
+        name: 'first', udid: SERIAL, platform: 'android', driver: 'a11y-bridge',
+        android: { serial: SERIAL, bridgeUrl: 'http://127.0.0.1:18300' }, pluginData: {},
+    }];
+    const service = new DeviceRegistrationService({
+        stateDirectory: path.join(directory, 'registrations'),
+        discoverDevices: async () => [{ ...androidCandidate, udid: second }],
+        loadDevices: async () => registered,
+        runCommand: fakeAdb({ 'devices -l': `List of devices attached\n${second}\tdevice` }),
+    });
+    const created = await service.create(second);
+    // 18300 already belongs to the registered phone; adb forward would silently rebind it.
+    assert.notEqual(created.bridgePort, 18_300);
+    assert.ok(created.bridgePort! > 18_300);
+});
+
+test('a bridge URL is normalised, and switching to one invalidates the stored token', async () => {
+    const directory = path.join(workspace, 'urls');
+    const service = new DeviceRegistrationService({
+        stateDirectory: path.join(directory, 'registrations'),
+        discoverDevices: async () => [androidCandidate],
+        loadDevices: async () => [],
+        runCommand: fakeAdb(),
+    });
+    await service.create(SERIAL);
+    const updated = await service.update(SERIAL, { driver: 'a11y-bridge', bridgeUrl: ' http://192.168.1.40:8080// ' });
+    assert.equal(updated.bridgeUrl, 'http://192.168.1.40:8080');
+    assert.equal(updated.checks.driver?.state, 'pending');
+    await assert.rejects(service.update(SERIAL, { bridgeUrl: '192.168.1.40:8080' }), /http\(s\) origin/);
+    await assert.rejects(service.update(SERIAL, { bridgePort: 70_000 }), /TCP port/);
+});
+
+test('the bridge token never reaches a snapshot, a log line or the state file', async () => {
+    const { sanitizedLine } = await import('../src/devices/registration.js');
+    const token = 'b1f0a2c3-d4e5-4f60-9a7b-8c9d0e1f2a3b';
+    assert.match(sanitizedLine(`adb shell content query --uri ... failed: Row: 0 auth_token=${token}`), /auth_token=<redacted>/);
+    assert.match(sanitizedLine(`GET /tap 401 authorization: Bearer ${token}`), /Bearer <redacted>/);
+    assert.equal(sanitizedLine(`the phone answered with ${token}`, [token]), 'the phone answered with <redacted>');
+
+    const directory = path.join(workspace, 'redaction');
+    const stateDirectory = path.join(directory, 'registrations');
+    const service = new DeviceRegistrationService({
+        stateDirectory,
+        discoverDevices: async () => [androidCandidate],
+        loadDevices: async () => [],
+        runCommand: fakeAdb({
+            [`-s ${SERIAL} shell pm list packages com.linecorp.simuse.devicebridge`]: 'package:com.linecorp.simuse.devicebridge',
+            [`-s ${SERIAL} shell settings get secure enabled_accessibility_services`]: 'com.linecorp.simuse.devicebridge/.BridgeService',
+            [`-s ${SERIAL} shell content query --uri content://com.linecorp.simuse.devicebridge/auth_token`]: `Row: 0 auth_token=${token}`,
+        }),
+        fetchImpl: async () => new Response('ok', { status: 200 }),
+    });
+    await service.create(SERIAL);
+    await service.update(SERIAL, { driver: 'a11y-bridge' });
+    await service.run(SERIAL, 'refresh');
+    await settle(() => service.get(SERIAL));
+
+    const snapshot = (await service.get(SERIAL))!;
+    assert.equal(snapshot.checks.driver?.state, 'passed');
+    assert.ok(!JSON.stringify(snapshot).includes(token), 'the public snapshot must not carry the token');
+    const stateFile = await readFile(path.join(stateDirectory, `${SERIAL}.json`), 'utf8');
+    assert.ok(!stateFile.includes(token), 'the on-disk draft must not carry the token');
+});
