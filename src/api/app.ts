@@ -28,6 +28,7 @@ import type { CreateTaskInput, JsonObject, ScheduleTiming } from '../types.js';
 import { ScheduleTransitionError, type SchedulerRepository } from '../scheduler/repository.js';
 import { registerContentRoutes } from './routes/content.js';
 import { registerFleetRoutes } from './routes/fleet.js';
+import { registerMcpRoutes } from './routes/mcp.js';
 
 export interface CreateAppOptions {
     plugins: PluginRegistry;
@@ -630,6 +631,9 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
     await registerContentRoutes(app, { scheduler: options.scheduler, navHtml: pluginNavHtml, footerHtml: FOOTER_HTML });
     await registerFleetRoutes(app, options);
+    await registerMcpRoutes(app, {
+        scheduler: options.scheduler, plugins: options.plugins, screenshot: (udid) => remote.getScreenshot(udid),
+    });
 
     for (const plugin of options.plugins.list()) {
         if (plugin.registerRoutes) await plugin.registerRoutes({

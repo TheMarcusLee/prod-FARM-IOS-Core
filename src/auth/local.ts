@@ -1,0 +1,188 @@
+import crypto from 'node:crypto';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+
+import type { AuthenticatedUser, AuthProvider } from '../plugin.js';
+import { defaultAuthStatePath, readAuthState, tokenForAuthorization, verifyPassword } from './state.js';
+
+export const SESSION_COOKIE = 'phone_farm_session';
+
+export interface LocalAuthOptions {
+    /** Defaults to AUTH_STATE_PATH, else `.auth.json` beside devices.json. */
+    statePath?: string;
+    sessionHours?: number;
+    maxLoginAttempts?: number;
+    loginWindowMinutes?: number;
+}
+
+interface AttemptBucket { count: number; resetAt: number }
+
+function positiveNumber(value: string | undefined, fallback: number): number {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function signSession(secret: string, expiresAt: number): string {
+    const payload = Buffer.from(JSON.stringify({ exp: expiresAt })).toString('base64url');
+    const signature = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+    return `${payload}.${signature}`;
+}
+
+function sessionValid(secret: string, value: string | undefined, now: number): boolean {
+    const [payload, signature] = (value ?? '').split('.');
+    if (!payload || !signature) return false;
+    const expected = crypto.createHmac('sha256', secret).update(payload).digest('base64url');
+    const given = Buffer.from(signature);
+    const want = Buffer.from(expected);
+    if (given.length !== want.length || !crypto.timingSafeEqual(given, want)) return false;
+    try {
+        const { exp } = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { exp?: number };
+        return typeof exp === 'number' && exp > now;
+    } catch { return false; }
+}
+
+function readCookie(header: string | undefined, name: string): string | undefined {
+    for (const part of (header ?? '').split(';')) {
+        const [key, ...rest] = part.trim().split('=');
+        if (key === name) return decodeURIComponent(rest.join('='));
+    }
+    return undefined;
+}
+
+/** Behind a TLS proxy the cookie must still get `Secure`; loopback http must not. */
+function secureRequest(request: FastifyRequest): boolean {
+    return request.protocol === 'https' || request.headers['x-forwarded-proto'] === 'https';
+}
+
+function setSessionCookie(request: FastifyRequest, reply: FastifyReply, value: string, maxAgeSeconds: number): void {
+    const attributes = [
+        `${SESSION_COOKIE}=${value}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAgeSeconds}`,
+    ];
+    if (secureRequest(request)) attributes.push('Secure');
+    reply.header('set-cookie', attributes.join('; '));
+}
+
+function escapeHtml(value: string): string {
+    return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+}
+
+/** Only same-site paths; never an absolute URL or a protocol-relative `//host`. */
+function safeNext(value: unknown): string {
+    const next = typeof value === 'string' ? value : '';
+    return next.startsWith('/') && !next.startsWith('//') ? next : '/';
+}
+
+/** Standalone markup — the login page renders before any dashboard asset route is reachable. */
+function loginPage(options: { message?: string; next: string; passwordSet: boolean }): string {
+    const notice = options.passwordSet
+        ? (options.message ? `<p class="error">${escapeHtml(options.message)}</p>` : '')
+        : '<p class="error">No password is set yet. Run <code>npm run auth:set-password</code> on the farm host.</p>';
+    const form = options.passwordSet
+        ? `<form method="post" action="/login">
+      <input type="hidden" name="next" value="${escapeHtml(options.next)}">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
+      <button type="submit">Sign in</button>
+    </form>` : '';
+    return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in · Phone Farm</title><style>
+:root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--bg:#080b10;--panel:#11161e;--border:#242c38;--text:#f5f7fa;--muted:#929cab;--accent:#ff365e}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 50% -20%,#1a2330 0,var(--bg) 42%);color:var(--text)}
+.card{width:min(380px,100%);padding:28px;border:1px solid var(--border);border-radius:15px;background:var(--panel)}
+h1{margin:0 0 6px;font-size:26px;letter-spacing:-.03em}p{margin:0 0 18px;color:var(--muted);font-size:13px;line-height:1.55}
+.error{color:#fb7185}code{color:var(--text)}label{display:block;margin-bottom:7px;color:var(--muted);font-size:13px}
+input{width:100%;min-height:42px;padding:0 12px;border:1px solid var(--border);border-radius:10px;background:#171d26;color:var(--text);font:inherit}
+button{width:100%;min-height:42px;margin-top:14px;border:0;border-radius:10px;background:var(--accent);color:var(--text);font:inherit;font-weight:750;cursor:pointer}
+button:hover{filter:brightness(1.08)}
+</style></head><body><main class="card"><h1>Phone Farm</h1><p>Sign in to reach the dashboard.</p>${notice}${form}</main></body></html>`;
+}
+
+/**
+ * The built-in `PHONE_FARM_AUTH_PLUGIN=local` provider: a password login for the
+ * browser and `Authorization: Bearer …` API tokens for agents and the MCP server.
+ */
+export function createLocalAuthProvider(options: LocalAuthOptions = {}): AuthProvider {
+    const statePath = options.statePath ?? defaultAuthStatePath();
+    const sessionHours = options.sessionHours ?? positiveNumber(process.env.AUTH_SESSION_HOURS, 12);
+    const maxAttempts = options.maxLoginAttempts ?? positiveNumber(process.env.AUTH_LOGIN_MAX_ATTEMPTS, 5);
+    const windowMinutes = options.loginWindowMinutes ?? positiveNumber(process.env.AUTH_LOGIN_WINDOW_MINUTES, 15);
+    const attempts = new Map<string, AttemptBucket>();
+
+    const throttled = (key: string, now: number): boolean => {
+        const bucket = attempts.get(key);
+        if (!bucket || bucket.resetAt <= now) return false;
+        return bucket.count >= maxAttempts;
+    };
+    const recordFailure = (key: string, now: number): void => {
+        const bucket = attempts.get(key);
+        if (!bucket || bucket.resetAt <= now) attempts.set(key, { count: 1, resetAt: now + windowMinutes * 60_000 });
+        else bucket.count += 1;
+    };
+
+    return {
+        id: 'local',
+        logoutPath: '/auth/logout',
+
+        isPublicPath(path) {
+            return path === '/login' || path === '/health' || path === '/auth/logout' || path.startsWith('/assets/');
+        },
+
+        registerRoutes(app: FastifyInstance) {
+            app.get<{ Querystring: { next?: string } }>('/login', async (request, reply) => {
+                const state = await readAuthState(statePath);
+                return reply.type('text/html')
+                    .send(loginPage({ next: safeNext(request.query.next), passwordSet: Boolean(state?.password) }));
+            });
+
+            app.post<{ Body: { password?: string; next?: string } }>('/login', async (request, reply) => {
+                const now = Date.now();
+                const next = safeNext(request.body?.next);
+                const state = await readAuthState(statePath);
+                const passwordSet = Boolean(state?.password);
+                const render = (message: string, code: number) => reply.code(code).type('text/html')
+                    .send(loginPage({ message, next, passwordSet }));
+                if (throttled(request.ip, now)) {
+                    return render(`Too many attempts. Try again in ${windowMinutes} minutes.`, 429);
+                }
+                if (!state || !await verifyPassword(state.password, request.body?.password ?? '')) {
+                    recordFailure(request.ip, now);
+                    return render('That password is not correct.', 401);
+                }
+                attempts.delete(request.ip);
+                const maxAge = Math.round(sessionHours * 3600);
+                setSessionCookie(request, reply, signSession(state.sessionSecret, now + maxAge * 1000), maxAge);
+                return reply.redirect(next, 303);
+            });
+
+            app.get('/auth/logout', async (request, reply) => {
+                setSessionCookie(request, reply, '', 0);
+                return reply.redirect('/login', 303);
+            });
+        },
+
+        async authenticate(request, reply): Promise<AuthenticatedUser | null> {
+            const token = await tokenForAuthorization(statePath, request.headers.authorization);
+            if (token) {
+                // A named agent changed something — say so in the log, once, per request.
+                if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
+                    request.log.info({ apiToken: token.name, method: request.method, url: request.url },
+                        'authenticated API token request');
+                }
+                return { id: `token:${token.id}`, roles: ['api', `token:${token.name}`] };
+            }
+            if (request.headers.authorization) return null;
+
+            const state = await readAuthState(statePath).catch(() => null);
+            if (state && sessionValid(state.sessionSecret, readCookie(request.headers.cookie, SESSION_COOKIE), Date.now())) {
+                return { id: 'local', roles: ['operator'] };
+            }
+            // A browser navigation deserves the form, not a JSON 401.
+            if (request.method === 'GET' && (request.headers.accept ?? '').includes('text/html')) {
+                await reply.redirect(`/login?next=${encodeURIComponent(request.url)}`, 303);
+            }
+            return null;
+        },
+    };
+}
+
+export default createLocalAuthProvider();

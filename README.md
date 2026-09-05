@@ -10,6 +10,8 @@ It runs locally as-is; authentication is optional on a loopback bind. Harden it 
 
 - [docs/getting-started.md](docs/getting-started.md) — install, configure, run, register a device
 - [docs/architecture.md](docs/architecture.md) — the four processes, data stores, task model, source map
+- [docs/mcp.md](docs/mcp.md) — the MCP server: stdio and HTTP transports, tool list, security notes
+- [docs/auth.md](docs/auth.md) — the built-in `PHONE_FARM_AUTH_PLUGIN=local` login and API tokens
 - [docs/plugins.md](docs/plugins.md) — write a plugin: tasks, execution context, versioning, panels, routes
 - [docs/content-queue.md](docs/content-queue.md) — content library, FFmpeg normalisation, and the drip queue
 - [docs/coordinates.md](docs/coordinates.md) — tap-layout profiles and how to add one
