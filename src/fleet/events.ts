@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, gte, lt, lte, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, gte, lt, lte, type SQL } from 'drizzle-orm';
 
 import type { DatabaseConnection } from '../database/client.js';
 import { events, type EventRow, type EventSeverity } from '../database/schema.js';
@@ -63,6 +63,8 @@ export interface EventQuery {
     severity?: EventSeverity;
     /** Cursor: only events with a smaller id (newest first). */
     before?: number;
+    /** Floor: only events with a larger id — the unacknowledged mark. */
+    afterId?: number;
     limit?: number;
 }
 
@@ -71,6 +73,8 @@ export interface EventStore {
     list(query?: EventQuery): Promise<FarmEvent[]>;
     /** Oldest first — the SSE replay/tail direction. */
     after(id: number, limit?: number): Promise<FarmEvent[]>;
+    /** How many events sit above the cursor — the unacknowledged count. */
+    countAfter(id: number): Promise<number>;
     record(input: EventInput): Promise<FarmEvent>;
 }
 
@@ -106,6 +110,7 @@ export function matchesEventQuery(event: FarmEvent, query: EventQuery): boolean 
     if (query.deviceUdid && event.deviceUdid !== query.deviceUdid) return false;
     if (query.severity && event.severity !== query.severity) return false;
     if (query.before !== undefined && event.id >= query.before) return false;
+    if (query.afterId !== undefined && event.id <= query.afterId) return false;
     return true;
 }
 
@@ -139,6 +144,7 @@ export function createMemoryEventStore(seed: readonly FarmEvent[] = []): EventSt
         async after(id, limit = 100) {
             return events.filter((event) => event.id > id).sort((a, b) => a.id - b.id).slice(0, clampLimit(limit));
         },
+        async countAfter(id) { return events.filter((event) => event.id > id).length; },
     };
 }
 
@@ -162,6 +168,7 @@ export function createEventStore(connection: DatabaseConnection): EventStore {
             if (query.deviceUdid) filters.push(eq(events.deviceUdid, query.deviceUdid));
             if (query.severity) filters.push(eq(events.severity, query.severity));
             if (query.before !== undefined) filters.push(lt(events.id, query.before));
+            if (query.afterId !== undefined) filters.push(gt(events.id, query.afterId));
             const rows = await db.select().from(events)
                 .where(filters.length ? and(...filters) : undefined)
                 .orderBy(desc(events.id)).limit(clampLimit(query.limit));
@@ -171,6 +178,10 @@ export function createEventStore(connection: DatabaseConnection): EventStore {
             const rows = await db.select().from(events).where(gt(events.id, id))
                 .orderBy(asc(events.id)).limit(clampLimit(limit));
             return rows.map(toEvent);
+        },
+        async countAfter(id) {
+            const [row] = await db.select({ total: count() }).from(events).where(gt(events.id, id));
+            return Number(row?.total ?? 0);
         },
     };
 }

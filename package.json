@@ -34,6 +34,7 @@
     "db:migrate": "node --env-file-if-exists=.env --import tsx src/database/migrate.ts",
     "db:setup": "node --env-file-if-exists=.env --import tsx src/database/setup.ts",
     "worker": "node --env-file-if-exists=.env --env-file-if-exists=.env.devices --import tsx src/scheduler/worker.ts",
+    "push:relay": "node --env-file-if-exists=.env --import tsx src/push/relay.ts",
     "web": "node --env-file-if-exists=.env --env-file-if-exists=.env.devices --import tsx src/api/server.ts",
     "mcp": "node --env-file-if-exists=.env --env-file-if-exists=.env.devices --import tsx src/mcp/stdio.ts",
     "auth:set-password": "node --env-file-if-exists=.env --import tsx src/auth/cli.ts set-password",

@@ -29,6 +29,7 @@ import { ScheduleTransitionError, type SchedulerRepository } from '../scheduler/
 import { registerContentRoutes } from './routes/content.js';
 import { registerFleetRoutes } from './routes/fleet.js';
 import { registerMcpRoutes } from './routes/mcp.js';
+import { registerPushRoutes } from './routes/push.js';
 
 export interface CreateAppOptions {
     plugins: PluginRegistry;
@@ -631,6 +632,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
     await registerContentRoutes(app, { scheduler: options.scheduler, navHtml: pluginNavHtml, footerHtml: FOOTER_HTML });
     await registerFleetRoutes(app, options);
+    await registerPushRoutes(app, options);
     await registerMcpRoutes(app, {
         scheduler: options.scheduler, plugins: options.plugins, screenshot: (udid) => remote.getScreenshot(udid),
     });

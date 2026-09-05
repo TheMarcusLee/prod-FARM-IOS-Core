@@ -1,7 +1,7 @@
 import { severityRank, type FarmEvent } from '../fleet/events.js';
 import type { JsonObject } from '../types.js';
-import type { ChannelName, NotificationConfig } from './config.js';
-import { payloadFor } from './payloads.js';
+import type { ChannelName, NotificationChannel, NotificationConfig } from './config.js';
+import { ntfyRequest, payloadFor } from './payloads.js';
 
 export type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal }) => Promise<{ ok: boolean; status: number }>;
 
@@ -44,8 +44,10 @@ function message(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
 }
 
-/** Posts JSON, retrying transport errors and non-2xx responses with backoff. Never throws. */
-export async function postJson(url: string, body: JsonObject, options: DeliveryOptions = {}): Promise<Omit<DeliveryResult, 'channel'>> {
+/** Posts a body with fixed headers, retrying transport errors and non-2xx responses. Never throws. */
+export async function postWithRetry(
+    url: string, request: { headers: Record<string, string>; body: string }, options: DeliveryOptions = {},
+): Promise<Omit<DeliveryResult, 'channel'>> {
     const fetchImpl = options.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
     const retries = options.retries ?? DEFAULT_RETRIES;
     const sleep = options.sleep ?? delay;
@@ -57,8 +59,8 @@ export async function postJson(url: string, body: JsonObject, options: DeliveryO
         try {
             const response = await fetchImpl(url, {
                 method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify(body),
+                headers: request.headers,
+                body: request.body,
                 signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),
             });
             if (response.ok) return { ok: true, status: response.status, attempts };
@@ -72,12 +74,27 @@ export async function postJson(url: string, body: JsonObject, options: DeliveryO
     return { ok: false, attempts, ...(lastStatus === undefined ? {} : { status: lastStatus }), ...(lastError ? { error: lastError } : {}) };
 }
 
+/** Posts JSON, retrying transport errors and non-2xx responses with backoff. Never throws. */
+export async function postJson(url: string, body: JsonObject, options: DeliveryOptions = {}): Promise<Omit<DeliveryResult, 'channel'>> {
+    return postWithRetry(url, { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, options);
+}
+
+/** One channel's request: ntfy is a plain-text publish, everything else is a JSON webhook. */
+function deliverToChannel(
+    channel: NotificationChannel, event: FarmEvent, config: NotificationConfig, options: DeliveryOptions,
+): Promise<Omit<DeliveryResult, 'channel'>> {
+    if (channel.name === 'ntfy') {
+        return postWithRetry(channel.url, ntfyRequest(event, channel, config.publicBaseUrl), options);
+    }
+    return postJson(channel.url, payloadFor(channel.name, event, config), options);
+}
+
 /** Delivers one event to every configured channel. Failures are reported, never thrown. */
 export async function deliverEvent(
     event: FarmEvent, config: NotificationConfig, options: DeliveryOptions = {},
 ): Promise<DeliveryResult[]> {
     return Promise.all(config.channels.map(async (channel) => ({
         channel: channel.name,
-        ...await postJson(channel.url, payloadFor(channel.name, event, config), options),
+        ...await deliverToChannel(channel, event, config, options),
     })));
 }

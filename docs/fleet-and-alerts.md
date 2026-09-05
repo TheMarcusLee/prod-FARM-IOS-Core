@@ -5,8 +5,10 @@ Everything in this document is served by the `web` process. Three pieces:
 - **`/fleet`** — one card per registered device, filters, and bulk actions.
 - **`scheduler.events`** — an append-only timeline of what happened to devices,
   executions and schedules, readable over JSON and Server-Sent Events.
-- **Notification channels** — webhook, Slack and Discord deliveries plus a daily
-  digest, driven entirely from environment variables.
+- **Notification channels** — webhook, Slack, Discord and ntfy deliveries plus a
+  daily digest, driven entirely from environment variables.
+- **Push registrations** — the companion app's Expo tokens and per-token event
+  acknowledgement; the relay that feeds them is `docs/push-relay.md`.
 
 Source map:
 
@@ -21,7 +23,10 @@ Source map:
 | `src/fleet/page.ts` | The `/fleet` page renderer |
 | `src/notifications/*` | Channel config, payload shapes, retrying delivery, digest |
 | `src/api/routes/fleet.ts` | `registerFleetRoutes(app, options)` — every route below |
-| `src/database/schema-events.ts` | The `scheduler.events` table (migration `0002_events.sql`) |
+| `src/database/schema-events.ts` | The `scheduler.events` table (migration `0003_events.sql`) |
+| `src/database/schema-push.ts` | `scheduler.push_registrations` and `scheduler.event_acks` (migration `0004_push.sql`) |
+| `src/push/*` | Expo registrations, per-token ack marks, and the push relay |
+| `src/api/routes/push.ts` | `registerPushRoutes(app, options)` — `/api/push/*` and `/api/events/ack` |
 
 ## The `/fleet` page
 
@@ -202,6 +207,8 @@ first attempt with exponential backoff (500 ms, 1 s, 2 s).
 | `NOTIFY_WEBHOOK_URL` | Generic endpoint; receives `POST {"event": … }` |
 | `NOTIFY_SLACK_WEBHOOK_URL` | Slack incoming webhook; Block Kit header, device/kind/time/severity fields, the error in a code block, and a button linking to the execution |
 | `NOTIFY_DISCORD_WEBHOOK_URL` | Discord webhook; one embed coloured by severity (info blue, warning amber, error red) |
+| `NOTIFY_NTFY_URL` | An ntfy topic URL — `https://ntfy.sh/<topic>` or a self-hosted `http://farm-mac.tailnet:8080/<topic>` |
+| `NOTIFY_NTFY_TOKEN` | Optional; sent as `Authorization: Bearer …` for a protected topic |
 | `NOTIFY_MIN_SEVERITY` | `info` \| `warning` \| `error`; default `warning` |
 | `NOTIFY_KINDS` | Optional comma-separated kinds; when set it replaces the severity floor entirely |
 | `DIGEST_LOCAL_TIME` | `HH:MM`, default `08:00` |
@@ -210,6 +217,33 @@ first attempt with exponential backoff (500 ms, 1 s, 2 s).
 
 Anything that is not an `http(s)` URL, a known severity or a valid `HH:MM` is
 ignored in favour of the default rather than failing at boot.
+
+### ntfy
+
+ntfy is the recommended day-one pager: install the app, subscribe to an
+unguessable topic, and alerts arrive without any companion-app code. Publishing
+is a plain `POST` to the topic URL — the body is the message, everything else is
+a header:
+
+| Header | Value |
+| --- | --- |
+| `Title` | The event title, flattened to one line of printable ASCII |
+| `Priority` | `3` for info, `4` for warning, `5` for error |
+| `Tags` | An emoji shortcode per kind — `x` for `execution.failed`, `rotating_light` for `device.error`, `warning` for `device.disconnected`, `hourglass` for `execution.stuck`, and so on |
+| `Click` | `PUBLIC_BASE_URL` + the execution or device page, when `PUBLIC_BASE_URL` is set |
+| `Authorization` | `Bearer $NOTIFY_NTFY_TOKEN`, when the topic is protected |
+
+The body is the title followed by a short detail line: the event's `detail.error`
+when it has one, otherwise `kind · deviceUdid`.
+
+```sh
+NOTIFY_NTFY_URL=https://ntfy.sh/farm-alerts-9f2a7c npm run web
+```
+
+ntfy's iOS app receives through ntfy's own APNs relay, so a self-hosted server
+still leans on it for iOS delivery: **keep titles free of account handles,
+passcodes and UDIDs you would not want relayed.** A device name and a task name
+is enough to act on.
 
 `POST /api/notifications/test` sends a probe to every configured channel and
 reports each one:
@@ -242,11 +276,35 @@ than slept through, so a host that suspends past the slot still produces one.
 - `stuckExecutions` — running past the deadline, with `deadlineAt`
 - `plannedNext24h` — schedules due in the next 24 hours
 
+## Push registrations and acknowledgement
+
+The companion app's Expo push tokens live in `scheduler.push_registrations`, and
+each API token's read mark lives in `scheduler.event_acks`. The endpoints are
+documented in `docs/mobile-api.md`; the process that turns events into pushes is
+`docs/push-relay.md`.
+
+| Route | Purpose |
+| --- | --- |
+| `POST /api/push/register` | Idempotent on the Expo token; `201` on create, `200` on update |
+| `GET /api/push/registrations` | `{ registrations: [...] }` — a `tokenSuffix`, never the token |
+| `DELETE /api/push/registrations/:id` | `204`; also called by the relay on `DeviceNotRegistered` |
+| `POST /api/push/registrations/:id/error` | Relay-only: records the last Expo receipt error |
+| `POST /api/events/ack` | `{ upToId }` per token identity |
+| `GET /api/events/unacknowledged-count` | `{ unacknowledgedCount, upToId }` |
+| `GET /api/events?acknowledged=false` | Only events above the caller's mark |
+
+The caller's identity comes from `request.apiToken` when the named-token work has
+decorated it; a cookie session or an unauthenticated loopback request falls back
+to the shared `local` identity. A push token is never logged or returned in full
+— only its last six characters.
+
 ## Tests
 
-`test/events.test.ts`, `test/notifications.test.ts` and `test/fleet.test.ts`
+`test/events.test.ts`, `test/notifications.test.ts`, `test/push.test.ts` and `test/fleet.test.ts`
 cover the event vocabulary and query rules, the SSE stream (against a real
 listening server, including `Last-Event-ID` replay), the Slack/Discord/webhook
 payload shapes, retry and backoff, severity and kind filtering, digest
 aggregation with fixed data, the stagger maths, bulk partial failures, device
-state diffing, and the rendered fleet page.
+state diffing, the rendered fleet page, the ntfy headers and body, registration
+upsert/validation/revocation, the relay's filtering, coalescing, quiet hours,
+Expo batching and receipt handling, and per-token acknowledgement.

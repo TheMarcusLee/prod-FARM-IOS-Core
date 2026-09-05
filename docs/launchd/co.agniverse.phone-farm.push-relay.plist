@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Supervises `npm run push:relay` beside the scheduler worker.
+
+  Copy to ~/Library/LaunchAgents/, replace /Users/you/phone-farm with the
+  checkout path, then:
+
+    mkdir -p ~/Library/Logs/phone-farm
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/co.agniverse.phone-farm.push-relay.plist
+    launchctl kickstart -k gui/$(id -u)/co.agniverse.phone-farm.push-relay
+
+  FARM_API_TOKEN is better kept in the checkout's .env — `npm run push:relay`
+  loads it — than written into this file, which is world-readable.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>co.agniverse.phone-farm.push-relay</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/npm</string>
+    <string>run</string>
+    <string>push:relay</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/you/phone-farm</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>FARM_BASE_URL</key>
+    <string>http://127.0.0.1:3000</string>
+    <key>SCHEDULER_DATA_DIR</key>
+    <string>/Users/you/phone-farm/.scheduler-data</string>
+    <key>PUSH_QUIET_HOURS</key>
+    <string>22:00-07:00</string>
+    <key>PUSH_TIMEZONE</key>
+    <string>Europe/London</string>
+    <key>PUBLIC_BASE_URL</key>
+    <string>https://farm-mac.tailnet-1234.ts.net</string>
+  </dict>
+
+  <!-- Restart on crash, but not in a tight loop. -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/you/Library/Logs/phone-farm/push-relay.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/you/Library/Logs/phone-farm/push-relay.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

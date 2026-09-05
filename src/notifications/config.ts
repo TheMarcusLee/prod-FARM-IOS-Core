@@ -1,10 +1,12 @@
 import { isEventKind, isEventSeverity, type EventKind, type EventSeverity } from '../fleet/events.js';
 
-export type ChannelName = 'webhook' | 'slack' | 'discord';
+export type ChannelName = 'webhook' | 'slack' | 'discord' | 'ntfy';
 
 export interface NotificationChannel {
     name: ChannelName;
     url: string;
+    /** ntfy only: sent as `Authorization: Bearer …` to a protected topic. */
+    token?: string;
 }
 
 export interface NotificationConfig {
@@ -40,9 +42,12 @@ export function notificationConfigFromEnv(env: NodeJS.ProcessEnv = process.env):
     const webhook = httpUrl(env.NOTIFY_WEBHOOK_URL);
     const slack = httpUrl(env.NOTIFY_SLACK_WEBHOOK_URL);
     const discord = httpUrl(env.NOTIFY_DISCORD_WEBHOOK_URL);
+    const ntfy = httpUrl(env.NOTIFY_NTFY_URL);
+    const ntfyToken = trimmed(env.NOTIFY_NTFY_TOKEN);
     if (webhook) channels.push({ name: 'webhook', url: webhook });
     if (slack) channels.push({ name: 'slack', url: slack });
     if (discord) channels.push({ name: 'discord', url: discord });
+    if (ntfy) channels.push({ name: 'ntfy', url: ntfy, ...(ntfyToken ? { token: ntfyToken } : {}) });
     const kinds = (trimmed(env.NOTIFY_KINDS) ?? '').split(',').map((value) => value.trim()).filter(isEventKind);
     const minSeverity = trimmed(env.NOTIFY_MIN_SEVERITY);
     const digestLocalTime = trimmed(env.DIGEST_LOCAL_TIME);
