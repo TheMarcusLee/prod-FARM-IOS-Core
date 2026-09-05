@@ -63,6 +63,32 @@ Use one:
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/devices
 ```
 
+### Token identity on the request
+
+Every authenticated request carries who made it, as `request.apiToken`
+(`{ id, name }`, declared in `src/auth/types.ts`). A cookie session is
+`{ id: 'session', name: 'local' }`. Rate limits key on it, and anything that
+needs per-caller state — per-token event acknowledgement, for one — can address
+a token instead of guessing.
+
+The state file also records `lastUsedAt` per token, written at most **once a
+minute** per token so a phone polling the fleet every few seconds does not
+rewrite `.auth.json` on every request.
+
+### Listing and revoking over HTTP
+
+```sh
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/tokens
+curl -X DELETE -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3000/api/tokens/<id>
+```
+
+`GET /api/tokens` returns `{ tokens: [{ id, name, createdAt, lastUsedAt }] }` —
+never the digest. `DELETE /api/tokens/:id` answers `204` and the token stops
+working on its next request; it matches on **id only**, so a token named like
+another one's id cannot be revoked by mistake. Give every phone, agent and
+relay its own named token: one lost phone is then one `DELETE`, not a rotation
+that logs out everything at once.
+
 ## Public paths
 
 `/login`, `/auth/logout`, `/health`, and `/assets/*` are reachable without a
@@ -84,8 +110,24 @@ a bearer request is by definition not browser-originated. Set
 Failed logins are counted per client IP. After `AUTH_LOGIN_MAX_ATTEMPTS`
 failures inside `AUTH_LOGIN_WINDOW_MINUTES` the form answers `429` until the
 window rolls over — including for the correct password. The counter is
-in-process, so it resets when `web` restarts. Tokens are not rate limited; revoke
-one instead.
+in-process, so it resets when `web` restarts.
+
+API requests under `/api/*` are rate limited too, keyed on the **token id**
+(falling back to the client IP), because over Tailscale every request arrives
+from the same address. The budgets protect the *phones* more than the server: a
+retry loop hammering `remote/action` is a real way to wedge a WDA session.
+
+| Route | Default | Variable |
+|---|---|---|
+| `POST /api/devices/:udid/remote/action` | 10/s per device and token | `RATE_LIMIT_ACTION` |
+| `GET /api/devices/:udid/remote/screenshot` | 5/s per device and token | `RATE_LIMIT_SCREENSHOT` |
+| Other writes | 60/min per token | `RATE_LIMIT_WRITE` |
+| Reads | 300/min per token | `RATE_LIMIT_READ` |
+
+A refusal is a `429` with `x-ratelimit-limit`, `x-ratelimit-remaining`,
+`x-ratelimit-reset` and `retry-after`, and the usual `{ "error": … }` body. The
+counters are in-process and reset with `web`. `RATE_LIMITS=off` disables the
+whole layer — that is what the test suite uses; do not set it in production.
 
 ## Settings
 
@@ -97,6 +139,11 @@ one instead.
 | `AUTH_LOGIN_MAX_ATTEMPTS` | `5` | Failed logins per window, per IP |
 | `AUTH_LOGIN_WINDOW_MINUTES` | `15` | Length of that window |
 | `PHONE_FARM_TRUSTED_ORIGINS` | unset | Comma-separated origins allowed to write |
+| `RATE_LIMITS` | on | Set to `off` to disable API rate limiting entirely |
+| `RATE_LIMIT_ACTION` | `10` | `remote/action` requests per second, per device and token |
+| `RATE_LIMIT_SCREENSHOT` | `5` | `remote/screenshot` requests per second, per device and token |
+| `RATE_LIMIT_WRITE` | `60` | Other writes per minute, per token |
+| `RATE_LIMIT_READ` | `300` | Reads per minute, per token |
 
 ## What this is not
 

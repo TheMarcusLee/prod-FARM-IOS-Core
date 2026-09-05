@@ -15,6 +15,35 @@ export function deviceState(device: Pick<RegisteredDevice, 'disabled'>, connecte
     return connected ? 'online' : 'offline';
 }
 
+/**
+ * The badge a client renders. Wider than `DeviceState`, which only knows about
+ * registration and USB: `busy` and `error` need the execution table and the
+ * control-channel state, so they are derived here once rather than in every
+ * client from four separate fields.
+ */
+export type DerivedDeviceState = 'online' | 'busy' | 'offline' | 'disabled' | 'error';
+
+export interface DerivedStateInput {
+    disabled?: boolean;
+    connected: boolean;
+    /** A queued or running execution on this device. */
+    busy?: boolean;
+    /** The control channel reported an error, or the device's last event was an error. */
+    errored?: boolean;
+}
+
+/**
+ * Precedence: an operator's own decision (`disabled`) first, then whether the
+ * phone is physically there, then whether it is broken, then whether it is
+ * working. An offline device is "offline", not "error" — the cable is the story.
+ */
+export function derivedDeviceState(input: DerivedStateInput): DerivedDeviceState {
+    if (input.disabled) return 'disabled';
+    if (!input.connected) return 'offline';
+    if (input.errored) return 'error';
+    return input.busy ? 'busy' : 'online';
+}
+
 /** A running execution is stuck once it is this far past its run-window deadline. */
 export const STUCK_GRACE_MS = 5 * 60_000;
 

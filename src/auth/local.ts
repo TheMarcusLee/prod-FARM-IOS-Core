@@ -2,7 +2,8 @@ import crypto from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import type { AuthenticatedUser, AuthProvider } from '../plugin.js';
-import { defaultAuthStatePath, readAuthState, tokenForAuthorization, verifyPassword } from './state.js';
+import { defaultAuthStatePath, readAuthState, touchApiToken, tokenForAuthorization, verifyPassword } from './state.js';
+import { SESSION_IDENTITY } from './types.js';
 
 export const SESSION_COOKIE = 'phone_farm_session';
 
@@ -163,6 +164,13 @@ export function createLocalAuthProvider(options: LocalAuthOptions = {}): AuthPro
         async authenticate(request, reply): Promise<AuthenticatedUser | null> {
             const token = await tokenForAuthorization(statePath, request.headers.authorization);
             if (token) {
+                // Every downstream consumer — rate limits, per-token event
+                // acknowledgement, the mobile app's Settings screen — needs to
+                // know *which* token this is, not just that one matched.
+                request.apiToken = { id: token.id, name: token.name };
+                // A failed write here must never fail the request: it is a
+                // liveness hint, not part of the authentication decision.
+                await touchApiToken(statePath, token.id).catch(() => undefined);
                 // A named agent changed something — say so in the log, once, per request.
                 if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
                     request.log.info({ apiToken: token.name, method: request.method, url: request.url },
@@ -174,6 +182,7 @@ export function createLocalAuthProvider(options: LocalAuthOptions = {}): AuthPro
 
             const state = await readAuthState(statePath).catch(() => null);
             if (state && sessionValid(state.sessionSecret, readCookie(request.headers.cookie, SESSION_COOKIE), Date.now())) {
+                request.apiToken = SESSION_IDENTITY;
                 return { id: 'local', roles: ['operator'] };
             }
             // A browser navigation deserves the form, not a JSON 401.

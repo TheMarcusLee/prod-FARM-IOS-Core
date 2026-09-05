@@ -30,7 +30,29 @@ GET /api/devices HTTP/1.1
 Authorization: Bearer pf_live_9f3c…
 ```
 
+Every token has a name and an id, and every authenticated request carries that
+identity server-side (`request.apiToken`), which is what per-device revocation
+and the rate limits below key on. A cookie session is `{ id: "session",
+name: "local" }`.
+
 Password login exists only for the browser dashboard. The app must never use it.
+
+### Rate limits
+
+Keyed on the **token id** (falling back to the client IP), because every request
+arrives from the same tailnet address. Only `/api/*` is counted; the dashboard's
+own fragments and static assets are not.
+
+| Route | Limit | Environment variable |
+| --- | --- | --- |
+| `POST /api/devices/:udid/remote/action` | 10/s, per device *and* token | `RATE_LIMIT_ACTION` |
+| `GET /api/devices/:udid/remote/screenshot` | 5/s, per device *and* token | `RATE_LIMIT_SCREENSHOT` |
+| Other writes | 60/min per token | `RATE_LIMIT_WRITE` |
+| Reads | 300/min per token | `RATE_LIMIT_READ` |
+
+`RATE_LIMITS=off` disables them entirely (tests). A refusal is a `429` with the
+standard headers and the usual `{ "error": … }` body — respect `retry-after`
+rather than retrying immediately.
 
 A `Bearer` header also satisfies the app's CSRF guard: `createApp` rejects any
 non-`GET` request that has neither a `Bearer` token nor a trusted `Origin`
@@ -54,6 +76,7 @@ maps a thrown `statusCode` through, defaulting to `400`.
 | `403` | Cross-origin write blocked (missing `Bearer`) |
 | `404` | Unknown device, schedule, execution, or asset |
 | `409` | State conflict — remote input during a run, disabling a busy device, resuming a completed schedule, retrying a non-retryable execution |
+| `429` | Rate limit spent — see below. Carries `x-ratelimit-limit`, `x-ratelimit-remaining`, `x-ratelimit-reset` and `retry-after` |
 | `503` | Subsystem unavailable — device flapping (screenshot), registration not configured, stream down |
 
 `503` from `/remote/screenshot` has an **empty body**, not JSON — it is
@@ -62,16 +85,17 @@ right now" and keep the previous image.
 
 ### Pagination
 
-Two different styles, both intentional:
+Keyset everywhere, in two dialects:
 
 | Family | Style |
 | --- | --- |
-| `/api/schedules`, `/api/executions` | No pagination. Server-side cap of 200 rows, newest first, optional `?deviceUdid=`. |
-| `/api/events` (planned) | Keyset. `?limit=` (default 50, max 200) plus `?before=<eventId>` to walk backwards, `?since=`/`?until=` for a time window. |
+| `/api/schedules`, `/api/executions` | Keyset (**implemented**). `?limit=` (default and max 200, newest first) plus `?before=<row id or ISO createdAt>`, and the optional `?deviceUdid=`. The next cursor comes back in the **`X-Next-Before`** response header, not in the body. Omit both parameters and the response is exactly what it always was: 200 newest rows and no header. |
+| `/api/events` (planned) | Keyset. `?limit=` (default 50, max 200) plus `?before=<eventId>` to walk backwards, `?since=`/`?until=` for a time window; the cursor is `nextBefore` in the body. |
 
-Event ids are monotonic, so `before` is a stable cursor across inserts. Do not
-paginate schedules/executions with offsets; if the app needs deeper history,
-ask for the keyset treatment on those two as well (listed as a gap below).
+Event ids are monotonic, so `before` is a stable cursor across inserts. For
+schedules and executions the cursor is `(createdAt, id)`, so two rows created in
+the same instant still page cleanly. `?before=` with an unknown row id is a
+`400`. Do not paginate with offsets.
 
 ---
 
@@ -126,6 +150,9 @@ Notes the app must respect:
 - `platform` absent means iOS; `driver` absent means `wda` on iOS, `adb` on
   Android (`src/drivers/select.ts`).
 - `android.bridgeToken` is present in the record. Do not display it.
+- `tags` comes back whenever the device has any: `GET /api/devices` returns the
+  registry record minus the passcode, so `PATCH`-ing tags makes them visible
+  here as well as in the fleet summary.
 
 ### `GET /api/devices/:udid/connection`
 
@@ -189,9 +216,11 @@ No body. Returns `202`:
 Returns `image/png`, `cache-control: no-store`. `503` with an empty body when
 the device is flapping.
 
-**gap** — `?width=<px>` for a thumbnail. Full-resolution PNGs from ~12 phones
-are the single biggest thing standing between the app and a usable fleet grid
-over a phone connection.
+**Implemented** — `?width=<px>` for a thumbnail, clamped to 120–1080 and
+aspect-preserving (never upscaled), resized in-process with `sharp`. Works for
+both the iOS remote and the Android driver path. `cache-control: no-store` and
+the quiet `503` are unchanged; a value that is not a number means full
+resolution.
 
 ```http
 GET /api/devices/00008030-…/remote/screenshot?width=320
@@ -270,7 +299,11 @@ page work:
 ```
 
 `state` is the single derived badge the app renders: `online | busy | offline |
-disabled | error`.
+disabled | error`. The derivation is one pure function —
+`derivedDeviceState` in `src/fleet/summary.ts`, precedence
+`disabled → offline → error → busy → online` — and
+`GET /api/mobile/bootstrap` already returns it per device, so the app never
+re-derives a badge from four fields.
 
 ### `POST /api/schedules/bulk`
 
@@ -578,7 +611,34 @@ has no reason to call it; it reads the result as `lastError` above. See
 
 ---
 
-## Bootstrap — gap
+## Tokens — implemented
+
+### `GET /api/tokens`
+
+```json
+{
+  "tokens": [
+    {
+      "id": "b4a1c0de-0000-4000-8000-000000000000",
+      "name": "marcus-iphone",
+      "createdAt": "2026-09-01T11:02:44.881Z",
+      "lastUsedAt": "2026-09-05T09:40:11.002Z"
+    }
+  ]
+}
+```
+
+Digests are never echoed. `lastUsedAt` is written at most once a minute per
+token, so it answers "is this phone still out there?", not "what did it do".
+
+### `DELETE /api/tokens/:id`
+
+`204`, and the token stops working on its next request. `404` for an unknown id.
+Revocation is by **id** only, so a token *named* like another one's id cannot be
+deleted by mistake. This is the "my phone was stolen" button; the desktop app
+and the push relay keep their own tokens.
+
+## Bootstrap — implemented
 
 ### `GET /api/mobile/bootstrap`
 
@@ -588,7 +648,7 @@ Alerts tabs need before the first user interaction.
 ```json
 {
   "serverTime": "2026-09-05T09:41:12.004Z",
-  "release": { "sha": "a1b2c3d", "subject": "fleet summary endpoint", "deployedAt": "2026-09-04T22:10:00.000Z" },
+  "release": { "version": "0.1.0-review.0", "sha": "a1b2c3d" },
   "plugins": [
     {
       "id": "com.git-agni.tiktok",
@@ -597,16 +657,37 @@ Alerts tabs need before the first user interaction.
       "tasks": [{ "type": "doomscroll", "version": 1, "displayName": "Doomscroll" }]
     }
   ],
-  "fleet": { "counts": { "total": 12, "online": 10, "busy": 3, "offline": 1, "disabled": 1, "error": 1 }, "devices": [] },
+  "fleet": {
+    "counts": { "total": 12, "online": 10, "busy": 3, "offline": 1, "disabled": 1, "error": 1 },
+    "devices": [
+      {
+        "udid": "00008030-001A2B3C0E88802E",
+        "name": "iPhone 8 · slot 1",
+        "platform": "ios",
+        "tags": ["warm-up"],
+        "state": "busy",
+        "connection": { "connected": true },
+        "currentExecution": {
+          "id": "0b6d…",
+          "taskType": "doomscroll",
+          "status": "running",
+          "startedAt": "2026-09-05T09:38:02.110Z",
+          "summary": "Doomscroll for 12 minutes"
+        },
+        "nextRunAt": "2026-09-05T14:00:00.000Z",
+        "lastError": null
+      }
+    ]
+  },
   "recentEvents": [],
-  "unacknowledgedCount": 2,
+  "unacknowledgedCount": 0,
   "capabilities": {
-    "events": true,
-    "sse": true,
-    "push": true,
-    "drip": true,
-    "screenshotThumbnails": true,
-    "eventAck": true
+    "push": false,
+    "eventAck": false,
+    "thumbnails": true,
+    "contentQueue": true,
+    "tokens": true,
+    "rateLimits": true
   }
 }
 ```
@@ -615,7 +696,21 @@ Alerts tabs need before the first user interaction.
 crashing — the app hides a tab rather than 404-ing. Treat a missing key as
 `false`.
 
----
+Notes on the implemented shape, which differs from the first sketch of it:
+
+- `release` is the `package.json` version plus the short git sha when the farm
+  runs from a checkout (`{ "version": "…", "sha": null }` when it does not).
+  `/health` still carries the `RELEASED` marker's `sha`/`subject`/`deployedAt`.
+- `fleet` is `{ counts, devices }` — the same per-device badge the Fleet screen
+  renders, derived server-side (`online | busy | offline | disabled | error`).
+  `connection` here is only `{ connected }`; the full control-channel record is
+  still `GET /api/devices/:udid/connection`.
+- `recentEvents` is the newest 20 events in `/api/events` shape.
+- `unacknowledgedCount` is `0` until event acknowledgement lands; the
+  `eventAck` capability says so, so the app should not render an unread badge
+  while it is `false`.
+- `capabilities` keys are the six above. `push` flips to `true` with
+  `POST /api/push/register`; `eventAck` with `POST /api/events/ack`.
 
 ## Event acknowledgement — gap
 
@@ -655,9 +750,13 @@ unchanged.
 
 ---
 
-## Content drip — planned
+## Content drip — queue implemented
 
 ### `GET /api/content/queue`
+
+Planned posts from the drip queue, oldest first, from 24 hours ago onwards so a
+just-posted item does not vanish off the screen. `?limit=` (default 50,
+max 200).
 
 ```json
 {
@@ -670,29 +769,52 @@ unchanged.
       "assetId": "9f2c…",
       "thumbnailUrl": "/api/assets/9f2c…/thumbnail",
       "plannedFor": "2026-09-06T18:00:00.000Z",
-      "scheduleId": null
+      "scheduleId": "8c1f…"
     }
   ]
 }
 ```
 
-`status`: `planned | approved | skipped | scheduled | posted | failed`.
+`status` is **derived** from the plan's schedule, which is the only approval
+state the drip queue stores — there is no `approved` column and no migration:
+
+| Schedule | `status` |
+| --- | --- |
+| none, or `paused` | `planned` |
+| `active` | `approved` |
+| `cancelled` | `skipped` |
+| `completed`, or the plan is marked used | `posted` |
+
+So the documented `scheduled` and `failed` values are not emitted today; a
+client should treat any unknown status as `planned` and read `scheduleId`.
 
 ### `POST /api/content/queue/:id/approve`
 
-Optional `{ "plannedFor": "2026-09-06T18:00:00.000Z" }` to move the slot.
-Returns the item with `status: "approved"` and, once materialised,
-`scheduleId`.
+No body. Resumes a held (`paused`) schedule and answers `{ "item": { … } }` with
+the item at `status: "approved"`. Approving an already-approved or already-posted
+item is a **no-op success** — the operator's thumb lands twice on a train.
+`404` for an unknown id.
+
+Re-timing (`{ "plannedFor": … }`) is **not implemented**; move the slot with
+`PATCH /api/schedules/:id` for now.
 
 ### `POST /api/content/queue/:id/skip`
 
-Optional `{ "reason": "wrong account" }`. Returns the item with
-`status: "skipped"`.
+No body. Cancels the schedule (releasing its queued execution), closes the plan,
+and leaves the media unspent so the next planning run can reuse it. Answers
+`{ "item": { … } }` at `status: "skipped"`; `409` if the schedule cannot be
+cancelled. A `reason` is not stored today.
 
-**gap** — `GET /api/assets/:id/thumbnail` returning a small JPEG. The Content
-screen is unusable if approving a post means downloading the source video.
+### `GET /api/assets/:id/thumbnail`
 
----
+**Implemented.** A JPEG no larger than 320 px on either side, cached on disk at
+`SCHEDULER_DATA_DIR/thumbnails/<sha256>.jpg`:
+
+- images are downscaled with `sharp`;
+- videos use the poster frame the content pipeline already stored, and fall back
+  to an ffmpeg first frame (`execFile`, never a shell);
+- `cache-control: private, max-age=300`. `404` for an unknown or missing asset,
+  `503` when no frame could be rendered.
 
 ## Assets
 

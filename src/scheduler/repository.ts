@@ -1,4 +1,5 @@
 import { and, desc, eq, inArray, isNull, lt, notExists, or, sql } from 'drizzle-orm';
+import type { PgColumn } from 'drizzle-orm/pg-core';
 import { fromDrizzle, type PgBoss } from 'pg-boss';
 import { rm } from 'node:fs/promises';
 import path from 'node:path';
@@ -15,6 +16,18 @@ import { initialRunAt, latestDueOccurrence } from './recurrence.js';
 import { DEFAULT_MIN_SCHEDULE_GAP_MINUTES, estimatedTaskWindow, validateTaskInput, windowsTooClose } from './validation.js';
 
 export interface ExecutionDetail extends ExecutionRow { logs: string[] }
+
+/**
+ * Keyset cursor for the newest-first listings. `createdAt` alone is ambiguous
+ * when two rows land in the same instant, so the row id breaks the tie and the
+ * page boundary is exact.
+ */
+export interface KeysetCursor { createdAt: Date; id?: string }
+
+function olderThan(createdAt: PgColumn, id: PgColumn, cursor: KeysetCursor) {
+    if (!cursor.id) return lt(createdAt, cursor.createdAt);
+    return or(lt(createdAt, cursor.createdAt), and(eq(createdAt, cursor.createdAt), lt(id, cursor.id)));
+}
 
 /** Thrown by setScheduleStatus for a disallowed status change (e.g. resuming a completed schedule). */
 export class ScheduleTransitionError extends Error {}
@@ -112,11 +125,14 @@ export class SchedulerRepository {
 
     async deleteAssets(assetIds: string[]): Promise<void> { await this.purgeAssetIds(assetIds); }
 
-    async listSchedules(limit = 100, deviceUdid?: string): Promise<ScheduleRow[]> {
+    async listSchedules(limit = 100, deviceUdid?: string, before?: KeysetCursor): Promise<ScheduleRow[]> {
+        const conditions = [
+            ...(deviceUdid ? [eq(schedules.deviceUdid, deviceUdid)] : []),
+            ...(before ? [olderThan(schedules.createdAt, schedules.id, before)] : []),
+        ];
         const query = this.connection.db.select().from(schedules);
-        return deviceUdid
-            ? query.where(eq(schedules.deviceUdid, deviceUdid)).orderBy(desc(schedules.createdAt)).limit(limit)
-            : query.orderBy(desc(schedules.createdAt)).limit(limit);
+        return (conditions.length ? query.where(and(...conditions)) : query)
+            .orderBy(desc(schedules.createdAt)).limit(limit);
     }
 
     async schedule(id: string): Promise<ScheduleRow | null> {
@@ -124,11 +140,14 @@ export class SchedulerRepository {
         return row ?? null;
     }
 
-    async listExecutions(limit = 100, deviceUdid?: string): Promise<ExecutionRow[]> {
+    async listExecutions(limit = 100, deviceUdid?: string, before?: KeysetCursor): Promise<ExecutionRow[]> {
+        const conditions = [
+            ...(deviceUdid ? [eq(executions.deviceUdid, deviceUdid)] : []),
+            ...(before ? [olderThan(executions.createdAt, executions.id, before)] : []),
+        ];
         const query = this.connection.db.select().from(executions);
-        return deviceUdid
-            ? query.where(eq(executions.deviceUdid, deviceUdid)).orderBy(desc(executions.createdAt)).limit(limit)
-            : query.orderBy(desc(executions.createdAt)).limit(limit);
+        return (conditions.length ? query.where(and(...conditions)) : query)
+            .orderBy(desc(executions.createdAt)).limit(limit);
     }
 
     async execution(id: string): Promise<ExecutionDetail | null> {

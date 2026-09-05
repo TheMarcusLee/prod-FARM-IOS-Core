@@ -17,9 +17,39 @@ export interface NewAsset {
     sha256: string;
 }
 
+/** One planned post as the mobile queue reads it: the plan, its schedule, and the media. */
+export interface QueuePlanRow {
+    id: string;
+    ruleId: string;
+    itemId: string;
+    scheduleId: string | null;
+    plannedFor: Date;
+    usedMarkedAt: Date | null;
+    scheduleStatus: string | null;
+    deviceUdid: string | null;
+    caption: string | null;
+    assetId: string;
+}
+
+export interface ThumbnailAsset {
+    id: string;
+    relativePath: string;
+    mimeType: string;
+    sha256: string;
+}
+
 export interface ContentStore {
     insertAsset(asset: NewAsset): Promise<{ id: string }>;
     assetPath(assetId: string): Promise<{ relativePath: string; originalName: string; mimeType: string } | null>;
+    /** Enough of an asset row to render and cache a thumbnail for it. */
+    thumbnailAsset(assetId: string): Promise<ThumbnailAsset | null>;
+    /** The library item that uses this asset, for its stored poster frame. */
+    itemForAsset(assetId: string): Promise<ContentItemRow | null>;
+    /** Planned posts from `plannedFrom` onwards, oldest first — the mobile Content tab. */
+    queuePlans(plannedFrom: Date, limit?: number): Promise<QueuePlanRow[]>;
+    queuePlan(id: string): Promise<QueuePlanRow | null>;
+    /** Closes a plan out without crediting the item, so the media stays reusable. */
+    markPlanSkipped(planId: string, at: Date): Promise<void>;
     listItems(filter?: { status?: string; tag?: string; limit?: number }): Promise<ContentItemRow[]>;
     item(id: string): Promise<ContentItemRow | null>;
     insertItem(values: typeof contentItems.$inferInsert): Promise<ContentItemRow>;
@@ -52,6 +82,25 @@ function rowsOrNull<T>(rows: T[]): T | null {
     return rows[0] ?? null;
 }
 
+interface QueueJoin {
+    plan: DripPlanRow;
+    scheduleStatus: string | null;
+    scheduleDevice: string | null;
+    ruleDevice: string | null;
+    caption: string | null;
+    assetId: string;
+}
+
+/** The schedule knows the device it will actually run on; the rule is the fallback before one exists. */
+function toQueuePlan(row: QueueJoin): QueuePlanRow {
+    return {
+        id: row.plan.id, ruleId: row.plan.ruleId, itemId: row.plan.itemId, scheduleId: row.plan.scheduleId,
+        plannedFor: row.plan.plannedFor, usedMarkedAt: row.plan.usedMarkedAt,
+        scheduleStatus: row.scheduleStatus, deviceUdid: row.scheduleDevice ?? row.ruleDevice,
+        caption: row.caption, assetId: row.assetId,
+    };
+}
+
 /** Plain functions over one Drizzle handle — no ORM classes, no repository hierarchy. */
 export function createContentStore(db: ContentDatabase): ContentStore {
     return {
@@ -65,6 +114,47 @@ export function createContentStore(db: ContentDatabase): ContentStore {
                 relativePath: assets.relativePath, originalName: assets.originalName, mimeType: assets.mimeType,
             }).from(assets).where(eq(assets.id, assetId)).limit(1);
             return row ?? null;
+        },
+        async thumbnailAsset(assetId) {
+            const [row] = await db.select({
+                id: assets.id, relativePath: assets.relativePath, mimeType: assets.mimeType, sha256: assets.sha256,
+            }).from(assets).where(eq(assets.id, assetId)).limit(1);
+            return row ?? null;
+        },
+        async itemForAsset(assetId) {
+            return rowsOrNull(await db.select().from(contentItems)
+                .where(or(eq(contentItems.assetId, assetId), eq(contentItems.originalAssetId, assetId)))
+                .orderBy(desc(contentItems.createdAt)).limit(1));
+        },
+        async queuePlans(plannedFrom, limit = 50) {
+            const rows = await db.select({
+                plan: dripPlans, scheduleStatus: schedules.status, scheduleDevice: schedules.deviceUdid,
+                ruleDevice: dripRules.deviceUdid, caption: contentItems.caption, assetId: contentItems.assetId,
+            }).from(dripPlans)
+                .leftJoin(schedules, eq(schedules.id, dripPlans.scheduleId))
+                .leftJoin(dripRules, eq(dripRules.id, dripPlans.ruleId))
+                .innerJoin(contentItems, eq(contentItems.id, dripPlans.itemId))
+                .where(gte(dripPlans.plannedFor, plannedFrom))
+                .orderBy(asc(dripPlans.plannedFor))
+                .limit(limit);
+            return rows.map(toQueuePlan);
+        },
+        async queuePlan(id) {
+            const rows = await db.select({
+                plan: dripPlans, scheduleStatus: schedules.status, scheduleDevice: schedules.deviceUdid,
+                ruleDevice: dripRules.deviceUdid, caption: contentItems.caption, assetId: contentItems.assetId,
+            }).from(dripPlans)
+                .leftJoin(schedules, eq(schedules.id, dripPlans.scheduleId))
+                .leftJoin(dripRules, eq(dripRules.id, dripPlans.ruleId))
+                .innerJoin(contentItems, eq(contentItems.id, dripPlans.itemId))
+                .where(eq(dripPlans.id, id)).limit(1);
+            return rows.length ? toQueuePlan(rows[0]!) : null;
+        },
+        async markPlanSkipped(planId, at) {
+            // usedMarkedAt closes the plan for the "credit succeeded posts" sweep.
+            // The item's own lastUsedAt is deliberately untouched: a skipped post
+            // never went out, so its media is free for the next planning run.
+            await db.update(dripPlans).set({ usedMarkedAt: at }).where(eq(dripPlans.id, planId));
         },
         async listItems(filter = {}) {
             const conditions = [
