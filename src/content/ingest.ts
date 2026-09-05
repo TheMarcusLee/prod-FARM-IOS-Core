@@ -6,7 +6,7 @@ import { pipeline } from 'node:stream/promises';
 import type { Readable } from 'node:stream';
 
 import type { ContentItemRow } from '../database/schema.js';
-import { extractPoster, normalizeVideo, probeMedia, TIKTOK_MAX_SECONDS } from './ffmpeg.js';
+import { extractPoster, normalizeVideo, posterSecondsFor, probeMedia, TIKTOK_MAX_SECONDS } from './ffmpeg.js';
 import { contentRoot, dataRoot, relativeToData, safeFileName } from './paths.js';
 import type { ContentStore } from './store.js';
 
@@ -45,7 +45,10 @@ export function createLimiter(concurrency: number) {
     return function run<T>(task: () => Promise<T>): Promise<T> {
         return new Promise<T>((resolve, reject) => {
             waiting.push(() => {
-                task().then(resolve, reject).finally(() => { active -= 1; next(); });
+                // `task` throwing synchronously must still release the slot, or
+                // one bad call permanently shrinks the pool until it deadlocks.
+                const started = (async () => task())();
+                started.then(resolve, reject).finally(() => { active -= 1; next(); });
             });
             next();
         });
@@ -133,7 +136,14 @@ export async function processItem(
             const directory = path.join(contentRoot(), 'normalized');
             await mkdir(directory, { recursive: true });
             const output = path.join(directory, `${crypto.randomUUID()}.mp4`);
-            await normalizeVideo({ input: absoluteOriginal, output, crop, maxSeconds: TIKTOK_MAX_SECONDS });
+            try {
+                await normalizeVideo({ input: absoluteOriginal, output, crop, maxSeconds: TIKTOK_MAX_SECONDS });
+            } catch (error) {
+                // FFmpeg leaves a truncated file behind when it dies mid-encode.
+                // Nothing references it, so nothing would ever clean it up.
+                await rm(output, { force: true });
+                throw error;
+            }
             const [{ size }, sha256] = await Promise.all([stat(output), hashFile(output)]);
             const asset = await store.insertAsset({
                 relativePath: relativeToData(output),
@@ -151,9 +161,16 @@ export async function processItem(
         const poster = path.join(posterDirectory, `${itemId}.jpg`);
         let posterPath: string | null = null;
         try {
-            await extractPoster({ input: absoluteOriginal, output: poster, atSeconds: probe.kind === 'video' ? 1 : 0 });
+            await extractPoster({
+                input: absoluteOriginal, output: poster,
+                atSeconds: probe.kind === 'video' ? posterSecondsFor(probe.durationMs) : 0,
+            });
             posterPath = path.relative(contentRoot(), poster);
-        } catch { /* a poster is a nicety, not a reason to fail ingest */ }
+        } catch {
+            // A poster is a nicety, not a reason to fail ingest — but a partial
+            // JPEG would be served as a broken image, so drop it.
+            await rm(poster, { force: true });
+        }
 
         await store.updateItem(itemId, {
             ...(assetId ? { assetId } : {}),
