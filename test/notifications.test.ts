@@ -11,12 +11,14 @@ import { createMemoryEventStore } from '../src/fleet/events.js';
 import { createEventRecorder } from '../src/fleet/recorder.js';
 import { notificationConfigFromEnv, type NotificationConfig } from '../src/notifications/config.js';
 import {
-    backoffDelay, deliverEvent, postJson, shouldNotify, type FetchLike,
+    backoffDelay, deliverEvent, isRetryableStatus, MAX_BACKOFF_MS, postJson, shouldNotify, type FetchLike,
 } from '../src/notifications/deliver.js';
-import { buildDigest, nextDigestAt, tallyByDeviceAndAccount } from '../src/notifications/digest.js';
 import {
-    discordPayload, headerSafe, ntfyRequest, slackPayload, webhookPayload,
-    NTFY_PRIORITY, NTFY_TAGS, SEVERITY_COLOURS,
+    buildDigest, digestDueAt, nextDigestAt, previousDigestAt, startDigestScheduler, tallyByDeviceAndAccount,
+} from '../src/notifications/digest.js';
+import {
+    discordPayload, headerSafe, ntfyRequest, slackPayload, truncate, webhookPayload,
+    DISCORD_LIMITS, NTFY_PRIORITY, NTFY_TAGS, SEVERITY_COLOURS, SLACK_LIMITS,
 } from '../src/notifications/payloads.js';
 import type { SchedulerRepository } from '../src/scheduler/repository.js';
 import type { JsonObject } from '../src/types.js';
@@ -191,7 +193,7 @@ test('a failing channel is retried three times with exponential backoff and neve
 });
 
 test('deliverEvent posts the right payload to every configured channel and reports each result', async () => {
-    const { calls, fetchImpl } = recordingFetch((url) => ({ ok: !url.includes('discord'), status: url.includes('discord') ? 404 : 200 }));
+    const { calls, fetchImpl } = recordingFetch((url) => ({ ok: !url.includes('discord'), status: url.includes('discord') ? 503 : 200 }));
     const results = await deliverEvent(event(), config({
         channels: [
             { name: 'webhook', url: 'https://hooks.example/webhook' },
@@ -206,6 +208,33 @@ test('deliverEvent posts the right payload to every configured channel and repor
     assert.ok('embeds' in calls[2]!.body);
     // The failed Discord post was retried; the successful ones were not.
     assert.equal(calls.filter(({ url }) => url.includes('discord')).length, 4);
+});
+
+test('a 4xx that will never succeed is not retried, but 429 and 5xx are', async () => {
+    assert.equal(isRetryableStatus(500), true);
+    assert.equal(isRetryableStatus(502), true);
+    assert.equal(isRetryableStatus(429), true);
+    assert.equal(isRetryableStatus(408), true);
+    assert.equal(isRetryableStatus(400), false);
+    assert.equal(isRetryableStatus(404), false);
+    assert.equal(isRetryableStatus(403), false);
+
+    // A revoked Slack webhook answers 404 for good; hammering it three more
+    // times only spends somebody's rate limit on the same failure.
+    const gone = await postJson('https://hooks.slack.com/services/revoked', {}, {
+        fetchImpl: async () => ({ ok: false, status: 404 }), sleep: async () => {},
+    });
+    assert.deepEqual([gone.ok, gone.attempts, gone.status], [false, 1, 404]);
+
+    const throttled = await postJson('https://hooks.slack.com/services/busy', {}, {
+        fetchImpl: async () => ({ ok: false, status: 429 }), sleep: async () => {},
+    });
+    assert.equal(throttled.attempts, 4);
+
+    // Backoff is bounded rather than doubling forever.
+    assert.equal(backoffDelay(0), 500);
+    assert.equal(backoffDelay(2), 2_000);
+    assert.equal(backoffDelay(20), MAX_BACKOFF_MS);
 });
 
 test('the recorder stores the event and delivers it without blocking or throwing', async () => {
@@ -378,4 +407,111 @@ test('POST /api/notifications/test includes the ntfy channel', async (context) =
         [['ntfy', true]]);
     assert.equal(calls[0]!.headers.Title, 'Phone Farm notification test');
     assert.equal(calls[0]!.headers.Tags, NTFY_TAGS['digest.daily']);
+});
+
+
+/* ------------------------------------------- channel limits and digest timing */
+
+test('a stack trace is cut to fit Discord and Slack rather than rejected', () => {
+    const trace = 'Error: WDA session died\n'.repeat(500);
+    const long = event({ title: 'x'.repeat(600), detail: { error: trace } });
+
+    const embed = (discordPayload(long, 'https://farm.example') as { embeds: Array<Record<string, unknown>> }).embeds[0]!;
+    assert.equal(String(embed.title).length, DISCORD_LIMITS.title);
+    const fields = embed.fields as Array<{ name: string; value: string }>;
+    for (const field of fields) {
+        assert.ok(field.value.length <= DISCORD_LIMITS.fieldValue, `${field.name} is ${field.value.length} long`);
+        assert.ok(field.name.length <= DISCORD_LIMITS.fieldName);
+    }
+    // Discord counts the whole embed against one 6000-character budget.
+    const total = String(embed.title).length
+        + fields.reduce((sum, field) => sum + field.name.length + field.value.length, 0);
+    assert.ok(total <= DISCORD_LIMITS.embedTotal, `embed is ${total} characters`);
+    assert.ok(fields.some((field) => field.name === 'Error'));
+
+    const slack = slackPayload(long, 'https://farm.example') as { text: string; blocks: Array<Record<string, unknown>> };
+    assert.ok(slack.text.length <= SLACK_LIMITS.text);
+    const header = slack.blocks[0] as { text: { text: string } };
+    assert.ok(header.text.text.length <= SLACK_LIMITS.headerText);
+    const section = slack.blocks[1] as { fields: Array<{ text: string }> };
+    for (const field of section.fields) assert.ok(field.text.length <= SLACK_LIMITS.fieldText);
+    const fenced = slack.blocks[2] as { text: { text: string } };
+    assert.ok(fenced.text.text.length <= SLACK_LIMITS.text, `code block is ${fenced.text.text.length} long`);
+
+    assert.equal(truncate('abcdef', 10), 'abcdef');
+    assert.equal(truncate('abcdef', 3), 'ab…');
+});
+
+test('ntfy headers never carry a newline, whatever is in the title or the base URL', () => {
+    const nasty = event({
+        title: 'Doomscroll failed\r\nX-Injected: yes',
+        deviceUdid: 'udid-a',
+        detail: { error: 'boom\nsecond line' },
+    });
+    const request = ntfyRequest(nasty, { token: 'secret' }, 'https://farm.example\nX-Evil: 1');
+    for (const [name, value] of Object.entries(request.headers)) {
+        assert.doesNotMatch(value, /[\r\n]/, `${name} carries a line break`);
+    }
+    assert.equal(headerSafe('a\r\nb'), 'a b');
+    // The body may be multi-line; only headers are constrained.
+    assert.match(request.body, /\n/);
+});
+
+test('the digest is not sent twice when the farm restarts after the slot', async () => {
+    // 08:00 Europe/London on 2026-06-02 is 07:00 UTC.
+    const slot = new Date('2026-06-02T07:00:00.000Z');
+    assert.equal(previousDigestAt('08:00', 'Europe/London', new Date('2026-06-02T09:00:00.000Z')).toISOString(),
+        slot.toISOString());
+
+    // Restarted at 09:00 having already sent today's digest at 07:00: wait for tomorrow.
+    assert.equal(
+        digestDueAt('08:00', 'Europe/London', new Date('2026-06-02T09:00:00.000Z'), slot).toISOString(),
+        '2026-06-03T07:00:00.000Z',
+    );
+    // Restarted at 09:00 with yesterday's digest as the newest one: catch up now.
+    assert.equal(
+        digestDueAt('08:00', 'Europe/London', new Date('2026-06-02T09:00:00.000Z'), new Date('2026-06-01T07:00:00.000Z'))
+            .toISOString(),
+        slot.toISOString(),
+    );
+    // A farm that has never sent one waits rather than firing at boot.
+    assert.equal(digestDueAt('08:00', 'Europe/London', new Date('2026-06-02T09:00:00.000Z'), null).toISOString(),
+        '2026-06-03T07:00:00.000Z');
+
+    // And end to end: two restarts inside the same day produce one digest.
+    let sent = 0;
+    let lastRun: Date | null = new Date('2026-06-02T07:00:00.000Z');
+    const boot = (now: Date) => startDigestScheduler({
+        localTime: '08:00', timezone: 'Europe/London', intervalMs: 1, now: () => now,
+        lastRunAt: async () => lastRun,
+        run: async (at) => { sent++; lastRun = at; },
+    });
+    for (const attempt of [0, 1]) {
+        const scheduler = boot(new Date(`2026-06-02T09:0${attempt}:00.000Z`));
+        await new Promise((resolve) => { setTimeout(resolve, 20); });
+        scheduler.stop();
+    }
+    assert.equal(sent, 0);
+
+    // The same two restarts with yesterday's digest as the newest: exactly one catch-up.
+    sent = 0;
+    lastRun = new Date('2026-06-01T07:00:00.000Z');
+    for (const attempt of [0, 1]) {
+        const scheduler = boot(new Date(`2026-06-02T09:0${attempt}:00.000Z`));
+        await new Promise((resolve) => { setTimeout(resolve, 20); });
+        scheduler.stop();
+    }
+    assert.equal(sent, 1);
+});
+
+test('the digest slot stays at 08:00 local across a DST change', () => {
+    // Europe/London springs forward at 01:00 UTC on 2026-03-29.
+    assert.equal(nextDigestAt('08:00', 'Europe/London', new Date('2026-03-28T09:00:00.000Z')).toISOString(),
+        '2026-03-29T07:00:00.000Z');
+    // The day before the change, 08:00 local is 08:00 UTC.
+    assert.equal(nextDigestAt('08:00', 'Europe/London', new Date('2026-03-27T09:00:00.000Z')).toISOString(),
+        '2026-03-28T08:00:00.000Z');
+    // Autumn: the clocks go back on 2026-10-25, and 08:00 local is 08:00 UTC after it.
+    assert.equal(nextDigestAt('08:00', 'Europe/London', new Date('2026-10-25T09:00:00.000Z')).toISOString(),
+        '2026-10-26T08:00:00.000Z');
 });

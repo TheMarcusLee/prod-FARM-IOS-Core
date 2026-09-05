@@ -306,6 +306,10 @@ export async function registerFleetRoutes(app: FastifyInstance, options: FleetRo
         localTime: notifications.digestLocalTime, timezone: notifications.digestTimezone,
         now: clock,
         log: (message) => app.log.warn(message),
+        // The timeline is the persistence: the newest digest.daily row is when
+        // the last one went out, so a restart after the slot does not send a
+        // second one and a farm that was down at the slot still catches up.
+        lastRunAt: async () => (await eventStore()?.list({ kind: 'digest.daily', limit: 1 }))?.[0]?.createdAt ?? null,
         run: async (now) => {
             const [executions, schedules] = await Promise.all([
                 options.scheduler.listExecutions(500), options.scheduler.listSchedules(500),
