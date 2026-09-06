@@ -1,0 +1,160 @@
+{
+  "id": "rb-starter-search-a-niche-ios",
+  "name": "Search a niche (iPhone)",
+  "description": "Searches a term on an iPhone, opens the top result, watches a few, and comes back to the feed.",
+  "platform": "ios",
+  "appId": "com.zhiliaoapp.musically",
+  "createdFor": {
+    "udid": "starter-template-iphone8",
+    "screen": {
+      "width": 375,
+      "height": 667,
+      "scale": 2
+    }
+  },
+  "template": "search-a-niche-ios",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.zhiliaoapp.musically"
+    },
+    {
+      "type": "wait",
+      "ms": 7000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Search",
+        "fraction": {
+          "x": 0.92,
+          "y": 0.06747
+        }
+      },
+      "seen": [
+        "For You",
+        "Following",
+        "Home",
+        "Friends",
+        "Inbox",
+        "Profile",
+        "Search"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 2500
+    },
+    {
+      "type": "type",
+      "text": "{{term}}"
+    },
+    {
+      "type": "key",
+      "key": "enter"
+    },
+    {
+      "type": "waitForText",
+      "text": "Top",
+      "timeoutMs": 25000,
+      "seen": [
+        "Top",
+        "Users",
+        "Videos",
+        "Sounds",
+        "LIVE",
+        "Hashtags"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 2500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.25,
+          "y": 0.28
+        }
+      },
+      "seen": [
+        "Top",
+        "Users",
+        "Videos",
+        "Sounds",
+        "LIVE",
+        "Hashtags"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 3000
+    },
+    {
+      "type": "swipe",
+      "from": {
+        "x": 0.49867,
+        "y": 0.82459
+      },
+      "to": {
+        "x": 0.49867,
+        "y": 0.22489
+      },
+      "durationMs": 450,
+      "repeat": "{{scrolls}}",
+      "repeatDelayMs": 4500
+    },
+    {
+      "type": "swipe",
+      "from": {
+        "x": 0.01333,
+        "y": 0.5
+      },
+      "to": {
+        "x": 0.6,
+        "y": 0.5
+      },
+      "durationMs": 350
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Home",
+        "fraction": {
+          "x": 0.10133,
+          "y": 0.97901
+        }
+      },
+      "seen": [
+        "Home",
+        "Friends",
+        "Inbox",
+        "Profile",
+        "Create",
+        "Add"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "term": "home gym",
+    "scrolls": "4"
+  }
+}
