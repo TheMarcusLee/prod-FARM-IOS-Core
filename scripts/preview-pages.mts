@@ -22,6 +22,7 @@ process.env.ANDROID_DISCOVERY = 'off';
 const { registerContentRoutes } = await import('../src/api/routes/content.js');
 const { registerScheduleRoutes } = await import('../src/api/routes/schedule.js');
 const { registerRunbookRoutes } = await import('../src/runbook/routes.js');
+const { createShellContext } = await import('../src/ui/context.js');
 const { createMemoryEventStore } = await import('../src/fleet/events.js');
 const { writeRunbook } = await import('../src/runbook/store.js');
 
@@ -170,14 +171,23 @@ const htmx = await readFile(new URL('../node_modules/htmx.org/dist/htmx.min.js',
 app.get('/assets/backline.css', async (_request, reply) => reply.type('text/css').send(css));
 app.get('/assets/htmx.min.js', async (_request, reply) => reply.type('text/javascript').send(htmx));
 
+// One shell context, exactly as createApp builds it, so the preview's sidebar is
+// the real one: rig block, unread count, plugin nav.
+const { shell } = createShellContext({
+    app, scheduler: scheduler as never, events: events as never,
+    loadDevices: async () => devices as never,
+    connectedUdids: async () => devices.filter((_, index) => index !== 8 && index !== 10).map(({ udid }) => udid),
+});
+
 await registerScheduleRoutes(app, {
+    shell,
     scheduler: scheduler as never,
     loadDevices: async () => devices as never,
     connectedUdids: async () => devices.filter((_, index) => index !== 8 && index !== 10).map(({ udid }) => udid),
     contentStore: store as never,
     events: events as never,
 });
-await registerContentRoutes(app, { scheduler: scheduler as never, store: store as never, plannerIntervalMinutes: 0 });
+await registerContentRoutes(app, { scheduler: scheduler as never, store: store as never, plannerIntervalMinutes: 0, shell });
 
 for (const [index, name] of ['Warm up the feed', 'Follow back', 'Clear notifications'].entries()) {
     await writeRunbook({
@@ -198,7 +208,7 @@ await registerRunbookRoutes({
     app, routePrefix: '/plugins/com.farm.runbook', scheduler: scheduler as never,
     remote: {} as never, loadDevices: async () => devices as never,
     saveDevices: async () => {}, mutateDevices: async () => undefined as never,
-    renderActivity: async () => '',
+    renderActivity: async () => '', shell,
 }, { directory: workspace, createDriver: () => ({ async screen() { return { width: 1080, height: 2400, scale: 1 }; } }) as never });
 
 await app.listen({ host: '127.0.0.1', port: PORT });
