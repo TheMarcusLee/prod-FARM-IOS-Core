@@ -50,6 +50,7 @@ import { runCommand } from '../drivers/common.js';
 import { registerContentRoutes } from './routes/content.js';
 import { registerFleetRoutes } from './routes/fleet.js';
 import { registerMcpRoutes } from './routes/mcp.js';
+import { personaHead, registerPersonaRoutes, renderPersonaSection } from './routes/personas.js';
 import { registerPushRoutes } from './routes/push.js';
 import { registerScheduleRoutes } from './routes/schedule.js';
 import { clampScreenshotWidth, keysetPage, registerMobileRoutes, resizeScreenshot, type KeysetQuery } from './routes/mobile.js';
@@ -971,6 +972,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
     await registerContentRoutes(app, { scheduler: options.scheduler, shell });
     await registerFleetRoutes(app, options);
+    registerPersonaRoutes(app);
     await registerScheduleRoutes(app, { ...options, shell });
     await registerPushRoutes(app, options);
     await registerMcpRoutes(app, {
@@ -1143,9 +1145,11 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     app.get('/accounts', async (request, reply) => {
         const read = await readFleet(wallSources());
         const devices = toWallDevices(read);
+        const rows = accountRows(devices);
         return reply.type('text/html').send(await shell(request, {
             title: 'Accounts', active: 'accounts',
-            body: renderAccountsPage(accountRows(devices), devices),
+            head: personaHead(),
+            body: renderAccountsPage(rows, devices) + renderPersonaSection(rows.map(({ handle }) => handle)),
         }, read));
     });
 
