@@ -113,6 +113,18 @@ export async function resolveTapPoint(
     };
 }
 
+/**
+ * The text a `waitForText` / `assert` is looking for, with its blanks filled in — the same way a
+ * tap target's label is. "Check that {{handle}} is on screen" is a health check for one account.
+ */
+function filledSelector(
+    selector: { text?: string; id?: string },
+    vars: Record<string, string> | undefined,
+): { text?: string; id?: string } {
+    if (!selector.text) return selector;
+    return { ...selector, text: applyVariables(selector.text, vars) };
+}
+
 function matches(root: UiNode, selector: { text?: string; id?: string }): boolean {
     if (selector.id && findById(root, selector.id)) return true;
     return Boolean(selector.text && findByText(root, { text: selector.text }));
@@ -179,12 +191,13 @@ async function runOnce(driver: DeviceDriver, step: Step, options: ReplayOptions,
         case 'wait':
             return driver.pause(step.ms, options.signal);
         case 'waitForText':
-            return waitForSelector(driver, step, step.timeoutMs, options);
+            return waitForSelector(driver, filledSelector(step, options.vars), step.timeoutMs, options);
         case 'assert': {
+            const selector = filledSelector(step, options.vars);
             const root = await readTree(driver);
-            const present = Boolean(root && matches(root, step));
+            const present = Boolean(root && matches(root, selector));
             if (present === (step.expect === 'present')) return;
-            throw new Error(`expected ${step.id ? `#${step.id}` : `"${step.text}"`} to be ${step.expect}`);
+            throw new Error(`expected ${selector.id ? `#${selector.id}` : `"${selector.text}"`} to be ${step.expect}`);
         }
         case 'screenshot': {
             const png = await driver.screenshot();

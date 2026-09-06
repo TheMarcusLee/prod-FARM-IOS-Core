@@ -95,7 +95,13 @@ function swipeWords(step: Extract<Step, { type: 'swipe' }>): string {
 }
 
 function selectorWords(step: { text?: string; id?: string }): string {
-    return step.text ? quote(step.text) : idLabel(step.id) ?? 'the control';
+    if (step.text) {
+        // A selector that is only a blank reads as the thing it stands for, never as braces.
+        const blanks = blanksIn(step.text);
+        if (blanks.length === 1 && step.text.trim() === `{{${blanks[0]!}}}`) return `the ${blanks[0]!}`;
+        return quote(step.text);
+    }
+    return idLabel(step.id) ?? 'the control';
 }
 
 /**

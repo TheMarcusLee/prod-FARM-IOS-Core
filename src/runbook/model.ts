@@ -408,6 +408,10 @@ export function variableNames(runbook: Pick<Runbook, 'steps'>): string[] {
         if (typeof step.repeat === 'string') {
             for (const match of step.repeat.matchAll(VARIABLE_PATTERN)) names.add(match[1]!);
         }
+        // "Check that {{handle}} is on screen" is how a health check names the account it is for.
+        if ((step.type === 'waitForText' || step.type === 'assert') && step.text) {
+            for (const match of step.text.matchAll(VARIABLE_PATTERN)) names.add(match[1]!);
+        }
         if (step.type !== 'type') continue;
         for (const match of step.text.matchAll(VARIABLE_PATTERN)) names.add(match[1]!);
     }
