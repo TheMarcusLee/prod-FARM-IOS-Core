@@ -1,4 +1,5 @@
 import type { RegisteredDevice } from '../devices/registry.js';
+import type { Seed } from '../motion/rng.js';
 import { createA11yBridgeDriver } from './a11y-bridge.js';
 import { createAdbDriver } from './adb.js';
 import { DriverError, type DeviceDriver, type DriverKind, type Platform } from './types.js';
@@ -10,6 +11,8 @@ export interface SelectOptions {
     /** Falls back to WDA_LOCAL_PORT / 8100 like the executor does today. */
     defaultWdaPort?: number;
     fetchImpl?: typeof fetch;
+    /** The run's motion seed, so every gesture in one execution comes from one reproducible stream. */
+    motionSeed?: Seed;
 }
 
 export function platformOf(device: Pick<RegisteredDevice, 'platform' | 'android'>): Platform {
@@ -35,9 +38,15 @@ export function driverForDevice(device: RegisteredDevice, options: SelectOptions
                 wdaUrl: `http://127.0.0.1:${device.wdaLocalPort ?? options.defaultWdaPort ?? Number(process.env.WDA_LOCAL_PORT ?? 8100)}`,
                 passcode: options.passcode,
                 fetchImpl: options.fetchImpl,
+                ...(device.motion ? { motion: device.motion } : {}),
+                ...(options.motionSeed !== undefined ? { motionSeed: options.motionSeed } : {}),
             });
         case 'adb':
-            return createAdbDriver({ serial: androidConfig(device).serial });
+            return createAdbDriver({
+                serial: androidConfig(device).serial,
+                ...(device.motion ? { motion: device.motion } : {}),
+                ...(options.motionSeed !== undefined ? { motionSeed: options.motionSeed } : {}),
+            });
         case 'a11y-bridge': {
             const android = androidConfig(device);
             if (!android.bridgeUrl || !android.bridgeToken) {
@@ -48,6 +57,8 @@ export function driverForDevice(device: RegisteredDevice, options: SelectOptions
                 baseUrl: android.bridgeUrl,
                 token: android.bridgeToken,
                 fetchImpl: options.fetchImpl,
+                ...(device.motion ? { motion: device.motion } : {}),
+                ...(options.motionSeed !== undefined ? { motionSeed: options.motionSeed } : {}),
                 // Launch, terminate and media push still go over adb during the sync pass; the
                 // posting routine itself only needs the bridge.
                 fallback: createAdbDriver({ serial: android.serial }),

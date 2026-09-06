@@ -16,6 +16,7 @@ import type { AndroidDeviceConfig, DeviceDriver } from '../drivers/types.js';
 import {
     CALIBRATABLE_POINTS, POINT_LABELS, coordinatesForProfile, resolveDeviceCoordinates, validateCoordinateOverrides,
 } from '../devices/coordinates.js';
+import { motionSettingsProblem, validateMotionSettings } from '../motion/profile.js';
 import { RegistryWdaRemoteControl } from '../devices/registry-remote.js';
 import type {
     DeviceRegistrationManager, RegistrationAction, RegistrationUpdate,
@@ -159,7 +160,7 @@ function validBridgeUrl(value: unknown): boolean {
 
 /** Returns the first problem with a device body, or null. Shared by POST and PATCH. */
 function deviceBodyProblem(body: {
-    name?: unknown; wdaLocalPort?: unknown; mjpegLocalPort?: unknown;
+    name?: unknown; wdaLocalPort?: unknown; mjpegLocalPort?: unknown; motion?: unknown;
     android?: { serial?: unknown; bridgeUrl?: unknown; bridgeToken?: unknown; bridgeOnly?: unknown } | null;
 }): string | null {
     if (body.name !== undefined && (typeof body.name !== 'string' || body.name.length > MAX_DEVICE_NAME_LENGTH)) {
@@ -182,7 +183,7 @@ function deviceBodyProblem(body: {
             return 'android.bridgeOnly must be a boolean';
         }
     }
-    return null;
+    return motionSettingsProblem(body.motion);
 }
 
 function positiveBytes(name: string, fallback: number): number {
@@ -532,9 +533,9 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         await options.registrations.cancel(request.params.id);
         return reply.code(204).send();
     });
-    app.post<{ Body: { name?: string; udid?: string; wdaLocalPort?: number; mjpegLocalPort?: number; passcode?: string; coordinateProfile?: string; pluginData?: Record<string, JsonObject>; platform?: string; driver?: string; android?: { serial?: unknown; bridgeUrl?: unknown; bridgeToken?: unknown; bridgeOnly?: unknown } | null } }>(
+    app.post<{ Body: { name?: string; udid?: string; wdaLocalPort?: number; mjpegLocalPort?: number; passcode?: string; coordinateProfile?: string; pluginData?: Record<string, JsonObject>; platform?: string; driver?: string; motion?: unknown; android?: { serial?: unknown; bridgeUrl?: unknown; bridgeToken?: unknown; bridgeOnly?: unknown } | null } }>(
         '/api/devices', async (request, reply) => {
-            const { name, udid, wdaLocalPort, mjpegLocalPort, passcode, coordinateProfile, pluginData, platform, driver, android } = request.body;
+            const { name, udid, wdaLocalPort, mjpegLocalPort, passcode, coordinateProfile, pluginData, platform, driver, android, motion } = request.body;
             if (!udid) return reply.code(400).send({ error: 'A device UDID is required' });
             if (!validDeviceId(udid)) return reply.code(400).send({ error: `udid ${DEVICE_ID_MESSAGE}` });
             const problem = deviceBodyProblem(request.body);
@@ -558,6 +559,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
                 ...(typeof android.bridgeToken === 'string' ? { bridgeToken: android.bridgeToken } : {}),
                 ...(android.bridgeOnly === true ? { bridgeOnly: true } : {}),
             } : undefined;
+            const motionSettings = validateMotionSettings(motion);
             const created = await mutateRegisteredDevices((devices) => {
                 if (devices.some((device) => device.udid === udid)) throw httpError(409, 'A device with this UDID is already registered');
                 // Explicit whitelist — never mass-assign arbitrary body keys into devices.json.
@@ -566,6 +568,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
                     ...(platform !== undefined ? { platform } : {}),
                     ...(driver !== undefined ? { driver } : {}),
                     ...(androidConfig ? { android: androidConfig } : {}),
+                    ...(motionSettings ? { motion: motionSettings } : {}),
                     ...(wdaLocalPort !== undefined ? { wdaLocalPort } : {}),
                     ...(mjpegLocalPort !== undefined ? { mjpegLocalPort } : {}),
                     ...(coordinateProfile !== undefined ? { coordinateProfile: coordinateProfile as RegisteredDevice['coordinateProfile'] } : {}),
@@ -577,9 +580,9 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
             return reply.code(201).send(publicDevice(created));
         },
     );
-    app.patch<{ Params: { udid: string }; Body: { name?: string; wdaLocalPort?: number; mjpegLocalPort?: number; passcode?: string; coordinates?: unknown; disabled?: boolean; coordinateProfile?: string; pluginData?: Record<string, JsonObject>; tags?: unknown } }>(
+    app.patch<{ Params: { udid: string }; Body: { name?: string; wdaLocalPort?: number; mjpegLocalPort?: number; passcode?: string; coordinates?: unknown; disabled?: boolean; coordinateProfile?: string; pluginData?: Record<string, JsonObject>; tags?: unknown; motion?: unknown } }>(
         '/api/devices/:udid', async (request, reply) => {
-            const { passcode, coordinates, name, wdaLocalPort, mjpegLocalPort, disabled, coordinateProfile, pluginData, tags } = request.body;
+            const { passcode, coordinates, name, wdaLocalPort, mjpegLocalPort, disabled, coordinateProfile, pluginData, tags, motion } = request.body;
             const problem = deviceBodyProblem(request.body);
             if (problem) return reply.code(400).send({ error: problem });
             if (passcode !== undefined && passcode !== '' && !PASSCODE_PATTERN.test(passcode)) {
@@ -605,6 +608,12 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
                 // passcode: a value sets it, '' clears it, omitting it leaves it
                 if (passcode === '') delete device.passcode;
                 else if (passcode !== undefined) device.passcode = passcode;
+                // motion: the object replaces the whole block; {} goes back to the udid's defaults
+                if (motion !== undefined) {
+                    const settings = validateMotionSettings(motion);
+                    if (settings) device.motion = settings;
+                    else delete device.motion;
+                }
                 // coordinates: the object replaces the whole override map; {} clears it
                 if (coordinates !== undefined) {
                     const overrides = validateCoordinateOverrides(coordinates, device.coordinateProfile);
