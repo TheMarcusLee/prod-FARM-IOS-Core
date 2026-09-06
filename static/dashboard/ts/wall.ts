@@ -214,6 +214,9 @@ function bindInspector(): void {
         void screenInfo(udid).then((info) => { inspectorScreen = info; });
     }
     bindViewerInput(viewer, udid);
+    // Selecting another phone re-renders the inspector; a recording that is still open puts its
+    // bar and its sentences back rather than quietly vanishing.
+    if (recording?.udid === udid) void showNarration(recording.runbookId);
     for (const button of all<HTMLButtonElement>('[data-hw]')) {
         button.addEventListener('click', () => void hardware(udid, button.dataset.hw ?? ''));
     }
@@ -225,6 +228,89 @@ function bindInspector(): void {
             .finally(() => { stop.disabled = false; });
     });
 }
+
+/* ---- recording from the inspector ------------------------------------- */
+
+/**
+ * "Record what I do next": one press creates a runbook on this phone and starts recording into it.
+ * While it is open, every remote action this page performs is also written down as a step, and the
+ * sentences it becomes appear under the viewer. Naming happens at the end, not the beginning.
+ */
+let recording: { runbookId: string; udid: string } | undefined;
+
+async function recordStep(udid: string, action: RemoteAction): Promise<void> {
+    if (!recording || recording.udid !== udid) return;
+    try {
+        await send(`/api/runbooks/${encodeURIComponent(recording.runbookId)}/steps`, { action });
+    } catch {
+        // A recorder problem must never break remote control.
+    }
+}
+
+function recordingBar(): HTMLElement | null {
+    return pick<HTMLElement>('#inspector-recording');
+}
+
+async function showNarration(runbookId: string): Promise<void> {
+    const holder = recordingBar();
+    if (!holder) return;
+    const done = '<div class="bl-rb-banner"><span class="bl-rec-dot"></span><span>Recording. Everything you do here is written down.</span>'
+        + '<button type="button" class="bl-btn bl-btn-danger bl-btn-sm" data-record-done>Done</button></div>';
+    const story = await fetch(`/plugins/com.farm.runbook/runbooks/${encodeURIComponent(runbookId)}/story`)
+        .then((response) => response.text()).catch(() => '');
+    holder.innerHTML = done + story;
+    holder.hidden = false;
+    window.htmx?.process(holder);
+}
+
+async function startRecording(udid: string): Promise<void> {
+    const started = await request<{ runbookId: string; device: string }>('/api/runbooks/record/here', {
+        method: 'POST', body: JSON.stringify({ udid }),
+    });
+    recording = { runbookId: started.runbookId, udid };
+    report(`Recording on ${started.device}`);
+    await showNarration(started.runbookId);
+}
+
+/** Done stops the recording and asks the only two questions a runbook has. */
+async function finishRecording(): Promise<void> {
+    const open = recording;
+    if (!open) return;
+    recording = undefined;
+    const holder = recordingBar();
+    if (holder) {
+        holder.hidden = true;
+        holder.innerHTML = '';
+    }
+    await send(`/api/runbooks/${encodeURIComponent(open.runbookId)}/record/stop`, {});
+    const answers = await ask('Name this runbook', [
+        { name: 'name', label: 'What is it called?', type: 'text' },
+        { name: 'description', label: 'What is it for? (optional)', type: 'text' },
+    ], 'Save');
+    if (!answers?.values.name) {
+        report('Recorded, unnamed — name it on its page.');
+        return;
+    }
+    await request(`/api/runbooks/${encodeURIComponent(open.runbookId)}/name`, {
+        method: 'POST',
+        body: JSON.stringify({ name: answers.values.name, description: answers.values.description ?? '' }),
+    });
+    window.location.assign(`/runbooks/${encodeURIComponent(open.runbookId)}`);
+}
+
+document.addEventListener('click', (event) => {
+    const start = (event.target as Element | null)?.closest<HTMLButtonElement>('[data-record-runbook]');
+    if (start) {
+        start.disabled = true;
+        void startRecording(start.dataset.recordRunbook ?? '')
+            .catch((error: unknown) => report(errorMessage(error)))
+            .finally(() => { start.disabled = false; });
+        return;
+    }
+    if ((event.target as Element | null)?.closest('[data-record-done]')) {
+        void finishRecording().catch((error: unknown) => report(errorMessage(error)));
+    }
+});
 
 /** Click to tap, drag to swipe — mapped into the phone's own coordinate space. */
 export function bindViewerInput(viewer: HTMLElement, udid: string): void {
@@ -245,7 +331,9 @@ export function bindViewerInput(viewer: HTMLElement, udid: string): void {
                 durationMs: Math.max(80, Math.min(1200, Date.now() - start.at)),
             };
         start = undefined;
-        void remoteAction(udid, action).catch((error: unknown) => window.alert(errorMessage(error)));
+        void remoteAction(udid, action)
+            .then(() => recordStep(udid, action))
+            .catch((error: unknown) => window.alert(errorMessage(error)));
     });
 }
 
@@ -259,9 +347,11 @@ async function hardware(udid: string, key: string): Promise<void> {
             const text = window.prompt('Text to type on this phone');
             if (!text) return;
             await remoteAction(udid, { type: 'text', text });
+            await recordStep(udid, { type: 'text', text } as RemoteAction);
             return;
         }
         await remoteAction(udid, { type: key as 'home' });
+        await recordStep(udid, { type: key } as RemoteAction);
     } catch (error) {
         window.alert(errorMessage(error));
     }

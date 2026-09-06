@@ -1,3 +1,4 @@
+import { FramePump } from './shell.js';
 /**
  * The runbook pages are HTMX end to end; this is the small amount they cannot do in markup —
  * opening and closing the `<dialog>` elements that hold "New runbook" and "Run on device", and
@@ -28,4 +29,35 @@ document.addEventListener('submit', (event) => {
     if (form?.closest('[data-dialog-submit]'))
         form.closest('dialog')?.close();
 });
-export {};
+/**
+ * The import control is a file input inside a label, so it looks like a button. Choosing a file is
+ * the whole gesture — there is no second "upload" press to forget.
+ */
+document.addEventListener('change', (event) => {
+    const input = event.target;
+    if (!(input instanceof HTMLInputElement) || input.dataset.import === undefined)
+        return;
+    if (input.files?.length)
+        input.form?.requestSubmit();
+});
+/**
+ * The live screen in "Run it on this phone now" is the wall inspector's viewer: the same markup,
+ * the same frame pump. Fragments swap around it, so any viewer without a pump gets one.
+ */
+const pumps = new WeakMap();
+function bindViewers() {
+    for (const viewer of Array.from(document.querySelectorAll('[data-viewer][data-live="1"]'))) {
+        if (pumps.has(viewer))
+            continue;
+        const image = viewer.querySelector('[data-frame]');
+        if (!image)
+            continue;
+        const pump = new FramePump(image, viewer.dataset.udid ?? '', viewer.dataset.platform ?? 'android');
+        pumps.set(viewer, pump);
+        pump.setRate(4);
+        if (!document.hidden)
+            pump.start();
+    }
+}
+document.addEventListener('htmx:afterSwap', bindViewers);
+bindViewers();
