@@ -78,9 +78,10 @@ export function timelineHtml(payload: TimelinePayload): string {
     const head = payload.ticks.map(({ label }) => `<span>${escapeHtml(label)}</span>`).join('');
     const body = payload.tracks.length
         ? payload.tracks.map((track) => trackHtml(track, payload)).join('')
-        : '<div class="bl-tl-track-name"></div><div class="bl-tl-track bl-tl-lane">'
-            + '<p class="bl-tl-empty">No phones are active. Register one on the Devices page.</p></div>';
-    const marker = playhead === null ? ''
+        : '<div class="bl-tl-empty-row"><p class="bl-tl-empty">No phones are active. '
+            + '<a href="/devices/register">Register one</a> and its posts appear here.</p></div>';
+    // With no tracks there is nothing for a playhead to point at.
+    const marker = playhead === null || !payload.tracks.length ? ''
         : `<div class="bl-playhead" style="left:${playhead.toFixed(3)}%">`
             + `<span class="bl-playhead-label">now ${escapeHtml(hhmm(new Date(payload.now)))}</span></div>`;
     // The playhead's label gets a band of its own between the ruler and the first

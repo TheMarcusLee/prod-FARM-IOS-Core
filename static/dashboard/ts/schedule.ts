@@ -162,15 +162,19 @@ function render(payload: Timeline): void {
             grid.append(name, lane);
         }
         if (!payload.tracks.length) {
-            const lane = element('div', 'bl-tl-track bl-tl-lane');
-            lane.append(element('p', 'bl-tl-empty', 'No phones are active. Register one on the Devices page.'));
-            grid.append(element('div', 'bl-tl-track-name'), lane);
+            const row = element('div', 'bl-tl-empty-row');
+            const text = element('p', 'bl-tl-empty', 'No phones are active. ');
+            const link = element('a', undefined, 'Register one');
+            link.setAttribute('href', '/devices/register');
+            text.append(link, document.createTextNode(' and its posts appear here.'));
+            row.append(text);
+            grid.append(row);
         }
         const overlay = element('div', 'bl-tl-overlay');
         const start = Date.parse(payload.from);
         const span = Math.max(1, Date.parse(payload.to) - start);
         const at = ((Date.now() - start) / span) * 100;
-        if (at >= 0 && at <= 100) {
+        if (at >= 0 && at <= 100 && payload.tracks.length) {
             const head = element('div', 'bl-playhead');
             head.style.left = `${at.toFixed(3)}%`;
             const stamp = new Date();

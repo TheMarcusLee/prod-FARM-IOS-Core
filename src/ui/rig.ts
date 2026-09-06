@@ -88,10 +88,13 @@ export function rigServices(facts: RigFacts): RigService[] {
             docs: '/docs/getting-started',
         },
         {
-            name: 'Device supervisor', state: facts.statuses.length ? 'running' : 'stopped',
+            name: 'Device supervisor',
+            state: facts.statuses.length ? 'running' : (android + ios) > 0 ? 'stopped' : 'idle',
             detail: facts.statuses.length
                 ? `Watches ${plural(facts.statuses.length, 'phone')} and reconnects them`
-                : 'Not running — phones are only seen when they are enumerated',
+                : (android + ios) > 0
+                    ? 'Not running — phones are only seen when they are enumerated'
+                    : 'Starts watching as soon as a phone is registered',
             docs: '/docs/operations',
         },
         {

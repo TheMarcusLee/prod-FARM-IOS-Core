@@ -71,6 +71,7 @@
 .bl-tl-device { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bl-tl-track-name[data-state="offline"] { color: var(--bl-text-4); }
 .bl-tl-empty { padding: 14px; color: var(--bl-text-3); font-size: 12.5px; }
+.bl-tl-empty-row { grid-column: 1 / -1; border-bottom: 1px solid var(--bl-hairline); }
 .bl-tl-band { height: var(--bl-playband); }
 .bl-tl-band-corner { border-right: 1px solid var(--bl-line); height: var(--bl-playband); }
 .bl-tl-overlay {

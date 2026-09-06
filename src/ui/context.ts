@@ -20,7 +20,7 @@ import type { PluginRegistry } from '../registry.js';
 import type { SchedulerRepository } from '../scheduler/repository.js';
 import { icon } from './icons.js';
 import { rigStatus, type RigFacts } from './rig.js';
-import { escapeHtml, renderShell, type RigStatus, type ShellInput } from './shell.js';
+import { NAV, escapeHtml, renderShell, type RigStatus, type ShellInput } from './shell.js';
 import { readFleet, type FleetRead, type WallSources } from './wall-data.js';
 
 /** Which appearance the operator picked on the Settings page. */
@@ -79,8 +79,11 @@ export interface ShellContext {
 export function createShellContext(options: ShellContextOptions): ShellContext {
     const { app } = options;
 
+    // A plugin that owns a built-in page (runbooks) already has its entry in NAV.
+    const builtIn = new Set(NAV.map((item) => item.href));
     const pluginNav = (options.plugins?.list() ?? [])
         .flatMap((plugin) => plugin.navLinks ?? [])
+        .filter((link) => !builtIn.has(link.href))
         .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
         .map((link) => `<a href="${escapeHtml(link.href)}">${icon('layers')}${escapeHtml(link.label)}</a>`)
         .join('');

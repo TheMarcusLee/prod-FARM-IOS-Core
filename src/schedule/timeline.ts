@@ -149,9 +149,8 @@ export function startOfDay(at: Date): Date {
 }
 
 /**
- * The window a named range covers. "Today" is the rest of today plus the evening the operator is
- * actually looking at, so it runs from the top of the current hour to midnight — a timeline that
- * starts at 00:00 spends two thirds of its width on hours that have already happened.
+ * The window a named range covers. Every range is whole days, midnight to midnight, so the ruler
+ * reads the same whatever the time is and the playhead shows where in the day the farm is.
  */
 export function windowForRange(range: Exclude<TimelineRange, 'custom'>, now: Date): { from: Date; to: Date } {
     const midnight = startOfDay(now);
@@ -160,12 +159,7 @@ export function windowForRange(range: Exclude<TimelineRange, 'custom'>, now: Dat
         return { from, to: new Date(from.getTime() + DAY_MS) };
     }
     if (range === 'week') return { from: midnight, to: new Date(midnight.getTime() + 7 * DAY_MS) };
-    const hour = new Date(now.getTime());
-    hour.setMinutes(0, 0, 0);
-    // Always show at least six hours ahead, so a look at 23:40 is not a sliver.
-    const to = new Date(midnight.getTime() + DAY_MS);
-    const from = new Date(Math.min(hour.getTime(), to.getTime() - 6 * HOUR_MS));
-    return { from, to };
+    return { from: midnight, to: new Date(midnight.getTime() + DAY_MS) };
 }
 
 /** "Tonight" is the truthful word for a range that starts in the evening; otherwise say the day. */
@@ -177,18 +171,26 @@ export function headingFor(range: TimelineRange, from: Date, now: Date): string 
     return `${evening ? 'Tonight' : 'Today'}, ${day}`;
 }
 
-/** Hour marks across the window, thinned to at most 13 so a week's ruler stays readable. */
+/**
+ * Ruler marks across the window. A day (or anything up to 36 hours) is marked every two hours as
+ * HH:MM; anything longer is marked at each local midnight with the day ("Mon 7"), because hour
+ * labels every fourteen hours read as noise. Ticks are what the lane grid lines follow too.
+ */
 export function rulerTicks(from: Date, to: Date): Array<{ at: string; label: string }> {
     const span = Math.max(HOUR_MS, to.getTime() - from.getTime());
-    const hours = Math.round(span / HOUR_MS);
-    const step = Math.max(1, Math.ceil(hours / 12));
     const ticks: Array<{ at: string; label: string }> = [];
-    for (let hour = 0; hour <= hours; hour += step) {
-        const at = new Date(from.getTime() + hour * HOUR_MS);
-        const label = span > DAY_MS && at.getHours() === 0
-            ? at.toLocaleDateString('en-GB', { weekday: 'short' })
-            : hhmm(at);
-        ticks.push({ at: at.toISOString(), label });
+    if (span <= 36 * HOUR_MS) {
+        const hours = Math.round(span / HOUR_MS);
+        const step = Math.max(1, Math.ceil(hours / 12));
+        for (let hour = 0; hour <= hours; hour += step) {
+            const at = new Date(from.getTime() + hour * HOUR_MS);
+            ticks.push({ at: at.toISOString(), label: hhmm(at) });
+        }
+        return ticks;
+    }
+    // Walk local midnights so DST changes never drift the marks off the day boundary.
+    for (let day = startOfDay(from); day.getTime() <= to.getTime() + 1; day = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1)) {
+        ticks.push({ at: day.toISOString(), label: day.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' }) });
     }
     return ticks;
 }

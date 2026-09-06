@@ -12,7 +12,7 @@ import type { ExecutionRow, ScheduleRow } from '../src/database/schema.js';
 import type { RegisteredDevice } from '../src/devices/registry.js';
 import type { SchedulerRepository } from '../src/scheduler/repository.js';
 import { ACCOUNT_PALETTE, assignAccountColours, collectAccounts } from '../src/schedule/accounts.js';
-import { buildTimeline, windowForRange, type TimelinePayload } from '../src/schedule/timeline.js';
+import { buildTimeline, rulerTicks, windowForRange, type TimelinePayload } from '../src/schedule/timeline.js';
 import { createShellContext } from '../src/ui/context.js';
 
 /** 2026-09-05 19:30 local — an evening, so the range is the one the design calls "tonight". */
@@ -90,10 +90,10 @@ test('account colours follow registration order and stay put when accounts are a
 // ---- ranges ----------------------------------------------------------------
 
 test('each named range covers the window its label promises', () => {
-    // Today runs to midnight, and always shows at least six hours, so a look at
-    // 19:30 starts at 18:00 rather than leaving a two-inch strip.
+    // Every named range is whole days, so the ruler reads the same at any hour.
     const today = windowForRange('today', NOW);
-    assert.equal(today.from.getHours(), 18);
+    assert.equal(today.from.getHours(), 0);
+    assert.equal(today.from.getDate(), 5);
     assert.equal(today.to.getTime() - new Date(2026, 8, 6).getTime(), 0);
 
     const tomorrow = windowForRange('tomorrow', NOW);
@@ -285,4 +285,19 @@ test('the timeline endpoint names an account and its palette entry on every clip
         assert.equal(typeof track.deviceUdid, 'string');
         assert.match(track.slot, /^\d{2}$/);
     }
+});
+
+test('the ruler marks hours across a day and days across a week', () => {
+    const day = windowForRange('today', NOW);
+    const dayTicks = rulerTicks(day.from, day.to);
+    assert.equal(dayTicks.length, 13);
+    assert.equal(dayTicks[0]!.label, '00:00');
+    assert.equal(dayTicks[6]!.label, '12:00');
+
+    const week = windowForRange('week', NOW);
+    const weekTicks = rulerTicks(week.from, week.to);
+    assert.equal(weekTicks.length, 8);
+    assert.equal(weekTicks[0]!.label, 'Sat 5');
+    assert.equal(weekTicks[1]!.label, 'Sun 6');
+    assert.ok(weekTicks.every((tick) => new Date(tick.at).getHours() === 0), 'every week mark is a local midnight');
 });
