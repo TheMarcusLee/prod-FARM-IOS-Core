@@ -107,12 +107,9 @@
 .bl-recent-row.is-warning span { color: var(--bl-warn); }
 .bl-sched-planner .bl-panel-body { display: flex; flex-direction: column; gap: 10px; }
 
+/* The shell is never narrower than 1180 — below that the window scrolls — so the
+   only breakpoint left is the one that keeps the foot's two panels honest. */
 @media (max-width: 1400px) { .bl-sched-foot { grid-template-columns: 1fr 300px; } }
-@media (max-width: 1179px) {
-    :root { --bl-gutter: 56px; }
-    .bl-tl-device { display: none; }
-    .bl-sched-foot { grid-template-columns: 1fr; }
-}
 
 /* ---- content --------------------------------------------------------- */
 .bl-content-page { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; padding: 20px; align-items: start; }
