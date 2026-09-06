@@ -1,0 +1,190 @@
+{
+  "id": "rb-starter-like-a-hashtag-feed",
+  "name": "Like a hashtag feed",
+  "description": "Searches a hashtag, opens its top video, and taps the heart as many times as you ask for, leaving a human gap between each, then comes back to the feed.",
+  "platform": "android",
+  "appId": "com.zhiliaoapp.musically",
+  "createdFor": {
+    "udid": "starter-template",
+    "screen": {
+      "width": 1080,
+      "height": 2400,
+      "scale": 1
+    }
+  },
+  "template": "like-a-hashtag-feed",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.zhiliaoapp.musically"
+    },
+    {
+      "type": "wait",
+      "ms": 4000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "search_icon",
+        "text": "Search",
+        "fraction": {
+          "x": 0.93,
+          "y": 0.06
+        }
+      },
+      "seen": [
+        "For You",
+        "Following",
+        "Home",
+        "Friends",
+        "Inbox",
+        "Profile",
+        "Search"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 2000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "et_search_kw",
+        "text": "Search",
+        "fraction": {
+          "x": 0.45,
+          "y": 0.06
+        }
+      },
+      "seen": [
+        "Search",
+        "Cancel"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "type",
+      "text": "{{hashtag}}"
+    },
+    {
+      "type": "key",
+      "key": "enter"
+    },
+    {
+      "type": "waitForText",
+      "text": "Hashtags",
+      "timeoutMs": 25000,
+      "seen": [
+        "Top",
+        "Users",
+        "Videos",
+        "Sounds",
+        "LIVE",
+        "Hashtags"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 2500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "search_result_item",
+        "fraction": {
+          "x": 0.25,
+          "y": 0.28
+        }
+      },
+      "seen": [
+        "Top",
+        "Users",
+        "Videos",
+        "Sounds",
+        "LIVE",
+        "Hashtags"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 4000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "ivm_like",
+        "text": "Like",
+        "fraction": {
+          "x": 0.93,
+          "y": 0.62
+        }
+      },
+      "seen": [
+        "Like",
+        "Liked",
+        "Add to Favorites",
+        "Favorites",
+        "Share",
+        "Comment",
+        "Follow"
+      ],
+      "guess": true,
+      "optional": true,
+      "repeat": "{{likes}}",
+      "repeatDelayMs": 5000
+    },
+    {
+      "type": "wait",
+      "ms": 2000
+    },
+    {
+      "type": "key",
+      "key": "back"
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    },
+    {
+      "type": "key",
+      "key": "back"
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "home_tab",
+        "text": "Home",
+        "fraction": {
+          "x": 0.1,
+          "y": 0.965
+        }
+      },
+      "seen": [
+        "Home",
+        "Friends",
+        "Inbox",
+        "Profile",
+        "Create",
+        "Add"
+      ],
+      "guess": true,
+      "optional": true
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "hashtag": "#homegym",
+    "likes": "3"
+  }
+}
