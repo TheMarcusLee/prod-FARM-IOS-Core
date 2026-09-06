@@ -34,7 +34,9 @@ configured, Failed) and a menu, revealed on hover, carrying Start, Stop, Restart
 and the log files. The database migrations are folded into the Database row, and
 a one-shot job (Prepare iPhones) appears as a row of the same kind with its
 checklist in a disclosure. Right: the worker's live log — the last 200 lines,
-following the newest until you scroll up — and the three things worth doing to
+following the newest until you scroll up, without the spawn command line the app
+echoes into every service log (that one stays in the log file, where a bug report
+needs it) — and the three things worth doing to
 the whole rig. The header carries what used to be two banners: whether Backline
 is working, and where the dashboard is.
 
@@ -50,7 +52,8 @@ The same window in the dark appearance:
 
 **Starting** — the brand mark and a checklist that fills in while the fleet comes
 up. The main window shows this until `web` answers `/health`, then loads the
-dashboard.
+dashboard. It is also where a notice about the launch itself appears — today only
+"the folder your older install left behind could not be moved".
 
 ![The starting window](../apps/desktop/docs/screenshots/starting.png)
 
@@ -87,8 +90,9 @@ npm --prefix apps/desktop run smoke
 ```
 
 Unit tests (the supervisor state machine and its health sweep on a manual clock,
-job running, settings, log rotation, diagnostics redaction and the Postgres
-probe — all with fake child processes) and the type check:
+job running, settings, log rotation, the data-directory migration, diagnostics
+redaction and the Postgres probe — all with fake child processes and fake
+filesystem layouts) and the type check:
 
 ```sh
 npm --prefix apps/desktop run check
@@ -178,8 +182,8 @@ through `src/runtime/farm-entry.ts`, which makes the same decision from its own
 ## Where data lives
 
 Everything is under `~/Library/Application Support/Backline`. An install from
-before the rename keeps its data in `~/Library/Application Support/Phone Farm`;
-move the folder across, or start again empty.
+before the rename keeps its data in `~/Library/Application Support/Phone Farm`,
+and the app moves that folder across on its first launch — see below.
 
 | Path | Contents |
 |---|---|
@@ -193,6 +197,43 @@ move the folder across, or start again empty.
 | `migrations.stamp` | `0600` — the fingerprint of the migrations last applied, and to which database |
 | `postgres-backup-<timestamp>/` | a cluster moved aside by "Reset the embedded database"; nothing else ever creates or removes one |
 | `appium/` | `APPIUM_HOME` **in a packaged app only** — a checkout uses the repository's own `.appium2` instead |
+
+### The folder an older install left behind
+
+`app.setName('Backline')` moved the data directory: an install from before the
+rename keeps everything — settings, the cluster, the registered devices, the logs
+— in `~/Library/Application Support/Phone Farm`, which the app would otherwise
+never look at again. It would start up looking brand new, beside a folder holding
+the whole farm.
+
+So the first thing a launch does, before anything opens a file in the data
+directory, is `src/main/data-migration.ts`. It moves the old directory to the new
+path, once:
+
+- it moves only when the new directory holds **none** of the app's own data
+  (`settings.json`, `postgres/`, `logs/`, `devices.json`, `scheduler-data/`,
+  `migrations.stamp`, `supervised-children.json`, `appium/`) — a farm that has
+  ever run under the new name is never touched again, whatever sits beside it.
+  "Empty" cannot be taken literally here: Electron creates userData and writes
+  its own caches into it before the app's first line runs;
+- and only when the old directory really is an install — it holds `settings.json`
+  or `postgres/`. A folder that merely carries the old name is left alone;
+- the move is a rename, never a copy: a Postgres cluster must not be half-moved.
+  When the new path is already occupied (by Electron's caches), the old
+  directory's entries are renamed into it one at a time instead;
+- what it decided, and what it did, is printed to the app's console output.
+
+If the rename cannot be made — the two folders are on different volumes, or the
+permissions do not allow it — nothing is deleted, both folders are left exactly
+where they are, and the Starting window carries a one-time notice naming the two
+paths, so the operator can move the folder across in the Finder (or decide to
+start again empty). That launch runs on the new, empty directory. The attempt is
+repeated on the next launch, and stops for good as soon as the new directory has
+data of its own.
+
+The decision is a pure function over two directory listings
+(`planDataMigration`), so `test/data-migration.test.ts` drives every case —
+including the notice — against an invented filesystem layout.
 
 In a checkout nothing is written into it except Appium's own `.appium2` home.
 A packaged app writes nothing into its own bundle at all: `APPIUM_HOME` moves to

@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { serviceTone, serviceWord } from '../src/main/state-words.ts';
 import { mergeTail } from '../src/renderer/live-log.ts';
-import { attachedAndroidPhones, headerState, rigRows } from '../src/renderer/rig-model.ts';
+import { attachedAndroidPhones, headerState, liveLogLines, rigRows } from '../src/renderer/rig-model.ts';
 import type { FleetSnapshot, LogLine, ServiceSnapshot, ServiceState } from '../src/main/types.ts';
 import type { Settings } from '../src/main/settings.ts';
 import { normalizeSettings } from '../src/main/settings.ts';
@@ -125,4 +125,22 @@ test('the live log keeps 200 lines across overlapping snapshots, without repeati
     assert.equal(capped.at(-1)?.text, 'line 259');
     // An unchanged snapshot must not grow the panel by a single line.
     assert.equal(mergeTail(capped, long.slice(-40)).length, 200);
+});
+
+test('the live panel drops the spawn command echo the log file keeps', () => {
+    const echoed = '$ /Applications/Backline.app/Contents/MacOS/Electron --import tsx src/scheduler/worker.ts';
+    const logs: LogLine[] = [
+        { at: 1, stream: 'command', text: echoed },
+        { at: 2, stream: 'app', text: 'Starting the worker' },
+        { at: 3, stream: 'out', text: 'worker ready' },
+        { at: 4, stream: 'err', text: 'a task failed' },
+    ];
+
+    const shown = liveLogLines(service('worker', 'healthy', { recentLogs: logs }));
+    assert.deepEqual(shown.map((entry) => entry.text), ['Starting the worker', 'worker ready', 'a task failed']);
+    // Only the marked line goes: a line the worker itself printed that happens to
+    // start with "$ " is the worker talking, and stays.
+    const dollar: LogLine[] = [{ at: 5, stream: 'out', text: '$ npm run something' }];
+    assert.deepEqual(liveLogLines(service('worker', 'healthy', { recentLogs: dollar })), dollar);
+    assert.deepEqual(liveLogLines(undefined), []);
 });

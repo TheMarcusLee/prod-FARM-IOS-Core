@@ -39,6 +39,23 @@ function render(snapshot: FleetSnapshot): void {
         : 'Waiting for the dashboard to answer.';
 }
 
+/**
+ * A one-time notice from the launch itself — today only "your old data directory
+ * could not be moved". It belongs here because the Starting window is the first
+ * thing an operator sees, and because the thing it is about happened before any
+ * service existed to carry it.
+ */
+void window.farm.getStartupNotice().then((notice) => {
+    if (!notice) return;
+    const root = document.querySelector<HTMLElement>('#notice');
+    const title = document.querySelector<HTMLElement>('#notice-title');
+    const message = document.querySelector<HTMLElement>('#notice-message');
+    if (!root || !title || !message) return;
+    title.textContent = notice.title;
+    message.textContent = notice.message;
+    root.hidden = false;
+});
+
 document.querySelector('#services')?.addEventListener('click', () => { void window.farm.openServices(); });
 
 window.farm.onFleet(render);

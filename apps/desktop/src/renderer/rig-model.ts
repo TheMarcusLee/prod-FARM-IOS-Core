@@ -1,5 +1,5 @@
 import { serviceTone, serviceWord } from '../main/state-words.ts';
-import type { FleetSnapshot, ServiceSnapshot, Settings } from './global.d.ts';
+import type { FleetSnapshot, LogLine, ServiceSnapshot, Settings } from './global.d.ts';
 import { pausedReason } from './paused.ts';
 
 /**
@@ -113,6 +113,20 @@ export function rigRows(snapshot: FleetSnapshot, settings: Settings | null): Rig
             logIds: (row.logIds ?? [row.id]).filter((id) => snapshot.services.some((candidate) => candidate.id === id)),
         };
     });
+}
+
+/**
+ * What the live panel shows for a service: its log without the command echo.
+ *
+ * The app writes the spawn command line ("$ /…/Electron --import tsx
+ * src/scheduler/worker.ts") to every service log before it starts the child. In
+ * the log file that is the useful first line; in the panel it is an absolute
+ * path nobody typed, wrapped over three lines, standing where the worker's first
+ * real output should be — so the panel drops the line the writer marked as the
+ * command, and the file keeps it.
+ */
+export function liveLogLines(service: ServiceSnapshot | undefined): LogLine[] {
+    return (service?.recentLogs ?? []).filter((line) => line.stream !== 'command');
 }
 
 /** The one line under the window title: what the farm is doing right now. */
