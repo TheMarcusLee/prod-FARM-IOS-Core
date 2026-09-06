@@ -89,10 +89,20 @@ function runDialog(runbook: Runbook, devices: readonly RegisteredDevice[], view:
 <button class="bl-btn bl-btn-primary" type="submit">Run now</button></div></form></dialog>`;
 }
 
+/**
+ * The starter library first, then everything the operator recorded. A fresh farm's page is the
+ * shipped flows; a working farm's own runbooks are never buried under them, because there are
+ * only ever a handful of starters.
+ */
+export function orderRunbooks(runbooks: readonly Runbook[]): Runbook[] {
+    const rank = (runbook: Runbook): number => (runbook.template ? 0 : 1);
+    return [...runbooks].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+}
+
 /** The whole list body. `#runbook-list` is also the swap target of every mutating form here. */
 export function runbookListFragment(runbooks: readonly Runbook[], devices: readonly RegisteredDevice[], message?: string): string {
-    const rows = runbooks.map((runbook) => `<div class="bl-rb-row">
-<div class="bl-rb-name"><a href="/runbooks/${escapeHtml(runbook.id)}">${escapeHtml(runbook.name)}</a>
+    const rows = orderRunbooks(runbooks).map((runbook) => `<div class="bl-rb-row">
+<div class="bl-rb-name"><a href="/runbooks/${escapeHtml(runbook.id)}">${escapeHtml(runbook.name)}</a>${starterBadge(runbook)}
 <p>${escapeHtml(runbook.description || runbook.id)}</p></div>
 <div class="bl-rb-col">${escapeHtml(runbook.platform)}</div>
 <div class="bl-rb-col">${runbook.steps.length} ${runbook.steps.length === 1 ? 'step' : 'steps'}</div>
@@ -105,11 +115,18 @@ export function runbookListFragment(runbooks: readonly Runbook[], devices: reado
 <form hx-post="${ROUTE_PREFIX}/runbooks/${escapeHtml(runbook.id)}/delete" hx-target="#runbook-list" hx-swap="outerHTML" hx-confirm="Delete this runbook?">
 <button class="bl-btn bl-btn-sm" type="submit">Delete</button></form>
 </div>${runDialog(runbook, devices, 'list')}</div>`).join('');
-    const empty = '<div class="bl-empty">No runbooks yet. Open a phone and press “Record what I do next”.</div>';
+    const empty = '<div class="bl-empty">No runbooks yet. Open a phone and press “Record what I do next”, '
+        + 'or press “Restore starter runbooks” for the shipped ones.</div>';
     return `<section id="runbook-list" class="bl-panel">${notice(message)}
 <div class="bl-rb-row bl-section-title"><div class="bl-rb-name">Runbook</div><div class="bl-rb-col">Platform</div>
 <div class="bl-rb-col">Steps</div><div class="bl-rb-col">Last run</div><div class="bl-rb-actions" style="width:250px"></div></div>
 ${rows || empty}</section>`;
+}
+
+/** Which runbooks came out of the box. A copy an operator has edited keeps the badge; it is still a copy of that flow. */
+function starterBadge(runbook: Runbook): string {
+    if (!runbook.template) return '';
+    return ' <span class="bl-chip bl-chip-sm" title="Seeded from the starter library">Starter</span>';
 }
 
 function createForm(devices: readonly RegisteredDevice[]): string {
@@ -129,7 +146,9 @@ export function runbooksPage(
     runbooks: readonly Runbook[], devices: readonly RegisteredDevice[], assetVersion = '',
 ): ShellPage {
     return layout('Runbooks',
-        `<form class="bl-rb-import" hx-post="${ROUTE_PREFIX}/runbooks/import" hx-target="#runbook-list" hx-swap="outerHTML" hx-encoding="multipart/form-data">`
+        `<form hx-post="${ROUTE_PREFIX}/runbooks/templates/install" hx-target="#runbook-list" hx-swap="outerHTML">`
+        + '<button class="bl-btn" type="submit">Restore starter runbooks</button></form>'
+        + `<form class="bl-rb-import" hx-post="${ROUTE_PREFIX}/runbooks/import" hx-target="#runbook-list" hx-swap="outerHTML" hx-encoding="multipart/form-data">`
         + `<label class="bl-btn"><input type="file" name="runbook" accept="application/json,.json" hidden data-import>Import a file</label>`
         + '</form>'
         + `<button type="button" class="bl-btn bl-btn-primary" data-dialog="new-runbook">${icon('plus')}New runbook</button>`,

@@ -9,7 +9,7 @@ import { createApp } from '../src/api/app.js';
 import { defaultDashboardTheme } from '../src/dashboard-theme.js';
 import { PluginRegistry } from '../src/registry.js';
 import type { SchedulerRepository } from '../src/scheduler/repository.js';
-import type { DeviceDriver, MediaFile, Point, Rect, UiNode } from '../src/drivers/types.js';
+import type { DeviceDriver, MediaFile, Point, Rect, TimedPoint, UiNode } from '../src/drivers/types.js';
 import type { OcrWord } from '../src/drivers/verify.js';
 import {
     LANGUAGES, defaultPersona, deletePersona, loadPersonas, personaFor, savePersona, validatePersona,
@@ -25,6 +25,7 @@ import {
     emptyMemory,
 } from '../src/persona/memory.js';
 import { beginSession, finishSession, noteDecision } from '../src/persona/session.js';
+import { PERSONA_PRESETS, applyPreset, findPreset } from '../src/persona/presets.js';
 import { personaFromForm } from '../src/api/routes/personas.js';
 import { doomscrollOnAndroid } from '../src/tiktok/android/doomscroll.js';
 import { createTikTokPlugin } from '../src/tiktok-plugin.js';
@@ -425,16 +426,23 @@ function fakeDriver(root: UiNode): FakeDriver {
     const state: FakeDriver = { taps: [], swipes: 0, driver: undefined as unknown as DeviceDriver };
     const contains = ({ bounds }: UiNode, { x, y }: Point) =>
         x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom;
+    const press = (point: Point): void => {
+        const hit = root.children.filter((child) => contains(child, point)).at(-1);
+        state.taps.push(hit ? (hit.text || hit.description || hit.id) : '(nothing)');
+    };
     state.driver = {
         kind: 'adb', platform: 'android', udid: 'R58N1ABCDE',
         launchApp: async () => {}, terminateApp: async () => {},
-        tap: async (point: Point) => {
-            const hit = root.children.filter((child) => contains(child, point)).at(-1);
-            state.taps.push(hit ? (hit.text || hit.description || hit.id) : '(nothing)');
-        },
+        tap: async (point: Point) => { press(point); },
         swipe: async () => { state.swipes += 1; },
-        // Swipes now play a generated arc through gesture(); count them the same way.
-        gesture: async () => { state.swipes += 1; },
+        // Swipes play a generated arc through gesture(), and a tap plays a two-sample path that
+        // does not move — a press. The phone cannot tell them apart either, so nor does this.
+        gesture: async (path: TimedPoint[]) => {
+            const first = path[0]!;
+            const last = path[path.length - 1]!;
+            if (first.x === last.x && first.y === last.y) press(first);
+            else state.swipes += 1;
+        },
         type: async () => {}, pressKey: async () => {},
         screenshot: async () => Buffer.alloc(0),
         uiTree: async () => root,
@@ -465,7 +473,9 @@ async function scrollAs(root: UiNode, persona: Persona): Promise<{ fake: FakeDri
     let clock = 0;
     const summary = await doomscrollOnAndroid(fake.driver, {
         durationMinutes: 1, personality: 'casual', likeEnabled: true, saveEnabled: true,
-        searchEnabled: false, persona,
+        // One seed for the run: the swipe arcs and the tap jitter both come out of it, so the
+        // pixels a tap lands on are the same on every run of this test.
+        searchEnabled: false, persona, seed: 'persona-routine-test',
         // Every draw at zero: the persona still refuses to engage with content it does not care about.
         random: () => 0,
         now: () => (clock += 2_000),
@@ -497,7 +507,7 @@ test('a persona asleep does not scroll at all', async () => {
     const fake = fakeDriver(feed('liftdaily', 'kettlebell swings'));
     const midnight = new Date(2026, 0, 5, 3, 0).getTime();
     const summary = await doomscrollOnAndroid(fake.driver, {
-        personality: 'casual', likeEnabled: true, saveEnabled: true,
+        personality: 'casual', likeEnabled: true, saveEnabled: true, seed: 'persona-routine-test',
         persona: GYM, random: () => 0.5, now: () => midnight,
     });
     assert.equal(summary.reason, 'asleep');
@@ -512,6 +522,7 @@ test('the run hands its memory back so the next session knows more than this one
     let saved: Awaited<ReturnType<typeof readMemory>> | undefined;
     await doomscrollOnAndroid(fake.driver, {
         durationMinutes: 1, personality: 'casual', likeEnabled: true, saveEnabled: true, searchEnabled: false,
+        seed: 'persona-routine-test',
         persona: { ...GYM, watch: { match: { min: 1, max: 2 }, other: { min: 1, max: 1 } } },
         memory: emptyMemory('@homegym.dan'),
         saveMemory: async (memory) => { saved = memory; },
@@ -612,4 +623,102 @@ test('the Accounts page edits a persona through htmx fragments', async (context)
     assert.deepEqual(await loadPersonas(directory), {});
 
     assert.equal((await inject(app, { method: 'GET', url: '/accounts/not-a-handle!/persona' })).statusCode, 400);
+});
+
+/* ---- Presets ----------------------------------------------------------- */
+
+test('every preset is a valid persona with a niche of its own', () => {
+    assert.ok(PERSONA_PRESETS.length >= 12, `expected at least twelve niches, got ${PERSONA_PRESETS.length}`);
+    const ids = PERSONA_PRESETS.map(({ id }) => id);
+    assert.equal(new Set(ids).size, ids.length, 'preset ids are unique');
+
+    for (const preset of PERSONA_PRESETS) {
+        assert.match(preset.id, /^[a-z0-9][a-z0-9-]{1,31}$/);
+        assert.ok(preset.description.trim().length > 10, `${preset.id} has no description worth reading`);
+        // Applying it is a full validation pass: a typo in a preset fails here, not on a phone.
+        const persona = applyPreset('@farm.one', preset.id);
+        assert.equal(persona.handle, '@farm.one');
+        assert.ok(persona.interests.length >= 6, `${preset.id} needs more than ${persona.interests.length} interests`);
+        assert.ok(persona.avoid.length >= 1, `${preset.id} avoids nothing`);
+        assert.ok(persona.activeHours.length >= 1 && persona.activeHours.length <= 6);
+        assert.ok(persona.sessionMinutes.min >= 1 && persona.sessionMinutes.min <= persona.sessionMinutes.max);
+        assert.ok(persona.watch.match.min > persona.watch.other.min, `${preset.id} watches a match no longer than the rest`);
+        assert.ok(persona.budgets.likes.max > 0);
+    }
+    assert.throws(() => applyPreset('@farm.one', 'no-such-niche'), /not one of the presets/);
+    assert.equal(findPreset('home-gym')?.label, 'Home gym');
+    assert.equal(findPreset(42), undefined);
+});
+
+test('two presets watching the same feed behave like two different people', () => {
+    const clip = videoFromTexts(['@liftdaily', 'kettlebell swings in the home gym #homegym #gymtok', 'original sound - liftdaily']);
+    const outcomes = new Map<string, string>();
+    for (const preset of PERSONA_PRESETS) {
+        const persona = applyPreset('@farm.one', preset.id);
+        const decision = decideForVideo(persona, clip, stateFor(persona, seeded(7)), seeded(9));
+        const plan = sessionPlan(persona, seeded(3), new Date(2026, 0, 5, 12, 0));
+        outcomes.set(preset.id, `${decision.matched}:${decision.like}:${decision.watchMs}:${plan.minutes}:${plan.budgets.likes}`);
+    }
+    // The gym accounts recognise it; the ones with nothing to do with it scroll past.
+    assert.equal(outcomes.get('home-gym')!.startsWith('true'), true);
+    assert.equal(outcomes.get('fitness')!.startsWith('true'), true);
+    assert.equal(outcomes.get('baking')!.startsWith('false'), true);
+    assert.equal(outcomes.get('personal-finance')!.startsWith('false'), true);
+    // And they are not all the same person behind the same coin flip.
+    assert.ok(new Set(outcomes.values()).size >= 15, `only ${new Set(outcomes.values()).size} distinct outcomes`);
+
+    // A preset's avoid list is a veto, whatever else is on screen.
+    const makeup = applyPreset('@farm.one', 'personal-finance');
+    const crypto = videoFromTexts(['@moonboy', 'this crypto play changed my life']);
+    const refused = decideForVideo(makeup, crypto, stateFor(makeup, seeded(7)), seeded(9));
+    assert.equal(refused.like, false);
+    assert.match(refused.reason, /avoid list/);
+});
+
+test('the Accounts page offers the presets, fills the form with one, and applies one over the API', async (context) => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'persona-presets-'));
+    const previous = process.env.SCHEDULER_DATA_DIR;
+    process.env.SCHEDULER_DATA_DIR = directory;
+    context.after(async () => {
+        if (previous === undefined) delete process.env.SCHEDULER_DATA_DIR; else process.env.SCHEDULER_DATA_DIR = previous;
+        await rm(directory, { recursive: true, force: true });
+    });
+
+    const app = await createApp({
+        plugins: new PluginRegistry([]), scheduler: {} as SchedulerRepository, dashboardTheme: defaultDashboardTheme,
+    });
+    context.after(() => app.close());
+    const url = `/accounts/${encodeURIComponent('@farm.one')}/persona`;
+
+    // Nothing stored: the niches, not twenty empty fields.
+    const fresh = await inject(app, { method: 'GET', url });
+    assert.match(fresh.body, /Start from a preset/);
+    assert.match(fresh.body, /Garage racks, adjustable dumbbells/);
+    assert.match(fresh.body, /Or fill it in by hand/);
+
+    // Apply fills the form and stores nothing.
+    const applied = await inject(app, { method: 'GET', url: `${url}?preset=home-gym` });
+    assert.equal(applied.statusCode, 200);
+    assert.match(applied.body, /Filled in from the Home gym preset/);
+    assert.match(applied.body, /squat rack, power rack/);
+    assert.deepEqual(await loadPersonas(directory), {}, 'Apply saves nothing');
+
+    // An unknown preset is not an error anybody asked a question to get.
+    assert.equal((await inject(app, { method: 'GET', url: `${url}?preset=nonsense` })).statusCode, 200);
+
+    const saved = await inject(app, {
+        method: 'POST', url: '/api/accounts/%40farm.one/persona/preset', payload: { preset: 'running' },
+    });
+    assert.equal(saved.statusCode, 200);
+    assert.equal((saved.json() as Persona).niche, 'running');
+    assert.deepEqual((await loadPersonas(directory))['@farm.one']!.avoid, ['gambling', 'weight loss pills']);
+
+    const refused = await inject(app, {
+        method: 'POST', url: '/api/accounts/%40farm.one/persona/preset', payload: { preset: 'nonsense' },
+    });
+    assert.equal(refused.statusCode, 400);
+    assert.match(refused.body, /not one of the presets/);
+
+    const listed = await inject(app, { method: 'GET', url: '/api/persona-presets' });
+    assert.equal((listed.json() as { presets: unknown[] }).presets.length, PERSONA_PRESETS.length);
 });

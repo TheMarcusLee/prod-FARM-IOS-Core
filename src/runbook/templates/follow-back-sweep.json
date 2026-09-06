@@ -1,0 +1,105 @@
+{
+  "id": "rb-starter-follow-back-sweep",
+  "name": "Follow-back sweep",
+  "description": "Opens the inbox and taps Follow back on the newest rows, up to the number you ask for.",
+  "platform": "android",
+  "appId": "com.zhiliaoapp.musically",
+  "createdFor": {
+    "udid": "starter-template",
+    "screen": {
+      "width": 1080,
+      "height": 2400,
+      "scale": 1
+    }
+  },
+  "template": "follow-back-sweep",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.zhiliaoapp.musically"
+    },
+    {
+      "type": "wait",
+      "ms": 4000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "inbox_tab",
+        "text": "Inbox",
+        "fraction": {
+          "x": 0.7,
+          "y": 0.965
+        }
+      },
+      "seen": [
+        "Home",
+        "Friends",
+        "Inbox",
+        "Profile",
+        "Create",
+        "Add",
+        "Inbox",
+        "Notifications"
+      ],
+      "guess": true
+    },
+    {
+      "type": "waitForText",
+      "text": "followed you",
+      "timeoutMs": 25000,
+      "seen": [
+        "All activity",
+        "Followers",
+        "Likes",
+        "Comments",
+        "Mentions and tags",
+        "followed you",
+        "Follow back"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 2500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "follow_button",
+        "text": "Follow back",
+        "fraction": {
+          "x": 0.88,
+          "y": 0.22
+        }
+      },
+      "seen": [
+        "All activity",
+        "Followers",
+        "Likes",
+        "Comments",
+        "Mentions and tags",
+        "followed you",
+        "Follow back"
+      ],
+      "guess": true,
+      "optional": true,
+      "repeat": "{{follows}}",
+      "repeatDelayMs": 3500
+    },
+    {
+      "type": "key",
+      "key": "back"
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "follows": "5"
+  }
+}

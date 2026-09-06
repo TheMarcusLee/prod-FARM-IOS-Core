@@ -15,7 +15,7 @@ import { readMemory, writeMemory, type PersonaMemory } from '../../persona/memor
 import { readVideo } from '../../persona/observe.js';
 import { beginSession, describeSession, finishSession, noteDecision, noteSearch } from '../../persona/session.js';
 import { driverFromEnv } from './driver-from-env.js';
-import { recognizeOnDevice, tapIfPresent, type SelectorList } from './ui.js';
+import { recognizeOnDevice, tapIfPresent, type SelectorList, type TapOptions } from './ui.js';
 import { TIKTOK_ANDROID_PACKAGE, switchAccount } from './post.js';
 
 /**
@@ -122,6 +122,8 @@ export async function doomscrollOnAndroid(driver: DeviceDriver, options: Doomscr
     const motion = createMotionSource({
         udid: driver.udid, seed, ...(options.motion ? { settings: options.motion } : {}),
     });
+    // Every tap in the run comes out of the run's own seeded hand, the same one the swipes do.
+    const tapping: TapOptions = { ...(options.recognize ? { recognize: options.recognize } : {}), motion };
     const followEnabled = options.followEnabled ?? true;
     const searchEnabled = options.searchEnabled ?? true;
 
@@ -167,10 +169,12 @@ export async function doomscrollOnAndroid(driver: DeviceDriver, options: Doomscr
     await sleep(motion.pause('afterOpenApp'));
 
     if (options.account) {
-        const switchOptions = { ...(options.recognize ? { recognize: options.recognize } : {}), ...(signal ? { signal } : {}) };
+        const switchOptions = {
+            ...(options.recognize ? { recognize: options.recognize } : {}), ...(signal ? { signal } : {}), motion,
+        };
         await switchAccount(driver, options.account, switchOptions);
         // The switch leaves the app on the Profile tab; the loop below expects the feed.
-        await tapIfPresent(driver, 'Home tab', FEED_SELECTORS.homeTab, options.recognize);
+        await tapIfPresent(driver, 'Home tab', FEED_SELECTORS.homeTab, tapping);
         await sleep(motion.pause('reaction'));
     }
 
@@ -182,13 +186,13 @@ export async function doomscrollOnAndroid(driver: DeviceDriver, options: Doomscr
      * advances the main feed scrolls them; two Back presses land on the feed the run came from.
      */
     const runSearch = async (term: string): Promise<boolean> => {
-        if (!await tapIfPresent(driver, 'Search', FEED_SELECTORS.searchEntry, options.recognize)) return false;
+        if (!await tapIfPresent(driver, 'Search', FEED_SELECTORS.searchEntry, tapping)) return false;
         await sleep(1_200);
-        await tapIfPresent(driver, 'Search field', FEED_SELECTORS.searchField, options.recognize);
+        await tapIfPresent(driver, 'Search field', FEED_SELECTORS.searchField, tapping);
         await driver.type(term);
         await driver.pressKey('enter');
         await sleep(2_500);
-        if (await tapIfPresent(driver, 'Top result', FEED_SELECTORS.searchResult, options.recognize)) {
+        if (await tapIfPresent(driver, 'Top result', FEED_SELECTORS.searchResult, tapping)) {
             await sleep(2_000);
             for (let index = 0; index < 3 && running(); index += 1) {
                 await swipeToNextVideo(driver, motion);
@@ -215,15 +219,15 @@ export async function doomscrollOnAndroid(driver: DeviceDriver, options: Doomscr
 
             if (likeEnabled && decision.like) {
                 await sleep(clampToDeadline(now(), deadline, motion.pause('beforeLike')));
-                if (await tapIfPresent(driver, 'Like', FEED_SELECTORS.like, options.recognize)) likes += 1;
+                if (await tapIfPresent(driver, 'Like', FEED_SELECTORS.like, tapping)) likes += 1;
             }
             if (saveEnabled && decision.save && running()) {
                 await sleep(clampToDeadline(now(), deadline, motion.pause('afterLike')));
-                if (await tapIfPresent(driver, 'Save', FEED_SELECTORS.save, options.recognize)) saves += 1;
+                if (await tapIfPresent(driver, 'Save', FEED_SELECTORS.save, tapping)) saves += 1;
             }
             if (followEnabled && decision.follow && running()) {
                 await sleep(clampToDeadline(now(), deadline, motion.pause('beforeLike')));
-                if (await tapIfPresent(driver, 'Follow', FEED_SELECTORS.follow, options.recognize)) follows += 1;
+                if (await tapIfPresent(driver, 'Follow', FEED_SELECTORS.follow, tapping)) follows += 1;
             }
             noteDecision(session, video, decision);
             if (!running()) break;
@@ -254,14 +258,14 @@ export async function doomscrollOnAndroid(driver: DeviceDriver, options: Doomscr
         if (likeEnabled && decideLike(profile, random)) {
             await sleep(clampToDeadline(now(), deadline, motion.pause('beforeLike')));
             if (!running()) break;
-            if (await tapIfPresent(driver, 'Like', FEED_SELECTORS.like, options.recognize)) likes += 1;
+            if (await tapIfPresent(driver, 'Like', FEED_SELECTORS.like, tapping)) likes += 1;
         }
         if (!running()) break;
 
         if (saveEnabled && decideSave(profile, random)) {
             await sleep(clampToDeadline(now(), deadline, motion.pause('afterLike')));
             if (!running()) break;
-            if (await tapIfPresent(driver, 'Save', FEED_SELECTORS.save, options.recognize)) saves += 1;
+            if (await tapIfPresent(driver, 'Save', FEED_SELECTORS.save, tapping)) saves += 1;
         }
         if (!running()) break;
 

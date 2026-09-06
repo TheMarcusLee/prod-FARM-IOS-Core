@@ -198,11 +198,11 @@ async function swipeToNextVideo(session: Browser): Promise<void> {
 }
 
 async function doubleTapCoordinate(driver: Browser, x: number, y: number, label: string): Promise<void> {
-    await tapCoordinate(driver, x, y, label);
+    await tapCoordinate(driver, x, y, label, motion);
     // Short, fixed gap so TikTok's gesture recognizer reads this as a
     // double-tap-to-like rather than two separate taps.
     await driver.pause(130);
-    await tapCoordinate(driver, x, y, label);
+    await tapCoordinate(driver, x, y, label, motion);
 }
 
 let driver: Browser | undefined;
@@ -249,10 +249,10 @@ try {
 
     if (switchAccountName) {
         console.log(`Switching to TikTok account "${switchAccountName}"`);
-        await switchTikTokAccount(driver, remoteControl, udid, switchAccountName, accountSwitchCoords);
+        await switchTikTokAccount(driver, remoteControl, udid, switchAccountName, accountSwitchCoords, motion);
         // switchTikTokAccount leaves the app on the Profile tab; the loop
         // below expects the Home feed.
-        await tapCoordinate(driver, homeTabX, homeTabY, 'Home tab');
+        await tapCoordinate(driver, homeTabX, homeTabY, 'Home tab', motion);
         await driver.pause(motion.pause('reaction'));
     }
 
@@ -299,7 +299,7 @@ try {
             return false;
         }
         // OCR reads the PNG's pixel grid; iOS taps are in points.
-        await tapCoordinate(browser, (bounds.left + bounds.right) / 2 / screenScale, (bounds.top + bounds.bottom) / 2 / screenScale, label);
+        await tapCoordinate(browser, (bounds.left + bounds.right) / 2 / screenScale, (bounds.top + bounds.bottom) / 2 / screenScale, label, motion);
         return true;
     };
 
@@ -327,7 +327,7 @@ try {
         if (saveEnabled && (decision ? decision.save : decideSave(profile))) {
             await cancellableDelay(clampToDeadline(Date.now(), deadline, motion.pause('afterLike')));
             if (stopRequested || !hasTimeRemaining(Date.now(), deadline)) break;
-            await tapCoordinate(driver, saveX, saveY, 'Save');
+            await tapCoordinate(driver, saveX, saveY, 'Save', motion);
             saves += 1;
         }
         if (stopRequested || !hasTimeRemaining(Date.now(), deadline)) break;
@@ -362,7 +362,7 @@ try {
                 await cancellableDelay(4_000);
                 // Dwell on the results the way somebody reading them would, then go home.
                 await cancellableDelay(clampToDeadline(Date.now(), deadline, 4_000 + Math.round(Math.random() * 6_000)));
-                await tapCoordinate(driver, homeTabX, homeTabY, 'Home tab');
+                await tapCoordinate(driver, homeTabX, homeTabY, 'Home tab', motion);
                 await cancellableDelay(1_500);
                 noteSearch(session, search);
                 searches += 1;

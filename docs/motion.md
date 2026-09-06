@@ -49,6 +49,13 @@ returns that as a list of `{x, y, t}` samples:
 
 `humanTap` moves the point by up to 6 px in each axis and holds for 40–120 ms.
 
+Every tap the TikTok routines make goes through it: `tapFirst` and `tapIfPresent`
+(`src/tiktok/android/ui.ts`) and `tapCoordinate` (`src/tiktok/actions.ts`) all jitter the point
+they resolved and hold the press. `DeviceDriver.tap` carries no duration, so the Android press is
+played as a two-sample gesture that does not move — the same channel a swipe goes down. The taps
+come out of the run's own source where the routine holds one, so a run's taps and its swipes share
+one stream; otherwise a per-device source seeded from `MOTION_SEED`, which is still the run's seed.
+
 `pauseMs(kind, seed)` is log-normal: bounded below by reaction time, unbounded above by
 attention, which is the shape human gaps actually have. Each kind — `betweenVideos`,
 `beforeLike`, `afterLike`, `afterOpenApp`, `beforeSwipe`, `reaction` — has its own median and

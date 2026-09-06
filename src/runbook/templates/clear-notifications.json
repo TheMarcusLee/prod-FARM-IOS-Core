@@ -1,0 +1,114 @@
+{
+  "id": "rb-starter-clear-notifications",
+  "name": "Clear notifications",
+  "description": "Opens the inbox, scrolls the activity list so it is all seen, and goes back to the feed.",
+  "platform": "android",
+  "appId": "com.zhiliaoapp.musically",
+  "createdFor": {
+    "udid": "starter-template",
+    "screen": {
+      "width": 1080,
+      "height": 2400,
+      "scale": 1
+    }
+  },
+  "template": "clear-notifications",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.zhiliaoapp.musically"
+    },
+    {
+      "type": "wait",
+      "ms": 4000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "inbox_tab",
+        "text": "Inbox",
+        "fraction": {
+          "x": 0.7,
+          "y": 0.965
+        }
+      },
+      "seen": [
+        "Home",
+        "Friends",
+        "Inbox",
+        "Profile",
+        "Create",
+        "Add",
+        "Inbox",
+        "Notifications"
+      ],
+      "guess": true
+    },
+    {
+      "type": "waitForText",
+      "text": "All activity",
+      "timeoutMs": 25000,
+      "seen": [
+        "All activity",
+        "Followers",
+        "Likes",
+        "Comments",
+        "Mentions and tags",
+        "followed you",
+        "Follow back"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 2500
+    },
+    {
+      "type": "swipe",
+      "from": {
+        "x": 0.5,
+        "y": 0.75
+      },
+      "to": {
+        "x": 0.5,
+        "y": 0.3
+      },
+      "durationMs": 420,
+      "repeat": 6,
+      "repeatDelayMs": 1500
+    },
+    {
+      "type": "key",
+      "key": "back"
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "home_tab",
+        "text": "Home",
+        "fraction": {
+          "x": 0.1,
+          "y": 0.965
+        }
+      },
+      "seen": [
+        "Home",
+        "Friends",
+        "Inbox",
+        "Profile",
+        "Create",
+        "Add"
+      ],
+      "guess": true,
+      "optional": true
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z"
+}

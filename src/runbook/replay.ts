@@ -10,7 +10,7 @@
 import { pause } from '../drivers/common.js';
 import { center, findById, findByText, tappableBounds, visibleTexts, type Recognize } from '../drivers/verify.js';
 import type { DeviceDriver, Point, UiNode } from '../drivers/types.js';
-import { applyVariables, summarizeStep, type Runbook, type Step, type TapTarget } from './model.js';
+import { applyVariables, repeatCount, summarizeStep, type Runbook, type Step, type TapTarget } from './model.js';
 
 export interface ReplayOptions {
     vars?: Record<string, string>;
@@ -133,12 +133,31 @@ async function waitForSelector(
     }
 }
 
+/**
+ * A step, as many times as it asks for. The count is resolved once per attempt so a bad blank
+ * fails the step by name rather than running it an accidental number of times.
+ */
 async function runStep(driver: DeviceDriver, step: Step, options: ReplayOptions, log: (line: string) => Promise<void>): Promise<void> {
+    const times = repeatCount(step, options.vars ?? {});
+    for (let time = 1; time <= times; time += 1) {
+        if (options.signal?.aborted) return;
+        if (times > 1) await log(`  ${time} of ${times}`);
+        await runOnce(driver, step, options, log);
+        if (time < times && step.repeatDelayMs) await pause(step.repeatDelayMs, options.signal);
+    }
+}
+
+async function runOnce(driver: DeviceDriver, step: Step, options: ReplayOptions, log: (line: string) => Promise<void>): Promise<void> {
     switch (step.type) {
         case 'launchApp':
             return driver.launchApp(step.appId);
         case 'tap': {
-            const { point, via } = await resolveTapPoint(driver, step.target, options.recognize);
+            // A target's label may itself be a blank — "tap the row for {{handle}}" — so it is
+            // filled in here, the same way a typed line is.
+            const target = step.target.text
+                ? { ...step.target, text: applyVariables(step.target.text, options.vars) }
+                : step.target;
+            const { point, via } = await resolveTapPoint(driver, target, options.recognize);
             await log(`  resolved by ${via} → (${Math.round(point.x)}, ${Math.round(point.y)})`);
             return driver.tap(point);
         }

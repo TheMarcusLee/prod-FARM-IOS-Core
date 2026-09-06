@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import type { DeviceDriver, MediaFile, Point, Rect, UiNode } from '../src/drivers/types.js';
+import type { DeviceDriver, MediaFile, Point, Rect, TimedPoint, UiNode } from '../src/drivers/types.js';
+import { createMotionSource } from '../src/motion/source.js';
 import type { PostManifest } from '../src/tiktok/post-manifest.js';
 import {
     MAX_CAPTION_LENGTH, POST_SELECTORS, galleryCells, postOnAndroid, switchAccount,
@@ -73,17 +74,24 @@ function fakeDriver(screens: UiNode[]): FakeDriver {
     };
     let index = 0;
     const current = () => screens[Math.min(index, screens.length - 1)]!;
+    const press = (point: Point): void => {
+        const hit = hitAt(current(), point);
+        state.taps.push(label(hit));
+        if (hit?.type !== STAY) index = Math.min(index + 1, screens.length - 1);
+    };
     state.driver = {
         kind: 'adb', platform: 'android', udid: 'R58N1ABCDE',
         launchApp: async (appId: string) => { state.launched.push(appId); },
         terminateApp: async () => {},
-        tap: async (point: Point) => {
-            const hit = hitAt(current(), point);
-            state.taps.push(label(hit));
-            if (hit?.type !== STAY) index = Math.min(index + 1, screens.length - 1);
-        },
+        tap: async (point: Point) => { press(point); },
         swipe: async () => { state.swipes += 1; },
-        gesture: async (path: unknown[]) => { state.swipes += 1; state.paths.push(path); },
+        // A tap is a two-sample path that does not move; anything else is a swipe.
+        gesture: async (path: TimedPoint[]) => {
+            const first = path[0]!;
+            const last = path[path.length - 1]!;
+            if (first.x === last.x && first.y === last.y) press(first);
+            else { state.swipes += 1; state.paths.push(path); }
+        },
         type: async (text: string) => { state.typed.push(text); },
         pressKey: async (key: string) => { state.keys.push(key); },
         screenshot: async () => Buffer.alloc(0),
@@ -95,7 +103,14 @@ function fakeDriver(screens: UiNode[]): FakeDriver {
     return state;
 }
 
-const FAST = { settleMs: 0, pollIntervalMs: 1, screenTimeoutMs: 50, successTimeoutMs: 50 };
+/**
+ * Every tap the routines make is jittered out of a motion source; a seeded one keeps the taps in
+ * these tests landing in the same pixels every run. A getter, so each use starts the same stream.
+ */
+const FAST = {
+    settleMs: 0, pollIntervalMs: 1, screenTimeoutMs: 50, successTimeoutMs: 50,
+    get motion() { return createMotionSource({ udid: 'R58N1ABCDE', seed: 'tiktok-android-test' }); },
+};
 
 /** Create → Upload → picker (cells + Next) → editor Next → publish screen → confirmation. */
 function postFlowScreens(confirmation: string): UiNode[] {

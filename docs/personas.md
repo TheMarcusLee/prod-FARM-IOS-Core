@@ -48,6 +48,51 @@ derived from its handle.
 Everything the form sends is a whitelist: unknown fields are dropped, terms must be plain words or
 hashtags, and every number is clamped to a sane range.
 
+## Presets
+
+Fourteen fields is a lot to invent from a blank form for the fortieth account on a farm, so twenty
+niches come written out — real interests and avoid lists, a warmth and a curiosity that suit the
+niche, budgets a person in it would plausibly spend, watch bands reflecting how long that content
+actually holds someone, and the hours of the day they are on their phone.
+
+An account with **no persona yet** sees these instead of an empty form: pick the one closest and
+adjust it. An account that already has one gets **Start from a preset** above the form. Either way
+Apply only *fills the form in* — nothing is stored until you press **Save persona**, so you always
+see the values before they land. The blank form is still there, folded under *Or fill it in by
+hand*.
+
+| preset | who it is | warmth / curiosity | likes | watches match / rest | session | awake |
+|---|---|---|---|---|---|---|
+| `fitness` | Gym sessions, form checks and progress clips. | 0.55 / 0.3 | 5–12 | 14–40s / 2–6s | 12–28 min | 06–09, 17–23 |
+| `home-gym` | Garage racks, adjustable dumbbells and small-space setups. | 0.6 / 0.2 | 4–10 | 18–45s / 2–5s | 10–25 min | 06–08, 18–23 |
+| `running` | Race training, splits, and far too many shoe reviews. | 0.5 / 0.25 | 4–9 | 15–38s / 2–5s | 8–20 min | 05–08, 18–22 |
+| `cooking` | Weeknight dinners, one-pan things and knife work. | 0.6 / 0.4 | 6–14 | 20–50s / 3–7s | 12–30 min | 11–14, 16–22 |
+| `baking` | Sourdough, laminated dough and cakes that take a weekend. | 0.65 / 0.3 | 5–12 | 25–60s / 3–7s | 15–35 min | 09–13, 19–23 |
+| `beauty` | Makeup looks, hauls and the products behind them. | 0.7 / 0.45 | 8–18 | 15–42s / 2–6s | 15–40 min | 08–11, 19–24 |
+| `skincare` | Routines, actives, and dermatologists correcting them. | 0.55 / 0.3 | 5–12 | 20–48s / 2–6s | 12–28 min | 07–10, 20–24 |
+| `fashion` | Outfits, thrifting and building a wardrobe that works. | 0.65 / 0.5 | 7–16 | 12–35s / 2–5s | 15–35 min | 08–10, 18–24 |
+| `tech-gadgets` | Phones, keyboards, desk setups and teardowns. | 0.4 / 0.45 | 4–10 | 25–60s / 3–8s | 15–40 min | 12–14, 19–24 |
+| `personal-finance` | Budgeting, index funds and getting out of debt. | 0.35 / 0.25 | 3–8 | 30–70s / 3–8s | 10–25 min | 07–09, 20–23 |
+| `real-estate` | House tours, first-time buyers and rental numbers. | 0.35 / 0.3 | 3–8 | 30–75s / 3–8s | 10–25 min | 08–10, 19–23 |
+| `travel` | Flight deals, city guides and packing far too well. | 0.6 / 0.6 | 6–14 | 20–55s / 3–8s | 15–40 min | 12–14, 20–24 |
+| `parenting` | Toddlers, sleep, school runs and other people surviving them. | 0.7 / 0.35 | 6–14 | 15–40s / 2–6s | 8–20 min | 06–08, 12–14, 20–23 |
+| `gaming` | Playthroughs, patch notes and setups worth more than the car. | 0.5 / 0.4 | 6–15 | 25–70s / 3–8s | 20–60 min | 16–24, 00–02 |
+| `comedy` | Sketches and bits — warm, easily distracted, gone in four seconds. | 0.75 / 0.75 | 10–25 | 10–30s / 2–4s | 15–45 min | 12–14, 18–24, 00–01 |
+| `pets` | Dogs, cats, training clips and unreasonable amounts of them. | 0.8 / 0.5 | 10–22 | 12–35s / 3–7s | 12–35 min | 07–10, 18–24 |
+| `diy-home` | Renovation, tools and repairs done at the weekend. | 0.5 / 0.35 | 4–10 | 25–65s / 3–8s | 12–30 min | 08–11, 19–23 |
+| `cars` | Builds, detailing and what a first car should cost. | 0.45 / 0.35 | 5–12 | 20–55s / 3–7s | 15–35 min | 12–14, 18–24 |
+| `study-productivity` | Revision, note taking and getting through exam season. | 0.4 / 0.3 | 4–10 | 25–60s / 2–6s | 8–20 min | 07–09, 15–18, 21–23 |
+| `mindfulness` | Breathwork, journaling and winding down at night. | 0.45 / 0.25 | 3–8 | 30–80s / 3–8s | 6–18 min | 06–08, 21–24 |
+
+Every preset goes through the same `validatePersona` whitelist as a hand-typed form, so a typo in
+one fails in a test rather than on a phone. They are a starting point, not a category: nothing
+downstream knows which preset an account came from, and editing one afterwards is just editing a
+persona.
+
+`POST /api/accounts/:handle/persona/preset` with `{ "preset": "home-gym" }` applies and stores one
+in a single call — for seeding a batch of new accounts from a script. `GET /api/persona-presets`
+lists the ids, labels and descriptions.
+
 ## What happens during a run
 
 Every video, the routine:
@@ -112,6 +157,7 @@ run a persona with the feed only.
 ## Where the code lives
 
 - `src/persona/model.ts` — the persona, its validation whitelist, the handle-derived default, the store.
+- `src/persona/presets.ts` — the twenty niches, and applying one to a handle.
 - `src/persona/observe.ts` — reading the video on screen, from a tree or from OCR words.
 - `src/persona/decide.ts` — the decisions. Pure, and every random draw comes from an injected RNG,
   so a session is reproducible from a seed. One video costs a fixed six draws whatever it decides.

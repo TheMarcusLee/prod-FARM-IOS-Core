@@ -20,6 +20,8 @@ export interface RunbookPluginConfiguration {
     createDriver?: (device: RegisteredDevice) => DeviceDriver;
     /** OCR fallback for text targets; defaults to the on-device recognizer, loaded lazily. */
     recognize?: Recognize;
+    /** Seeds the starter library on boot. On by default; tests that assert on an empty farm turn it off. */
+    installStarters?: boolean;
 }
 
 type RunPayload = JsonObject & {
@@ -161,6 +163,7 @@ export function createRunbookPlugin(configuration: RunbookPluginConfiguration = 
         registerRoutes: (context) => registerRunbookRoutes(context, {
             ...(configuration.directory ? { directory: configuration.directory } : {}),
             ...(configuration.createDriver ? { createDriver: configuration.createDriver } : {}),
+            ...(configuration.installStarters === undefined ? {} : { installStarters: configuration.installStarters }),
             pluginId: RUNBOOK_PLUGIN_ID, taskType: 'run', taskVersion: 1,
         }),
     };

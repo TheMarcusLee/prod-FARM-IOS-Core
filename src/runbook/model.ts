@@ -41,6 +41,19 @@ export interface StepOptions {
     seen?: string[];
     /** A `type` step the operator has confirmed is the same every run — asked once, never again. */
     fixed?: boolean;
+    /**
+     * This label was written from memory rather than read off a phone. The starter runbooks mark
+     * every selector nobody has confirmed against real hardware, and the narration says
+     * "(unverified)" so the first hardware session knows exactly what to check.
+     */
+    guess?: boolean;
+    /**
+     * How many times this step runs. A whole number, or one `{{name}}` blank — which is how
+     * "swipe up as many times as you want" is asked for without anybody typing braces.
+     */
+    repeat?: number | string;
+    /** The gap between repetitions. Without it a repeated swipe is a fling, not scrolling. */
+    repeatDelayMs?: number;
 }
 
 export type Step = StepOptions & (
@@ -81,6 +94,12 @@ export interface Runbook {
     /** The device it was recorded on — its screen is what the fractions were measured against. */
     createdFor: { udid: string; screen: RunbookScreen };
     steps: Step[];
+    /**
+     * Set on the copies seeded from `src/runbook/templates`, and on nothing else. It is how the
+     * list page knows to badge a runbook "Starter", and how a later release can tell an untouched
+     * starter from an operator's own copy of it.
+     */
+    template?: string;
     version: 1;
     createdAt: string;
     updatedAt: string;
@@ -114,6 +133,7 @@ export function validateRunStatus(value: JsonValue | undefined): RunbookRunStatu
 }
 
 export const MAX_STEPS = 200;
+export const MAX_REPEAT = 50;
 export const MAX_SEEN_TEXTS = 40;
 const MAX_SEEN_LENGTH = 200;
 const APP_ID_PATTERN = /^[A-Za-z0-9._-]{3,255}$/;
@@ -121,6 +141,7 @@ const ID_PATTERN = /^[a-z0-9][a-z0-9-]{7,63}$/;
 const VARIABLE_PATTERN = /\{\{\s*([A-Za-z][A-Za-z0-9_]{0,63})\s*\}\}/g;
 export const BLANK_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 const SCREENSHOT_PATTERN = /^[a-z0-9][a-z0-9.-]{0,127}$/;
+const TEMPLATE_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/;
 
 function object(value: JsonValue | undefined, label: string): Record<string, JsonValue> {
     if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error(`${label} must be an object`);
@@ -173,9 +194,32 @@ function stepOptions(input: Record<string, JsonValue>): StepOptions {
         if (typeof input.fixed !== 'boolean') throw new Error('fixed must be true or false');
         if (input.fixed) options.fixed = true;
     }
+    if (input.guess !== undefined && input.guess !== null) {
+        if (typeof input.guess !== 'boolean') throw new Error('guess must be true or false');
+        if (input.guess) options.guess = true;
+    }
+    const repeat = validateRepeat(input.repeat);
+    if (repeat !== undefined) options.repeat = repeat;
+    if (input.repeatDelayMs !== undefined && input.repeatDelayMs !== null) {
+        options.repeatDelayMs = integer(input.repeatDelayMs, 'repeatDelayMs', 0, 60_000);
+    }
     const seen = validateSeen(input.seen);
     if (seen.length) options.seen = seen;
     return options;
+}
+
+/**
+ * `repeat` is either a count or a single blank. A blank is the only string allowed: anything else
+ * would be a number the run could not resolve, and a silent 1 is worse than a refusal.
+ */
+export function validateRepeat(value: JsonValue | undefined): number | string | undefined {
+    if (value === undefined || value === null || value === '') return undefined;
+    if (typeof value === 'string') {
+        const match = /^\{\{\s*([A-Za-z][A-Za-z0-9_]{0,63})\s*\}\}$/.exec(value.trim());
+        if (!match) throw new Error('repeat must be a whole number or a single blank like {{times}}');
+        return `{{${match[1]!}}}`;
+    }
+    return integer(value, 'repeat', 1, MAX_REPEAT);
 }
 
 /** The screen's visible texts, as recorded. Bounded on both axes: it is stored on every step. */
@@ -271,6 +315,13 @@ function screen(value: JsonValue | undefined): RunbookScreen {
     };
 }
 
+export function validateTemplate(value: JsonValue | undefined): string | undefined {
+    if (value === undefined || value === null || value === '') return undefined;
+    const name = text(value, 'template', 64);
+    if (!TEMPLATE_PATTERN.test(name)) throw new Error('template must be lowercase letters, digits or hyphens');
+    return name;
+}
+
 export function validatePlatform(value: JsonValue | undefined): RunbookPlatform {
     if (value === 'ios' || value === 'android' || value === 'any') return value;
     throw new Error('platform must be "ios", "android", or "any"');
@@ -298,6 +349,7 @@ export function validateRunbook(value: JsonValue | undefined): Runbook {
         ...(appId ? { appId } : {}),
         createdFor: { udid: text(createdFor.udid, 'createdFor udid', 128), screen: screen(createdFor.screen) },
         steps: validateSteps(input.steps),
+        ...(validateTemplate(input.template) ? { template: validateTemplate(input.template)! } : {}),
         version: 1,
         createdAt: typeof input.createdAt === 'string' ? input.createdAt : now,
         updatedAt: now,
@@ -350,6 +402,12 @@ export function platformCompatible(runbook: Pick<Runbook, 'platform'>, platform:
 export function variableNames(runbook: Pick<Runbook, 'steps'>): string[] {
     const names = new Set<string>();
     for (const step of runbook.steps) {
+        if (step.type === 'tap' && step.target.text) {
+            for (const match of step.target.text.matchAll(VARIABLE_PATTERN)) names.add(match[1]!);
+        }
+        if (typeof step.repeat === 'string') {
+            for (const match of step.repeat.matchAll(VARIABLE_PATTERN)) names.add(match[1]!);
+        }
         if (step.type !== 'type') continue;
         for (const match of step.text.matchAll(VARIABLE_PATTERN)) names.add(match[1]!);
     }
@@ -363,6 +421,21 @@ export function applyVariables(value: string, vars: Record<string, string> = {})
         if (replacement === undefined) throw new Error(`Missing value for variable {{${name}}}`);
         return replacement;
     });
+}
+
+/**
+ * How many times a step runs, with the blank filled in. A blank that is not a whole number in
+ * range is the operator's mistake and is named as one, rather than quietly running once.
+ */
+export function repeatCount(step: Step, vars: Record<string, string> = {}): number {
+    if (step.repeat === undefined) return 1;
+    if (typeof step.repeat === 'number') return step.repeat;
+    const supplied = applyVariables(step.repeat, vars).trim();
+    const count = Number(supplied);
+    if (!Number.isInteger(count) || count < 1 || count > MAX_REPEAT) {
+        throw new Error(`"${supplied}" is not a number of times between 1 and ${MAX_REPEAT}`);
+    }
+    return count;
 }
 
 export function summarizeStep(step: Step): string {

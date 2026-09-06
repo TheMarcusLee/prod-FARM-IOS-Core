@@ -1,0 +1,125 @@
+{
+  "id": "rb-starter-switch-account",
+  "name": "Switch account",
+  "description": "Opens the profile, opens the account switcher, and moves to the handle you name.",
+  "platform": "android",
+  "appId": "com.zhiliaoapp.musically",
+  "createdFor": {
+    "udid": "starter-template",
+    "screen": {
+      "width": 1080,
+      "height": 2400,
+      "scale": 1
+    }
+  },
+  "template": "switch-account",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.zhiliaoapp.musically"
+    },
+    {
+      "type": "wait",
+      "ms": 4000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "profile_tab",
+        "text": "Profile",
+        "fraction": {
+          "x": 0.9,
+          "y": 0.965
+        }
+      },
+      "seen": [
+        "Home",
+        "Friends",
+        "Inbox",
+        "Profile",
+        "Create",
+        "Add"
+      ]
+    },
+    {
+      "type": "wait",
+      "ms": 3000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "account_switch",
+        "text": "Switch account",
+        "fraction": {
+          "x": 0.5,
+          "y": 0.12
+        }
+      },
+      "seen": [
+        "Switch account",
+        "Add account",
+        "Manage accounts",
+        "Log out"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 2500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "{{handle}}",
+        "fraction": {
+          "x": 0.5,
+          "y": 0.45
+        }
+      },
+      "seen": [
+        "Switch account",
+        "Add account",
+        "Manage accounts",
+        "Log out"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 8000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "profile_tab",
+        "text": "Profile",
+        "fraction": {
+          "x": 0.9,
+          "y": 0.965
+        }
+      },
+      "seen": [
+        "Home",
+        "Friends",
+        "Inbox",
+        "Profile",
+        "Create",
+        "Add"
+      ]
+    },
+    {
+      "type": "wait",
+      "ms": 2500
+    },
+    {
+      "type": "screenshot",
+      "label": "after-the-switch"
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "handle": "@your.handle"
+  }
+}

@@ -6,9 +6,10 @@ import { findByText, walk, type Recognize } from '../../drivers/verify.js';
 import { DriverError, type DeviceDriver, type UiNode } from '../../drivers/types.js';
 import type { PostManifest } from '../post-manifest.js';
 import { driverFromEnv } from './driver-from-env.js';
+import type { MotionSource } from '../../motion/source.js';
 import {
-    isPresent, recognizeOnDevice, screenSummary, tapFirst, tapIfPresent, waitForAny,
-    type SelectorList,
+    humanTapAt, isPresent, recognizeOnDevice, screenSummary, tapFirst, tapIfPresent, waitForAny,
+    type SelectorList, type TapOptions,
 } from './ui.js';
 
 export const TIKTOK_ANDROID_PACKAGE = 'com.zhiliaoapp.musically';
@@ -79,6 +80,19 @@ export interface PostOnAndroidOptions {
     pollIntervalMs?: number;
     /** How long to wait for a screen to appear before giving up on it. */
     screenTimeoutMs?: number;
+    /**
+     * The run's hand: every tap is jittered and held out of this one seeded stream. Absent falls
+     * back to a source seeded from the udid, which still jitters.
+     */
+    motion?: MotionSource;
+}
+
+/** What a tap needs out of the routine's options: where to look, and whose hand is doing it. */
+function tapping(options: PostOnAndroidOptions): TapOptions {
+    return {
+        ...(options.recognize ? { recognize: options.recognize } : {}),
+        ...(options.motion ? { motion: options.motion } : {}),
+    };
 }
 
 interface Timing {
@@ -159,7 +173,7 @@ async function pushAllMedia(driver: DeviceDriver, manifest: PostManifest): Promi
 export async function switchAccount(driver: DeviceDriver, handle: string, options: PostOnAndroidOptions = {}): Promise<void> {
     const timing = timingOf(options);
     console.log(`Switching to TikTok account "${handle}"`);
-    await tapFirst(driver, 'Profile tab', POST_SELECTORS.profileTab, options.recognize);
+    await tapFirst(driver, 'Profile tab', POST_SELECTORS.profileTab, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
 
     const handleSelector: SelectorList = [{ text: handle }];
@@ -170,16 +184,16 @@ export async function switchAccount(driver: DeviceDriver, handle: string, option
         return;
     }
 
-    await tapFirst(driver, 'account switcher', POST_SELECTORS.accountSwitcher, options.recognize);
+    await tapFirst(driver, 'account switcher', POST_SELECTORS.accountSwitcher, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
     await waitForAny(driver, `the account row for ${handle}`, handleSelector, {
         timeoutMs: timing.screenTimeoutMs, intervalMs: timing.pollIntervalMs, ...(timing.signal ? { signal: timing.signal } : {}),
     });
-    await tapFirst(driver, `account row for ${handle}`, handleSelector, options.recognize);
+    await tapFirst(driver, `account row for ${handle}`, handleSelector, tapping(options));
     // TikTok reloads app state after a switch.
     await driver.pause(timing.settleMs * 2, timing.signal);
 
-    await tapFirst(driver, 'Profile tab (verify)', POST_SELECTORS.profileTab, options.recognize);
+    await tapFirst(driver, 'Profile tab (verify)', POST_SELECTORS.profileTab, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
     const root = await driver.uiTree();
     if (!findByText(root, { text: handle })) {
@@ -191,7 +205,7 @@ export async function switchAccount(driver: DeviceDriver, handle: string, option
 async function selectMedia(driver: DeviceDriver, count: number, options: PostOnAndroidOptions): Promise<void> {
     const timing = timingOf(options);
     if (count > 1) {
-        await tapIfPresent(driver, 'Select multiple', POST_SELECTORS.selectMultiple, options.recognize);
+        await tapIfPresent(driver, 'Select multiple', POST_SELECTORS.selectMultiple, tapping(options));
         await driver.pause(timing.settleMs, timing.signal);
     }
     const root = await driver.uiTree();
@@ -203,7 +217,7 @@ async function selectMedia(driver: DeviceDriver, count: number, options: PostOnA
     }
     for (const [index, cell] of cells.slice(0, count).entries()) {
         const { left, top, right, bottom } = cell.bounds;
-        await driver.tap({ x: (left + right) / 2, y: (top + bottom) / 2 });
+        await humanTapAt(driver, { x: (left + right) / 2, y: (top + bottom) / 2 }, options.motion);
         console.log(`Tapped media ${index + 1}/${count}`);
         await driver.pause(timing.settleMs, timing.signal);
     }
@@ -217,7 +231,7 @@ async function advanceToCaptionScreen(driver: DeviceDriver, options: PostOnAndro
             console.log('Reached the caption screen');
             return;
         }
-        await tapFirst(driver, `Next (${step})`, POST_SELECTORS.next, options.recognize);
+        await tapFirst(driver, `Next (${step})`, POST_SELECTORS.next, tapping(options));
         await driver.pause(timing.settleMs, timing.signal);
     }
     if (await isPresent(driver, POST_SELECTORS.captionField)) {
@@ -229,7 +243,7 @@ async function advanceToCaptionScreen(driver: DeviceDriver, options: PostOnAndro
 
 async function addCaption(driver: DeviceDriver, caption: string, options: PostOnAndroidOptions): Promise<void> {
     const timing = timingOf(options);
-    await tapFirst(driver, 'caption field', POST_SELECTORS.captionField, options.recognize);
+    await tapFirst(driver, 'caption field', POST_SELECTORS.captionField, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
     await driver.type(caption);
     // Back closes the soft keyboard without leaving the publish form.
@@ -257,9 +271,9 @@ export async function postOnAndroid(driver: DeviceDriver, manifest: PostManifest
     const account = manifest.account?.trim();
     if (account) await switchAccount(driver, account, options);
 
-    await tapFirst(driver, 'Create', POST_SELECTORS.create, options.recognize);
+    await tapFirst(driver, 'Create', POST_SELECTORS.create, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
-    await tapFirst(driver, 'Upload', POST_SELECTORS.upload, options.recognize);
+    await tapFirst(driver, 'Upload', POST_SELECTORS.upload, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
 
     await selectMedia(driver, manifest.files.length, options);
@@ -268,7 +282,7 @@ export async function postOnAndroid(driver: DeviceDriver, manifest: PostManifest
     if (manifest.caption) await addCaption(driver, manifest.caption, options);
 
     const publishing = manifest.destination === 'publish';
-    await tapFirst(driver, publishing ? 'Post' : 'Drafts', publishing ? POST_SELECTORS.post : POST_SELECTORS.drafts, options.recognize);
+    await tapFirst(driver, publishing ? 'Post' : 'Drafts', publishing ? POST_SELECTORS.post : POST_SELECTORS.drafts, tapping(options));
     console.log(publishing ? 'TikTok post submitted' : 'TikTok draft submitted');
 
     const confirmation = publishing ? POST_SELECTORS.publishSuccess : POST_SELECTORS.draftSuccess;

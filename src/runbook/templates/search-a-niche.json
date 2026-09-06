@@ -1,0 +1,155 @@
+{
+  "id": "rb-starter-search-a-niche",
+  "name": "Search a niche",
+  "description": "Searches a term, opens the top result, watches a few, and comes back to the feed.",
+  "platform": "android",
+  "appId": "com.zhiliaoapp.musically",
+  "createdFor": {
+    "udid": "starter-template",
+    "screen": {
+      "width": 1080,
+      "height": 2400,
+      "scale": 1
+    }
+  },
+  "template": "search-a-niche",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.zhiliaoapp.musically"
+    },
+    {
+      "type": "wait",
+      "ms": 4000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "search_icon",
+        "text": "Search",
+        "fraction": {
+          "x": 0.93,
+          "y": 0.06
+        }
+      },
+      "seen": [
+        "For You",
+        "Following",
+        "Home",
+        "Friends",
+        "Inbox",
+        "Profile",
+        "Search"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 2000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "et_search_kw",
+        "text": "Search",
+        "fraction": {
+          "x": 0.45,
+          "y": 0.06
+        }
+      },
+      "seen": [
+        "Search",
+        "Cancel"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "type",
+      "text": "{{term}}"
+    },
+    {
+      "type": "key",
+      "key": "enter"
+    },
+    {
+      "type": "waitForText",
+      "text": "Top",
+      "timeoutMs": 25000,
+      "seen": [
+        "Top",
+        "Users",
+        "Videos",
+        "Sounds",
+        "LIVE",
+        "Hashtags"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 2500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "search_result_item",
+        "fraction": {
+          "x": 0.25,
+          "y": 0.28
+        }
+      },
+      "seen": [
+        "Top",
+        "Users",
+        "Videos",
+        "Sounds",
+        "LIVE",
+        "Hashtags"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 3000
+    },
+    {
+      "type": "swipe",
+      "from": {
+        "x": 0.5,
+        "y": 0.78
+      },
+      "to": {
+        "x": 0.5,
+        "y": 0.24
+      },
+      "durationMs": 380,
+      "repeat": "{{scrolls}}",
+      "repeatDelayMs": 4500
+    },
+    {
+      "type": "key",
+      "key": "back"
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    },
+    {
+      "type": "key",
+      "key": "back"
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "term": "home gym",
+    "scrolls": "4"
+  }
+}
