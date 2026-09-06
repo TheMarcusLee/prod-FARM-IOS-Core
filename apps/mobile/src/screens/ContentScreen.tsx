@@ -5,10 +5,11 @@
  * approving five in a row on a train, and a round trip per tap is the wrong
  * feel. If the farm refuses, the row goes back to what it was and says so.
  */
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { Alert, FlatList, Image, RefreshControl, Text, View } from 'react-native';
 import { router } from 'expo-router';
-import { FarmError, formatRelative, type ContentQueueItem } from '@farm/client';
+import * as ImagePicker from 'expo-image-picker';
+import { FarmError, formatRelative, uploadFileFromBlob, type ContentQueueItem } from '@farm/client';
 import {
     Badge,
     Button,
@@ -25,12 +26,21 @@ import { useFarm } from '../context/FarmContext';
 import { useAsync } from '../hooks';
 import { useTheme } from '../theme';
 
+interface UploadState {
+    name: string;
+    /** 0…1 while sending, and null once the farm is assembling the file. */
+    fraction: number | null;
+    error?: string;
+}
+
 export function ContentScreen() {
     const { client, snapshot, canAct, needsSetup } = useFarm();
     const { colors, spacing, radius } = useTheme();
     const [overrides, setOverrides] = useState<Record<string, ContentQueueItem>>({});
     const [busyId, setBusyId] = useState<string | null>(null);
     const [refreshing, setRefreshing] = useState(false);
+    const [upload, setUpload] = useState<UploadState | null>(null);
+    const aborter = useRef<AbortController | null>(null);
 
     const queue = useAsync(async () => (needsSetup ? { items: [] } : client.listContentQueue()), [client, needsSetup]);
 
@@ -86,6 +96,48 @@ export function ContentScreen() {
         [client],
     );
 
+    /**
+     * Pick one clip and send it up in chunks. The picker hands back a `uri`, so
+     * the bytes come from `fetch(uri)` — which in React Native is a local read,
+     * not a network call — and go out through the resumable protocol, because a
+     * phone on cell data will drop part way through a 400 MB clip.
+     */
+    const addClip = useCallback(async () => {
+        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permission.granted) {
+            Alert.alert('No access to the library', 'Allow photo access for Backline in Settings, then try again.');
+            return;
+        }
+        const picked = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ['videos', 'images'],
+            quality: 1,
+            allowsMultipleSelection: false,
+        });
+        const asset = picked.canceled ? null : picked.assets[0];
+        if (!asset) return;
+
+        const name = asset.fileName ?? (asset.type === 'video' ? 'clip.mp4' : 'photo.jpg');
+        const controller = new AbortController();
+        aborter.current = controller;
+        setUpload({ name, fraction: 0 });
+        try {
+            const blob = await (await fetch(asset.uri)).blob();
+            await client.uploadAsset(uploadFileFromBlob(blob, name, asset.mimeType ?? blob.type), {
+                signal: controller.signal,
+                onProgress: ({ fraction }) => setUpload({ name, fraction }),
+            });
+            setUpload({ name, fraction: null });
+            await queue.reload();
+            setUpload(null);
+        } catch (caught) {
+            // An abort is the operator's own decision, not a failure to report.
+            if (caught instanceof FarmError && caught.kind === 'aborted') setUpload(null);
+            else setUpload({ name, fraction: null, error: caught instanceof FarmError ? caught.message : String(caught) });
+        } finally {
+            aborter.current = null;
+        }
+    }, [client, queue]);
+
     if (needsSetup) {
         return (
             <View style={{ flex: 1 }}>
@@ -118,7 +170,60 @@ export function ContentScreen() {
                         {`${all.length} in the library · ${waiting.filter((item) => item.status === 'planned').length} waiting on you`}
                     </Muted>
                 }
+                right={
+                    <Button
+                        label="Add clip"
+                        variant="primary"
+                        compact
+                        icon="upload"
+                        disabled={!canAct || upload !== null}
+                        onPress={() => void addClip()}
+                        testID="content-add"
+                    />
+                }
             />
+
+            {upload ? (
+                <View style={{ paddingHorizontal: spacing.lg2, paddingBottom: spacing.sm }}>
+                    <Panel testID="content-upload">
+                        <Text numberOfLines={1} style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
+                            {upload.name}
+                        </Text>
+                        <Muted testID="content-upload-status">
+                            {upload.error
+                                ? upload.error
+                                : upload.fraction === null
+                                  ? 'Finishing up…'
+                                  : `Uploading · ${Math.round(upload.fraction * 100)}%`}
+                        </Muted>
+                        <View
+                            style={{
+                                height: 4, borderRadius: 999, backgroundColor: colors.line,
+                                overflow: 'hidden', marginTop: spacing.sm,
+                            }}
+                        >
+                            <View
+                                style={{
+                                    height: '100%',
+                                    width: `${Math.round((upload.fraction ?? 1) * 100)}%`,
+                                    backgroundColor: upload.error ? colors.bad : colors.accent,
+                                }}
+                            />
+                        </View>
+                        <Row gap={spacing.sm} style={{ marginTop: spacing.sm }}>
+                            <Button
+                                label={upload.error ? 'Dismiss' : 'Cancel'}
+                                style={{ flex: 1 }}
+                                onPress={() => {
+                                    aborter.current?.abort();
+                                    setUpload(null);
+                                }}
+                                testID="content-upload-cancel"
+                            />
+                        </Row>
+                    </Panel>
+                </View>
+            ) : null}
 
             {queue.error ? <ErrorState error={queue.error} onRetry={() => void queue.reload()} testID="content-error" /> : null}
 

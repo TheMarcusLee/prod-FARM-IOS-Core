@@ -11,6 +11,8 @@ export * from './errors';
 export * from './http';
 export * from './client';
 export * from './sse';
+export * from './uploads';
+export { sha256Bytes, sha256Hex } from './sha256';
 export * from './event-text';
 export * from './derive';
 export { createMockFarm } from './mock';

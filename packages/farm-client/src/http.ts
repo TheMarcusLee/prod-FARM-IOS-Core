@@ -188,6 +188,53 @@ export class HttpTransport {
         });
     }
 
+    /**
+     * A raw byte body — the one thing the JSON path cannot express. Used by the
+     * chunked upload protocol, where the body is an opaque slice of a file and
+     * the digest travels in a header. Never retried: a chunk PUT is cheap to
+     * repeat but the caller owns that decision, exactly as it does for a POST.
+     */
+    async sendBytes(
+        path: string,
+        bytes: ArrayBuffer,
+        options: { headers?: Record<string, string>; signal?: AbortSignal; timeoutMs?: number } = {},
+    ): Promise<Response> {
+        const doFetch = this.config.fetch ?? globalThis.fetch;
+        if (!doFetch) throw new FarmError('network', 'No fetch implementation available.');
+        const url = this.url(path);
+        const controller = new AbortController();
+        // A chunk is up to 8 MiB over a phone connection; the JSON budget is far
+        // too short for that.
+        const budget = options.timeoutMs ?? 120_000;
+        let timedOut = false;
+        const timer = setTimeout(() => { timedOut = true; controller.abort(); }, budget);
+        const onOuterAbort = () => controller.abort();
+        options.signal?.addEventListener('abort', onOuterAbort);
+
+        const headers: Record<string, string> = {
+            Accept: 'application/json',
+            'Content-Type': 'application/octet-stream',
+            ...this.config.headers,
+            ...options.headers,
+        };
+        const token = this.currentToken();
+        if (token) headers.Authorization = `Bearer ${token}`;
+
+        let response: Response;
+        try {
+            response = await doFetch(url, { method: 'PUT', headers, body: bytes, signal: controller.signal });
+        } catch (cause) {
+            if (timedOut) throw new FarmError('timeout', `The Mac did not answer within ${budget}ms.`, { url, cause });
+            if (options.signal?.aborted) throw new FarmError('aborted', 'Upload cancelled.', { url, cause });
+            throw new FarmError('network', "Can't reach the Mac.", { url, cause });
+        } finally {
+            clearTimeout(timer);
+            options.signal?.removeEventListener('abort', onOuterAbort);
+        }
+        if (!response.ok) throw await this.failure(response, url);
+        return response;
+    }
+
     /** Body plus the response, for the few routes whose cursor is a header. */
     async requestWithResponse<T>(path: string, options: RequestOptions = {}): Promise<{ body: T; response: Response }> {
         const response = await this.fetchRaw(path, options);

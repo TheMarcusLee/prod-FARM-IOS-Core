@@ -156,6 +156,7 @@ ${icon('upload', 20)}<strong>Drop clips and images here</strong>
 </div>
 <p id="upload-result" class="bl-muted" aria-live="polite"></p>
 </form>
+<ul id="upload-progress" class="bl-uploads"></ul>
 <div class="bl-ingest-more">
 <form id="ingest-form">
 <span class="bl-section-title">From a folder on this host</span>

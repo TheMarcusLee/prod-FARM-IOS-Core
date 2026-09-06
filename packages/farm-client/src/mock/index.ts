@@ -25,6 +25,7 @@ import type {
     BulkScheduleInput,
     BulkScheduleOutcome,
     BulkScheduleResult,
+    ContentLibraryItem,
     ContentQueueItem,
     CreateScheduleInput,
     DeviceConnectionStatus,
@@ -91,6 +92,9 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
     const tickMs = options.tickMs ?? 4_000;
     const latencyMs = options.latencyMs ?? 0;
     const random = seededRandom(options.seed ?? 42);
+
+    // Names the demo uploads so two in a row are distinguishable.
+    let uploaded = 0;
 
     const seeds = mockDeviceSeeds();
     const devices = mockRegisteredDevices();
@@ -772,6 +776,31 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
         },
 
         assetThumbnailRef: (assetId) => ({ uri: frameFor(assetId, 'asset') }),
+
+        /**
+         * Demo mode has no farm to send bytes to, so the upload is reported in
+         * chunk-sized steps and the item appears in the library. The progress
+         * shape is the real one, which is the part a screen depends on.
+         */
+        uploadAsset: async (file, uploadOptions = {}) => {
+            const chunkSize = 8 * 1024 * 1024;
+            uploadOptions.onSession?.(`upl_${(uploaded += 1)}`);
+            for (let sent = 0; sent < file.size;) {
+                if (uploadOptions.signal?.aborted) fail('aborted', 'Upload cancelled.', 0);
+                sent = Math.min(file.size, sent + chunkSize);
+                uploadOptions.onProgress?.({
+                    sent, total: file.size, fraction: sent / file.size, bytesPerSecond: chunkSize,
+                });
+                await delay(undefined);
+            }
+            return delay<ContentLibraryItem>({
+                id: `item_${uploaded}`, assetId: `asset_${uploaded}`, originalAssetId: null,
+                kind: file.mimeType.startsWith('video/') ? 'video' : 'image', status: 'processing',
+                sha256: `demo${uploaded}`, tags: uploadOptions.tags ?? [], hashtags: [], caption: null,
+            });
+        },
+
+        abortUpload: async () => delay(undefined),
 
         emit: (partial = {}) => record({ kind: 'execution.failed', ...partial }),
 

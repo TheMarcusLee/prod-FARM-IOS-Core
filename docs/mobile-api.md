@@ -51,6 +51,7 @@ own fragments and static assets are not.
 | --- | --- | --- |
 | `POST /api/devices/:udid/remote/action` | 10/s, per device *and* token | `RATE_LIMIT_ACTION` |
 | `GET /api/devices/:udid/remote/screenshot` | 5/s, per device *and* token | `RATE_LIMIT_SCREENSHOT` |
+| `PUT /api/uploads/:id/chunks/:index` | 600/min per token | `RATE_LIMIT_CHUNK` |
 | Other writes | 60/min per token | `RATE_LIMIT_WRITE` |
 | Reads | 300/min per token | `RATE_LIMIT_READ` |
 
@@ -945,7 +946,107 @@ assets:
 ]
 ```
 
-The app does not upload in M1–M3. Listed for completeness.
+One request, one body: fine on a LAN, and the wrong shape through a tunnel
+that caps a body or over a phone connection that drops. Still supported and
+unchanged — use the chunked protocol below for anything large.
+
+### Chunked, resumable uploads
+
+Four routes, and the file never has to be sent twice. Every session belongs to
+the token that opened it: another token gets `404`, never `403`, so an id cannot
+be probed. Sessions live under `$SCHEDULER_DATA_DIR/uploads/<id>/`, expire after
+24 hours, and are swept at boot and hourly.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `UPLOAD_CHUNK_BYTES` | `8388608` (8 MiB) | One chunk, and therefore one request body. |
+| `UPLOAD_MAX_BYTES` | `4294967296` (4 GiB) | Largest file a session may declare. |
+| `UPLOAD_MAX_CONCURRENT` | `4` | Unfinished sessions one identity may hold open. |
+
+#### `POST /api/uploads`
+
+```json
+{ "name": "clip-014.mp4", "size": 418442131, "mimeType": "video/mp4", "sha256": "3b1f…" }
+```
+
+`sha256` is optional; when given, completion refuses a file that does not match
+it. `201`:
+
+```json
+{
+  "id": "0f9c1d2e3a4b5c6d7e8f90a1b2c3d4e5",
+  "name": "clip-014.mp4",
+  "size": 418442131,
+  "mimeType": "video/mp4",
+  "chunkSize": 8388608,
+  "chunkCount": 50,
+  "received": [],
+  "expiresAt": "2026-09-07T09:41:12.004Z"
+}
+```
+
+`400` for a missing or nonsensical `name`/`size`/`mimeType`, `413` over
+`UPLOAD_MAX_BYTES`, `429` when this identity already holds
+`UPLOAD_MAX_CONCURRENT` sessions open.
+
+#### `PUT /api/uploads/:id/chunks/:index`
+
+The raw bytes as `application/octet-stream`, with `X-Chunk-Sha256` carrying the
+lower-case hex sha256 of exactly those bytes. Every chunk is `chunkSize` bytes
+except the last, which is the remainder; anything else is a `400`. Chunks may be
+sent in any order and in parallel — three at a time is what the dashboard and
+the app both use.
+
+```json
+{ "index": 7, "received": 8, "chunkCount": 50 }
+```
+
+`400` for a wrong digest, a wrong length, or an index outside
+`0 … chunkCount - 1`. A refused chunk is **not** recorded, so re-sending it is
+the whole recovery.
+
+#### `GET /api/uploads/:id`
+
+The session, with `received` listing the chunk indices the farm holds. This is
+what a resume reads: send only the indices that are missing.
+
+#### `POST /api/uploads/:id/complete`
+
+```json
+{ "tags": ["fitness"], "crop": false }
+```
+
+Verifies every chunk is present, checks the whole-file digest when one was
+declared, and hands the assembled file to the same ingest the dropzone uses —
+so the asset and `content_items` rows are identical to a multipart upload.
+`201 { "items": [ … ] }` with the library item, whose `status` is `processing`
+until normalisation finishes.
+
+`409` when chunks are still missing (the message names them) or the assembled
+size disagrees; `422` when the whole-file sha256 does not match.
+
+#### `DELETE /api/uploads/:id`
+
+Abandons the session and frees the disk and the identity's slot. `204`, and
+`204` again — abandoning twice is not an error, though an id that was never
+yours is still a `404`.
+
+#### From the app
+
+`@farm/client` implements all of this in `uploadAsset(file, options)`:
+
+```ts
+const blob = await (await fetch(asset.uri)).blob();
+await client.uploadAsset(uploadFileFromBlob(blob, asset.fileName ?? 'clip.mp4'), {
+    onProgress: ({ fraction }) => setPercent(fraction),
+    onSession: (uploadId) => remember(uploadId),
+    signal: controller.signal,
+});
+```
+
+Persist the `uploadId` and pass it back as `options.uploadId` to resume after a
+restart; a session that has expired or belongs to someone else is simply
+replaced with a fresh one.
 
 ### `DELETE /api/assets`
 

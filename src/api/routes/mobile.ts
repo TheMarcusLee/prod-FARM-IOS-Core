@@ -118,6 +118,9 @@ function envNumber(name: string, fallback: number): number {
 
 const REMOTE_ROUTE = /^\/api\/devices\/([^/]+)\/remote\/(action|screenshot)$/;
 
+/** One chunked upload is many PUTs by design — 8 MiB each, three in flight. */
+const CHUNK_ROUTE = /^\/api\/uploads\/[0-9a-f]{32}\/chunks\/\d+$/;
+
 /** Where `registerMcpRoutes` mounts, and the one path the rate-limit hook cares about outside /api. */
 export const MCP_PATH = '/mcp';
 
@@ -132,6 +135,12 @@ export function bucketFor(method: string, url: string): Bucket {
     // point here is a ceiling on a runaway agent, not throttling: 600/min is ten calls a second.
     if (url === MCP_PATH || url.startsWith(`${MCP_PATH}/`)) {
         return { name: 'mcp', max: envNumber('RATE_LIMIT_MCP', 600), windowMs: 60_000, scope: '' };
+    }
+    // A 400 MB clip is 50 chunks; a day of uploads must not spend the write
+    // budget the rest of the API shares. The ceiling is still a ceiling: 600/min
+    // of 8 MiB chunks is far more than any tunnel will carry.
+    if (method === 'PUT' && CHUNK_ROUTE.test(url)) {
+        return { name: 'chunk', max: envNumber('RATE_LIMIT_CHUNK', 600), windowMs: 60_000, scope: '' };
     }
     const remote = REMOTE_ROUTE.exec(url);
     if (remote?.[2] === 'action') {

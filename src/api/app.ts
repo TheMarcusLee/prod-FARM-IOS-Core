@@ -50,6 +50,7 @@ import { eq } from 'drizzle-orm';
 import { assets } from '../database/schema.js';
 import { runCommand } from '../drivers/common.js';
 import { registerContentRoutes } from './routes/content.js';
+import { registerUploadRoutes } from './routes/uploads.js';
 import { registerFleetRoutes } from './routes/fleet.js';
 import { registerMcpRoutes } from './routes/mcp.js';
 import { personaHead, registerPersonaRoutes, renderPersonaSection } from './routes/personas.js';
@@ -991,6 +992,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     });
 
     await registerContentRoutes(app, { scheduler: options.scheduler, shell });
+    await registerUploadRoutes(app, { scheduler: options.scheduler });
     await registerFleetRoutes(app, options);
     registerPersonaRoutes(app);
     await registerScheduleRoutes(app, { ...options, shell });

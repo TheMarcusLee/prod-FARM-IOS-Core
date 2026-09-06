@@ -383,6 +383,23 @@ export interface ContentQueueItem {
     scheduleId: string | null;
 }
 
+/**
+ * A row in the content library — what an upload creates, and what the drip
+ * queue later plans. `status` is `processing` until the farm has normalised the
+ * clip in the background.
+ */
+export interface ContentLibraryItem {
+    id: string;
+    assetId: string;
+    originalAssetId: string | null;
+    kind: string;
+    status: string;
+    sha256: string;
+    tags: string[];
+    hashtags: string[];
+    caption: string | null;
+}
+
 /* ------------------------------------------------- plugins, health, bootstrap */
 
 export interface PluginTaskDescriptor {
