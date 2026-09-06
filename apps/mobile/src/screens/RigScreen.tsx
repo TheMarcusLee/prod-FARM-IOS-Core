@@ -216,7 +216,7 @@ export function RigScreen() {
 
                 <Panel style={{ marginTop: spacing.sm2 }}>
                     <InspectorRow label="Plugins" value={pluginLine(health)} />
-                    <InspectorRow label="Farm release" value={snapshot?.releaseSha ?? health?.release?.sha ?? '—'} />
+                    <InspectorRow label="Backline release" value={snapshot?.releaseSha ?? health?.release?.sha ?? '—'} />
                     <InspectorRow label="Runs last 24h" value={summary ? `${summary.succeededLast24h} ok · ${summary.failedLast24h} failed` : '—'} />
                     <InspectorRow label="Planned next 24h" value={summary ? String(summary.plannedNext24h) : '—'} />
                     <InspectorRow label="App" value={Constants.expoConfig?.version ?? '—'} />

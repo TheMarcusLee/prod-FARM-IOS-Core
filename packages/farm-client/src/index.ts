@@ -1,5 +1,5 @@
 /**
- * `@farm/client` — the typed surface of the phone farm's JSON API.
+ * `@farm/client` — the typed surface of Backline's JSON API.
  *
  * Free of React and of `window`, so the Expo app and the Electron app can both
  * depend on it. `main` points at this file: Metro and Electron's bundler both

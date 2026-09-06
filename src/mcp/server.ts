@@ -10,7 +10,11 @@ import type { McpDependencies, DeviceLike } from './types.js';
 import { resolveUploadPath, uploadDirectories } from './uploads.js';
 
 export const TIKTOK_PLUGIN_ID = 'com.git-agni.tiktok';
-export const SERVER_NAME = 'phone-farm';
+/**
+ * The name this server introduces itself by in the MCP handshake. The key an operator writes in
+ * their client's config stays `phone-farm` for compatibility (see apps/desktop mcp-config.ts).
+ */
+export const SERVER_NAME = 'backline';
 export const SERVER_VERSION = '0.1.0';
 
 // Strict members: a caller that sends `runAt` on a `now` timing, or misspells
@@ -370,7 +374,7 @@ function registerAssetTools(server: McpServer, dependencies: McpDependencies): v
     }, async () => attempt(async () => json({ plugins: dependencies.listPlugins() })));
 }
 
-const PLANNING_GUIDANCE = `You are planning a day of TikTok activity on a self-hosted phone farm.
+const PLANNING_GUIDANCE = `You are planning a day of TikTok activity on Backline, a self-hosted phone farm.
 
 Work in this order:
 1. list_devices — take only devices whose status is "connected"; "offline" and "disabled" cannot run anything.
@@ -434,7 +438,7 @@ export function createFarmMcpServer(dependencies: McpDependencies): McpServer {
 
     server.registerPrompt('plan_posting_day', {
         title: 'Plan a posting day',
-        description: 'How to use the phone-farm tools to plan and book a day of TikTok activity.',
+        description: 'How to use the Backline tools to plan and book a day of TikTok activity.',
         // No argsSchema: an empty shape makes the SDK require an `arguments` object on every get.
     }, () => ({
         messages: [{ role: 'user' as const, content: { type: 'text' as const, text: PLANNING_GUIDANCE } }],

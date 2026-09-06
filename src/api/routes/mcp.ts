@@ -101,8 +101,8 @@ export async function registerMcpRoutes(app: FastifyInstance, options: McpRouteO
         }
         const token = await tokenForAuthorization(statePath, request.headers.authorization);
         if (!token) {
-            return reply.code(401).header('www-authenticate', 'Bearer realm="phone-farm"')
-                .send({ error: 'A phone farm API token is required. Create one with `npm run token:create`.' });
+            return reply.code(401).header('www-authenticate', 'Bearer realm="backline"')
+                .send({ error: 'A Backline API token is required. Create one with `npm run token:create`.' });
         }
         const sessionId = request.headers['mcp-session-id'];
         const session = typeof sessionId === 'string' ? sessions.get(sessionId) : undefined;

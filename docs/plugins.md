@@ -12,7 +12,7 @@ compatibility rules. This document is the how‑to.
 Everything is in `src/plugin.ts`. A plugin is a plain object:
 
 ```ts
-import type { PhoneFarmPlugin } from '@git-agni/phone-farm-core';
+import type { PhoneFarmPlugin } from '@git-agni/backline';
 
 const plugin: PhoneFarmPlugin = {
     id: 'com.acme.instagram',   // reverse-DNS, stable forever
@@ -39,7 +39,7 @@ package names. `loadPlugins()` imports each and expects a `default` (or
 ## A task definition
 
 ```ts
-import type { TaskDefinition } from '@git-agni/phone-farm-core';
+import type { TaskDefinition } from '@git-agni/backline';
 
 interface LikePayload extends Record<string, unknown> {
     count: number;
@@ -207,7 +207,7 @@ through `wda:prepare`.
 ## Packaging & shipping
 
 1. A normal npm package, `"type": "module"`, `export default` the plugin.
-2. `peerDependencies`: `@git-agni/phone-farm-core`.
+2. `peerDependencies`: `@git-agni/backline`.
 3. Publish privately (or reference a pinned git commit).
 4. Add the package name to `PHONE_FARM_PLUGINS` for **both** the `web` and
    `worker` units; restart both.

@@ -301,7 +301,7 @@ test('bursts coalesce to one push per registration per window, folded with a cou
     assert.equal(coalescer.size, 0);
 
     const message = pushMessage(registration(), folded[0]!.events, 'https://farm.example');
-    assert.equal(message.title, '2 farm alerts');
+    assert.equal(message.title, '2 Backline alerts');
     assert.match(message.body, /and 1 more/);
     assert.equal(message.data.count, 2);
     assert.equal(message.data.eventId, 3);
