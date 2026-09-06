@@ -150,7 +150,9 @@ navLinks: [{ label: 'Mac', href: '/mac', order: 20 }]  // lower order = further 
 Pair it with `registerRoutes` to serve the page the link points at. Unlike
 task panels, a plugin route can register **any** path (not just under
 `/plugins/<id>`) and return a whole HTML document — it still sits inside the
-authenticated host, so link `/assets/styles.css` for the dashboard's styling.
+authenticated host, so link `/assets/backline.css` for the dashboard's styling — or,
+better, render through the `shell` on the route context so the page gets the whole Backline
+shell (sidebar, rig block, unread count) rather than a bare styled document.
 A host-stats plugin, for example, might add a `Mac` nav link plus
 `GET /mac` (a live page) and `GET /mac/stats.json`.
 

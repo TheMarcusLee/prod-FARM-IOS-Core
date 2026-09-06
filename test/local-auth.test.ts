@@ -56,7 +56,7 @@ test('PHONE_FARM_AUTH_PLUGIN=local resolves to the built-in provider', async () 
     assert.equal(provider?.logoutPath, '/auth/logout');
     assert.ok(provider?.isPublicPath('/login'));
     assert.ok(provider?.isPublicPath('/health'));
-    assert.ok(provider?.isPublicPath('/assets/styles.css'));
+    assert.ok(provider?.isPublicPath('/assets/backline.css'));
     assert.equal(provider?.isPublicPath('/api/devices'), false);
 });
 

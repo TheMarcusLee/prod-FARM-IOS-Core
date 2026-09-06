@@ -166,10 +166,8 @@ const app = Fastify({ logger: false });
 await app.register(formbody);
 
 const css = await readFile(path.join(STATIC_ROOT, 'backline.css'), 'utf8');
-const legacy = await readFile(path.join(STATIC_ROOT, 'styles.css'), 'utf8');
 const htmx = await readFile(new URL('../node_modules/htmx.org/dist/htmx.min.js', import.meta.url), 'utf8');
 app.get('/assets/backline.css', async (_request, reply) => reply.type('text/css').send(css));
-app.get('/assets/styles.css', async (_request, reply) => reply.type('text/css').send(legacy));
 app.get('/assets/htmx.min.js', async (_request, reply) => reply.type('text/javascript').send(htmx));
 
 await registerScheduleRoutes(app, {

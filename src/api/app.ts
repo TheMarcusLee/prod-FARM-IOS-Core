@@ -86,8 +86,6 @@ interface LoadedDashboardTheme {
     /** Page bodies; the shell wraps them. */
     deviceHtml: string;
     registerDeviceHtml: string;
-    /** Still a whole document — the Schedule/Content branch owns this template. */
-    tasksHtml: string;
     /** Everything /assets/<file> can serve: the token stylesheet, htmx and every page script. */
     assets: Map<string, DashboardAsset>;
     /** Content hash per asset name, so a template can ask for an immutable URL. */
@@ -406,21 +404,16 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         // Every compiled page script is served by one route, so a new page needs
         // a new .ts file and nothing else.
         const scripts = (await readdir(assetRoot)).filter((name) => name.endsWith('.js')).sort();
-        const [deviceHtml, tasksHtml, registerDeviceHtml, htmx, backlineStyles, legacyStyles, ...scriptBodies] = await Promise.all([
+        const [deviceHtml, registerDeviceHtml, htmx, backlineStyles, ...scriptBodies] = await Promise.all([
             readFile(path.join(root, 'templates/device.html'), 'utf8'),
-            readFile(path.join(root, 'templates/tasks.html'), 'utf8'),
             readFile(path.join(root, 'templates/register-device.html'), 'utf8'),
             readFile(require.resolve('htmx.org/dist/htmx.min.js'), 'utf8'),
             readFile(path.join(root, 'backline.css'), 'utf8'),
-            // The runbook plugin and the Content/Schedule templates still link the
-            // pre-Backline stylesheet; it is served until they no longer do.
-            readFile(path.join(root, 'styles.css'), 'utf8'),
             ...scripts.map((name) => readFile(path.join(assetRoot, name), 'utf8')),
         ]);
         const assets = new Map<string, DashboardAsset>([
             ['backline.css', { contentType: 'text/css', body: backlineStyles }],
             ['htmx.min.js', { contentType: 'text/javascript', body: htmx }],
-            ['styles.css', { contentType: 'text/css', body: legacyStyles }],
             ...scripts.map((name, index): [string, DashboardAsset] =>
                 [name, { contentType: 'text/javascript', body: scriptBodies[index] ?? '' }]),
         ]);
@@ -429,15 +422,15 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         const versions: Record<string, string> = {};
         for (const [name, value] of assets) versions[name] = assetHash(value.body);
         const finalize = (html: string) => {
-            // The Schedule/Content templates are still whole documents with their own nav
-            // placeholders; the shell-rendered pages carry neither.
+            // The device and registration templates are page bodies; the placeholders are
+            // what is left of the pre-Backline layout they were lifted out of.
             let out = html.replaceAll('__AUTH_NAV__', shellContext.authNav)
                 .replaceAll('__PLUGIN_NAV__', shellContext.pluginNav).replaceAll('__FOOTER__', '');
             for (const [name, v] of Object.entries(versions)) out = out.replaceAll(`/assets/${name}`, `/assets/${name}?v=${v}`);
             return out;
         };
         themed = {
-            deviceHtml: finalize(deviceHtml), tasksHtml: finalize(tasksHtml),
+            deviceHtml: finalize(deviceHtml),
             registerDeviceHtml: finalize(registerDeviceHtml), assets, versions,
         };
     }
