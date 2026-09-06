@@ -335,7 +335,8 @@ async function appWithRunbooks(directory: string, created: unknown[] = []): Prom
         { name: 'Pixel 7', udid: SERIAL, platform: 'android', driver: 'adb', android: { serial: SERIAL }, pluginData: {} },
     ]));
     return createApp({
-        plugins: new PluginRegistry([createRunbookPlugin({ directory, createDriver: () => fakeDriver(calls()) })]),
+        // The starter library is seeded on boot in production; these tests want an empty farm.
+        plugins: new PluginRegistry([createRunbookPlugin({ directory, createDriver: () => fakeDriver(calls()), installStarters: false })]),
         scheduler: {
             async activeExecution() { return null; },
             async createTask(input: unknown) { created.push(input); return {}; },

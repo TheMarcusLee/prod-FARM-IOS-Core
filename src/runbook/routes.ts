@@ -24,6 +24,7 @@ import {
 } from './html.js';
 import { PLACEHOLDER_PREFIX, runPanelFragment, runProgressFragment, storyFragment, type LiveRun } from './story.js';
 import { replayRunbook, RunbookStepError } from './replay.js';
+import { describeInstall, installStarterRunbooks } from './starters.js';
 import {
     deleteRunbook, listRunbooks, mutateRunbook, readFailureScreenshot, readRunbook, writeFailureScreenshot,
     writeRunbook,
@@ -36,6 +37,8 @@ export interface RunbookRoutesOptions {
     directory?: string;
     createDriver?: (device: RegisteredDevice) => DeviceDriver;
     recorder?: Recorder;
+    /** Seeds the starter library on boot. Off in the tests that assert on an empty farm. */
+    installStarters?: boolean;
     pluginId?: string;
     taskType?: string;
     taskVersion?: number;
@@ -128,6 +131,18 @@ export async function registerRunbookRoutes(context: PluginRouteContext, options
     const pluginId = options.pluginId ?? 'com.farm.runbook';
     const taskType = options.taskType ?? 'run';
     const taskVersion = options.taskVersion ?? 1;
+
+    // First boot: a farm with nothing on its Runbooks page has nothing to press. Seeding never
+    // overwrites, so this is safe on every boot and is simply a no-op from the second one on.
+    if (options.installStarters !== false) {
+        try {
+            const seeded = await installStarterRunbooks(directory);
+            if (seeded.installed.length) console.log(`Runbooks: ${describeInstall(seeded)}`);
+        } catch (error) {
+            // A farm whose data directory is not writable yet still gets its pages.
+            console.warn(`Runbooks: could not install the starter library — ${errorMessage(error)}`);
+        }
+    }
 
     const pageScript = await readFile(path.join(STATIC_ROOT, 'assets/runbooks.js'), 'utf8')
         .catch(() => '/* run npm run build:web */');
@@ -726,6 +741,24 @@ export async function registerRunbookRoutes(context: PluginRouteContext, options
         return reply.type('application/json')
             .header('content-disposition', `attachment; filename="${runbook.id}.json"`)
             .send(`${JSON.stringify(runbook, null, 2)}\n`);
+    });
+
+    /** Restore starter runbooks, as JSON and as the button on the Runbooks page. */
+    app.post('/api/runbooks/templates/install', async (_request, reply) => {
+        try {
+            const result = await installStarterRunbooks(directory);
+            return reply.send({ ...result, message: describeInstall(result) });
+        } catch (error) {
+            return reply.code(500).send({ error: errorMessage(error) });
+        }
+    });
+
+    app.post(`${ROUTE_PREFIX}/runbooks/templates/install`, async (_request, reply) => {
+        try {
+            return html(reply, await listFragment(describeInstall(await installStarterRunbooks(directory))));
+        } catch (error) {
+            return html(reply, await listFragment(errorMessage(error)));
+        }
     });
 
     app.post(`${ROUTE_PREFIX}/runbooks/import`, async (request, reply) => {
