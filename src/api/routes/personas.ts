@@ -21,6 +21,7 @@ import {
     type Persona,
 } from '../../persona/model.js';
 import { readMemory, summariseMemory, type MemorySummary } from '../../persona/memory.js';
+import { PERSONA_PRESETS, applyPreset, findPreset } from '../../persona/presets.js';
 
 export interface PersonaRouteOptions {
     /** Overrides SCHEDULER_DATA_DIR; tests point it at a temporary directory. */
@@ -77,6 +78,11 @@ export interface PanelState {
     /** A sentence under the panel head: what just happened, or what went wrong. */
     note?: string;
     tone?: 'ok' | 'bad';
+    /**
+     * The preset the form in front of the operator was filled from. Nothing has been saved: the
+     * panel is showing what pressing Save would store, which is the point of "Apply".
+     */
+    preset?: string;
 }
 
 function field(label: string, control: string, hint = ''): string {
@@ -131,6 +137,29 @@ export function renderMemorySummary(summary: MemorySummary): string {
 <div><span>What matched</span><span class="bl-chip-row">${matched}</span></div></div>${sessions}`;
 }
 
+/** The select behind "Start from a preset", for an account that already has values in the form. */
+function presetChooser(action: string, chosen?: string): string {
+    const options = PERSONA_PRESETS.map((preset) =>
+        `<option value="${escapeHtml(preset.id)}"${preset.id === chosen ? ' selected' : ''}>${escapeHtml(preset.label)}</option>`).join('');
+    return `<form class="bl-persona-presets" hx-get="${action}" hx-target="closest section" hx-swap="outerHTML">
+<label class="bl-field"><span>Start from a preset</span>
+<select class="bl-select" name="preset">${options}</select></label>
+<button class="bl-btn" type="submit">Apply</button>
+<span class="bl-faint">Fills the form in. Nothing is stored until you press Save persona.</span></form>`;
+}
+
+/**
+ * What an account with no persona sees instead of twenty empty fields: the niches, one line each,
+ * one press to fill the form in with one. The blank form is still there, folded away.
+ */
+function presetPicker(action: string): string {
+    const cards = PERSONA_PRESETS.map((preset) => `<button class="bl-btn bl-persona-preset" type="submit" name="preset"
+ value="${escapeHtml(preset.id)}"><strong>${escapeHtml(preset.label)}</strong>
+<span class="bl-faint">${escapeHtml(preset.description)}</span></button>`).join('');
+    return `<p class="bl-muted">Start from a preset — pick the one closest to this account and adjust it.</p>
+<form class="bl-persona-picker" hx-get="${action}" hx-target="closest section" hx-swap="outerHTML">${cards}</form>`;
+}
+
 export function renderPersonaPanel(persona: Persona, summary: MemorySummary, state: PanelState): string {
     const action = `/accounts/${encodeURIComponent(persona.handle)}/persona`;
     const chips = persona.interests.map((interest) =>
@@ -138,6 +167,8 @@ export function renderPersonaPanel(persona: Persona, summary: MemorySummary, sta
     const note = state.note
         ? `<p class="bl-muted${state.tone === 'bad' ? ' bl-persona-bad' : ''}" role="status">${escapeHtml(state.note)}</p>`
         : `<p class="bl-muted">${state.stored ? 'This persona is set up.' : 'No persona set up yet — these values are derived from the handle.'}</p>`;
+    // Nothing has been stored yet and nothing has been picked: offer the niches, not a blank form.
+    const picking = !state.stored && !state.preset;
     const languages = LANGUAGES.map((code) =>
         `<option value="${code}"${code === persona.language ? ' selected' : ''}>${code}</option>`).join('');
 
@@ -147,6 +178,8 @@ export function renderPersonaPanel(persona: Persona, summary: MemorySummary, sta
 <div class="bl-panel-body">
 ${note}
 <div class="bl-chip-row">${chips}</div>
+${picking ? presetPicker(action) : presetChooser(action, state.preset)}
+${picking ? '<details class="bl-persona-byhand"><summary>Or fill it in by hand</summary>' : ''}
 <form hx-post="${action}" hx-target="closest section" hx-swap="outerHTML" class="bl-persona-form">
 ${field('Niche', `<input class="bl-input" type="text" name="niche" value="${escapeHtml(persona.niche)}" maxlength="40">`,
         'A short name for what this account is into.')}
@@ -174,6 +207,7 @@ ${number('followSessions', persona.followRule.withinSessions, 1, 30)}<span class
 <div class="bl-btn-row"><button type="submit" class="bl-btn bl-btn-primary">${icon('check')}Save persona</button>
 ${state.stored ? `<button type="button" class="bl-btn" hx-delete="${action}" hx-target="closest section" hx-swap="outerHTML">Reset to the default</button>` : ''}</div>
 </form>
+${picking ? '</details>' : ''}
 <div class="bl-persona-memory"><div class="bl-panel-head">What it did lately</div>
 ${renderMemorySummary(summary)}</div>
 </div></section>`;
@@ -210,6 +244,12 @@ const PERSONA_STYLE = `<style>
 .bl-persona-slider output { color: var(--bl-text-3); font-size: 12.5px; min-width: 30px; }
 .bl-persona-memory { margin-top: 16px; border-top: 1px solid var(--bl-line); padding-top: 12px; }
 .bl-persona-bad { color: var(--bl-bad); }
+.bl-persona-presets { align-items: end; display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.bl-persona-picker { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin: 10px 0 14px; }
+.bl-persona-preset { display: block; height: auto; padding: 8px 10px; text-align: left; }
+.bl-persona-preset strong { display: block; font-size: 12.5px; }
+.bl-persona-preset span { display: block; font-weight: 400; white-space: normal; }
+.bl-persona-byhand { margin-top: 4px; }
 </style>`;
 
 /** The markup the Accounts page appends to its `<head>`. */
@@ -220,9 +260,19 @@ export function personaHead(): string {
 async function panelFor(handle: string, directory: string | undefined, state: Omit<PanelState, 'stored'>): Promise<string> {
     const key = normaliseHandle(handle);
     const personas = await loadPersonas(directory);
-    const persona = personas[key] ?? defaultPersona(key);
+    // A chosen preset fills the form and is not stored; the stored persona is what is shown otherwise.
+    const preset = findPreset(state.preset);
+    const persona = preset ? applyPreset(key, preset.id) : personas[key] ?? defaultPersona(key);
     const summary = summariseMemory(await readMemory(key, directory));
-    return renderPersonaPanel(persona, summary, { ...state, stored: Object.hasOwn(personas, key) });
+    return renderPersonaPanel(persona, summary, {
+        ...state,
+        ...(preset ? { preset: preset.id, note: state.note ?? presetNote(preset.label), tone: state.tone ?? 'ok' } : {}),
+        stored: Object.hasOwn(personas, key),
+    });
+}
+
+function presetNote(label: string): string {
+    return `Filled in from the ${label} preset — press Save persona to keep it.`;
 }
 
 /** `reply.type` is set before the body is built, so the JSON error resets it or Fastify refuses it. */
@@ -234,9 +284,12 @@ function badHandle(reply: FastifyReply, error: unknown): FastifyReply {
 export function registerPersonaRoutes(app: FastifyInstance, options: PersonaRouteOptions = {}): void {
     const directory = options.dataDirectory;
 
-    app.get<{ Params: { handle: string } }>('/accounts/:handle/persona', async (request, reply) => {
+    app.get<{ Params: { handle: string }; Querystring: { preset?: string } }>('/accounts/:handle/persona', async (request, reply) => {
         try {
-            const html = await panelFor(request.params.handle, directory, {});
+            // `preset` is a whitelist lookup, not a value: an unknown one falls back to the panel
+            // as it was, rather than being reported as an error nobody asked a question to get.
+            const preset = findPreset(request.query.preset)?.id;
+            const html = await panelFor(request.params.handle, directory, { ...(preset ? { preset } : {}) });
             return reply.type('text/html').send(html);
         } catch (error) {
             return badHandle(reply, error);
@@ -262,6 +315,25 @@ export function registerPersonaRoutes(app: FastifyInstance, options: PersonaRout
             return reply.type('text/html').send(html);
         }
     });
+
+    /**
+     * The same "start from a preset", server-side and in one call: applies it and stores it. The
+     * body is one whitelisted field, and the value has to be one of the shipped preset ids.
+     */
+    app.post<{ Params: { handle: string }; Body: { preset?: unknown } }>('/api/accounts/:handle/persona/preset', async (request, reply) => {
+        try {
+            const handle = normaliseHandle(request.params.handle);
+            const persona = applyPreset(handle, (request.body ?? {}).preset);
+            return reply.send(await savePersona(handle, persona as unknown as Record<string, unknown>, directory));
+        } catch (error) {
+            return badHandle(reply, error);
+        }
+    });
+
+    /** What the picker offers, for anything that wants to build its own. */
+    app.get('/api/persona-presets', async () => ({
+        presets: PERSONA_PRESETS.map(({ id, label, description }) => ({ id, label, description })),
+    }));
 
     app.delete<{ Params: { handle: string } }>('/accounts/:handle/persona', async (request, reply) => {
         try {
