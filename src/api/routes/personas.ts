@@ -194,7 +194,7 @@ export function renderPersonaSection(handles: readonly string[]): string {
     return `<div class="bl-page" id="personas"><h2 class="bl-persona-heading">Personas</h2>
 <p class="bl-muted">A persona is who an account behaves like: what it watches right through, what it
 scrolls past, and how much it engages in one sitting. Every handle has one — a stored persona, or
-one derived from the handle until you set it up.</p>${panels}</div>`;
+one derived from the handle until you set it up. <a href="/docs/personas">How personas work</a>.</p>${panels}</div>`;
 }
 
 /* ---- Routes ------------------------------------------------------------ */
@@ -225,8 +225,10 @@ async function panelFor(handle: string, directory: string | undefined, state: Om
     return renderPersonaPanel(persona, summary, { ...state, stored: Object.hasOwn(personas, key) });
 }
 
+/** `reply.type` is set before the body is built, so the JSON error resets it or Fastify refuses it. */
 function badHandle(reply: FastifyReply, error: unknown): FastifyReply {
-    return reply.code(400).send({ error: error instanceof Error ? error.message : String(error) });
+    return reply.code(400).type('application/json')
+        .send(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
 }
 
 export function registerPersonaRoutes(app: FastifyInstance, options: PersonaRouteOptions = {}): void {
@@ -234,7 +236,8 @@ export function registerPersonaRoutes(app: FastifyInstance, options: PersonaRout
 
     app.get<{ Params: { handle: string } }>('/accounts/:handle/persona', async (request, reply) => {
         try {
-            return reply.type('text/html').send(await panelFor(request.params.handle, directory, {}));
+            const html = await panelFor(request.params.handle, directory, {});
+            return reply.type('text/html').send(html);
         } catch (error) {
             return badHandle(reply, error);
         }
@@ -249,12 +252,14 @@ export function registerPersonaRoutes(app: FastifyInstance, options: PersonaRout
         }
         try {
             const persona = await savePersona(handle, personaFromForm(request.body ?? {}), directory);
-            return reply.type('text/html').send(await panelFor(persona.handle, directory, { note: 'Saved.', tone: 'ok' }));
+            const html = await panelFor(persona.handle, directory, { note: 'Saved.', tone: 'ok' });
+            return reply.type('text/html').send(html);
         } catch (error) {
             // A rejected edit must come back as the panel with the reason on it, not as a 400 htmx
             // will not swap — the operator would be left looking at their own unsaved form.
             const note = error instanceof PersonaError ? error.message : 'That persona could not be saved.';
-            return reply.type('text/html').send(await panelFor(handle, directory, { note, tone: 'bad' }));
+            const html = await panelFor(handle, directory, { note, tone: 'bad' });
+            return reply.type('text/html').send(html);
         }
     });
 
@@ -262,9 +267,10 @@ export function registerPersonaRoutes(app: FastifyInstance, options: PersonaRout
         try {
             const handle = normaliseHandle(request.params.handle);
             await deletePersona(handle, directory);
-            return reply.type('text/html').send(await panelFor(handle, directory, {
+            const html = await panelFor(handle, directory, {
                 note: 'Reset — this account is back to the persona derived from its handle.', tone: 'ok',
-            }));
+            });
+            return reply.type('text/html').send(html);
         } catch (error) {
             return badHandle(reply, error);
         }

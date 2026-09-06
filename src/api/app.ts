@@ -144,6 +144,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 /** The repo documents the Rig page may link to. An explicit list — never a path from a request. */
 const DOC_PAGES: readonly string[] = [
     'getting-started', 'operations', 'android-dashboard', 'fleet-and-alerts', 'auth', 'mcp', 'runbooks',
+    'personas',
 ];
 
 function validPort(value: unknown): boolean {
