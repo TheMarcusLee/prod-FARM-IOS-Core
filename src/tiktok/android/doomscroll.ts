@@ -3,6 +3,8 @@ import { fileURLToPath } from 'node:url';
 
 import type { DeviceDriver } from '../../drivers/types.js';
 import type { Recognize } from '../../drivers/verify.js';
+import type { MotionSettings } from '../../motion/profile.js';
+import { createMotionSource, type MotionSource } from '../../motion/source.js';
 import {
     PROFILES, clampToDeadline, decideLike, decideLinger, decideSave, hasTimeRemaining, isPersonality,
     pickWatchDurationMs, type Personality,
@@ -45,6 +47,14 @@ export interface DoomscrollOnAndroidOptions {
     /** Injectable for tests. */
     random?: () => number;
     now?: () => number;
+    /**
+     * One seed for the whole run: every swipe arc and every pause is drawn from it, so a run is
+     * reproducible from its execution id and different from every other run. The executor exports
+     * it as MOTION_SEED.
+     */
+    seed?: string;
+    /** Handedness and pace; defaults to the device's own stable profile. */
+    motion?: MotionSettings;
 }
 
 export interface DoomscrollSummary {
@@ -56,18 +66,17 @@ export interface DoomscrollSummary {
     reason: 'completed' | 'stopped';
 }
 
-/** Vertical flick through the middle of the screen, sized from the device's own geometry. */
-async function swipeToNextVideo(driver: DeviceDriver): Promise<void> {
-    const { width, height } = await driver.screen();
-    await driver.swipe({
-        from: { x: width / 2, y: height * 0.75 },
-        to: { x: width / 2, y: height * 0.25 },
-        durationMs: 300,
-    });
+/**
+ * The flick to the next video: an arc starting somewhere in this device's thumb zone, with its
+ * own length, curvature and speed. Two of these are never the same shape (src/motion/gesture.ts).
+ */
+async function swipeToNextVideo(driver: DeviceDriver, motion: MotionSource): Promise<void> {
+    await driver.gesture(motion.swipe(await driver.screen(), { direction: 'up' }));
 }
 
-function interactionPauseMs(random: () => number): number {
-    return Math.round(200 + random() * 400);
+/** ±15%: nobody puts the phone down after exactly the number of minutes they meant to. */
+export function sessionMinutes(requested: number, random: () => number): number {
+    return requested * (0.85 + random() * 0.3);
 }
 
 export async function doomscrollOnAndroid(driver: DeviceDriver, options: DoomscrollOnAndroidOptions): Promise<DoomscrollSummary> {
@@ -76,6 +85,10 @@ export async function doomscrollOnAndroid(driver: DeviceDriver, options: Doomscr
     const now = options.now ?? Date.now;
     const profile = PROFILES[personality];
     const packageName = options.packageName ?? TIKTOK_ANDROID_PACKAGE;
+    const seed = options.seed ?? process.env.MOTION_SEED ?? `${Date.now()}:${driver.udid}`;
+    const motion = createMotionSource({
+        udid: driver.udid, seed, ...(options.motion ? { settings: options.motion } : {}),
+    });
 
     let stopped = false;
     // driver.pause rejects with the abort reason; a stop is a normal end to the run, not a failure.
@@ -93,21 +106,26 @@ export async function doomscrollOnAndroid(driver: DeviceDriver, options: Doomscr
     let likes = 0;
     let saves = 0;
     const runStartedAt = now();
-    console.log(`Starting doomscroll: profile=${personality} requestedDurationMinutes=${durationMinutes} likeEnabled=${likeEnabled} saveEnabled=${saveEnabled}`);
+    const sessionLength = sessionMinutes(durationMinutes, motion.random);
+    console.log(
+        `Starting doomscroll: seed=${seed} hand=${motion.profile.hand} speed=${motion.profile.speed} `
+        + `profile=${personality} requestedDurationMinutes=${durationMinutes} `
+        + `sessionMinutes=${sessionLength.toFixed(1)} likeEnabled=${likeEnabled} saveEnabled=${saveEnabled}`,
+    );
 
     console.log(`Launching ${packageName} on ${driver.udid}`);
     await driver.launchApp(packageName);
-    await sleep(3_000);
+    await sleep(motion.pause('afterOpenApp'));
 
     if (options.account) {
         const switchOptions = { ...(options.recognize ? { recognize: options.recognize } : {}), ...(signal ? { signal } : {}) };
         await switchAccount(driver, options.account, switchOptions);
         // The switch leaves the app on the Profile tab; the loop below expects the feed.
         await tapIfPresent(driver, 'Home tab', FEED_SELECTORS.homeTab, options.recognize);
-        await sleep(1_500);
+        await sleep(motion.pause('reaction'));
     }
 
-    const deadline = now() + durationMinutes * 60_000;
+    const deadline = now() + sessionLength * 60_000;
     const running = () => !stopped && !signal?.aborted && hasTimeRemaining(now(), deadline);
 
     while (running()) {
@@ -116,14 +134,14 @@ export async function doomscrollOnAndroid(driver: DeviceDriver, options: Doomscr
         if (!running()) break;
 
         if (likeEnabled && decideLike(profile, random)) {
-            await sleep(clampToDeadline(now(), deadline, interactionPauseMs(random)));
+            await sleep(clampToDeadline(now(), deadline, motion.pause('beforeLike')));
             if (!running()) break;
             if (await tapIfPresent(driver, 'Like', FEED_SELECTORS.like, options.recognize)) likes += 1;
         }
         if (!running()) break;
 
         if (saveEnabled && decideSave(profile, random)) {
-            await sleep(clampToDeadline(now(), deadline, interactionPauseMs(random)));
+            await sleep(clampToDeadline(now(), deadline, motion.pause('afterLike')));
             if (!running()) break;
             if (await tapIfPresent(driver, 'Save', FEED_SELECTORS.save, options.recognize)) saves += 1;
         }
@@ -133,10 +151,10 @@ export async function doomscrollOnAndroid(driver: DeviceDriver, options: Doomscr
         if (linger) await sleep(clampToDeadline(now(), deadline, extraMs));
         if (!running()) break;
 
-        await sleep(clampToDeadline(now(), deadline, interactionPauseMs(random)));
+        await sleep(clampToDeadline(now(), deadline, motion.pause('beforeSwipe')));
         if (!running()) break;
 
-        await swipeToNextVideo(driver);
+        await swipeToNextVideo(driver, motion);
         swipes += 1;
     }
 
@@ -166,6 +184,17 @@ function booleanEnv(name: string, fallback: boolean): boolean {
     throw new Error(`${name} must be 'true' or 'false'; received ${raw}`);
 }
 
+/** MOTION_HAND / MOTION_SPEED are exported by the executor from the device's registration. */
+function motionFromEnvironment(): MotionSettings | undefined {
+    const hand = process.env.MOTION_HAND;
+    const speed = process.env.MOTION_SPEED;
+    const settings: MotionSettings = {
+        ...(hand === 'right' || hand === 'left' ? { hand } : {}),
+        ...(speed === 'slow' || speed === 'normal' || speed === 'fast' ? { speed } : {}),
+    };
+    return Object.keys(settings).length ? settings : undefined;
+}
+
 /** Reads the same environment contract as the iOS routine. */
 export async function runFromEnvironment(): Promise<void> {
     const personality = process.env.DOOMSCROLL_PERSONALITY ?? 'casual';
@@ -182,6 +211,8 @@ export async function runFromEnvironment(): Promise<void> {
         likeEnabled: booleanEnv('DOOMSCROLL_LIKE_ENABLED', true),
         saveEnabled: booleanEnv('DOOMSCROLL_SAVE_ENABLED', true),
         packageName: process.env.TIKTOK_PACKAGE?.trim() || TIKTOK_ANDROID_PACKAGE,
+        ...(process.env.MOTION_SEED ? { seed: process.env.MOTION_SEED } : {}),
+        ...(motionFromEnvironment() ? { motion: motionFromEnvironment()! } : {}),
         recognize: recognizeOnDevice,
         signal: controller.signal,
         ...(account ? { account } : {}),

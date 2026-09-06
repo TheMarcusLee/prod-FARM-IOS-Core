@@ -1,6 +1,9 @@
 import { remote, type Browser } from 'webdriverio';
 
-import { loadRegisteredDevices, resolveDeviceCoordinates, WdaRemoteControl } from '@git-agni/backline';
+import {
+    createMotionSource, gestureActions, loadRegisteredDevices, resolveDeviceCoordinates, WdaRemoteControl,
+    type MotionSettings,
+} from '@git-agni/backline';
 import { coordinateProfile, registeredAccounts } from './runtime-settings.js';
 import { switchTikTokAccount, tapCoordinate } from './actions.js';
 import { detectEngagementControls } from './engagement-controls.js';
@@ -81,7 +84,7 @@ if (switchAccountName && !allowedAccounts.includes(switchAccountName)) {
 }
 let { x: likeX, y: likeY } = tiktokCoordinates.like;
 let { x: saveX, y: saveY } = tiktokCoordinates.save;
-const { x: swipeX, startY: swipeStartY, endY: swipeEndY, durationMs: swipeDurationMs } = tiktokCoordinates.swipe;
+const screenSize = coordinates.screenSize;
 const wdaUrl = process.env.WDA_URL;
 const tiktokBundleId = process.env.TIKTOK_BUNDLE_ID ?? 'com.zhiliaoapp.musically';
 
@@ -144,8 +147,29 @@ function cancellableDelay(ms: number): Promise<void> {
     });
 }
 
-function interactionPauseMs(): number {
-    return Math.round(200 + Math.random() * 400);
+/**
+ * Everything this run does — every arc, every pause — is drawn from this one seed, so a run can
+ * be replayed from its execution id (the executor exports it as MOTION_SEED) and is different
+ * from every other run. Handedness and pace come from the device's registration.
+ */
+const motionSeed = process.env.MOTION_SEED ?? `${Date.now()}:${udid}`;
+const motionSettings: MotionSettings = {
+    ...(process.env.MOTION_HAND === 'right' || process.env.MOTION_HAND === 'left' ? { hand: process.env.MOTION_HAND } : {}),
+    ...(process.env.MOTION_SPEED === 'slow' || process.env.MOTION_SPEED === 'normal' || process.env.MOTION_SPEED === 'fast'
+        ? { speed: process.env.MOTION_SPEED } : {}),
+};
+const motion = createMotionSource({ udid, seed: motionSeed, settings: motionSettings });
+
+/**
+ * The flick to the next video. Coordinate actions bypass XCTest's expensive application-element
+ * lookup, which can hang on TikTok's continuously updating feed — but instead of the same two
+ * points every time, the pointer follows a generated thumb arc: jittered start inside the thumb
+ * zone, a slight bow, and uneven speed within the stroke (src/motion/gesture.ts).
+ */
+async function swipeToNextVideo(session: Browser): Promise<void> {
+    const path = motion.swipe(screenSize, { direction: 'up' });
+    await session.performActions(gestureActions(path) as unknown as Parameters<Browser['performActions']>[0]);
+    await session.releaseActions();
 }
 
 async function doubleTapCoordinate(driver: Browser, x: number, y: number, label: string): Promise<void> {
@@ -163,7 +187,14 @@ let likes = 0;
 let saves = 0;
 const runStartedAt = Date.now();
 
-console.log(`Starting doomscroll: profile=${personality} requestedDurationMinutes=${durationMinutes} likeEnabled=${likeEnabled} saveEnabled=${saveEnabled}`);
+// ±15%: nobody puts the phone down after exactly the number of minutes they meant to.
+const sessionMinutes = durationMinutes * (0.85 + motion.random() * 0.3);
+
+console.log(
+    `Starting doomscroll: seed=${motionSeed} hand=${motion.profile.hand} speed=${motion.profile.speed} `
+    + `profile=${personality} requestedDurationMinutes=${durationMinutes} `
+    + `sessionMinutes=${sessionMinutes.toFixed(1)} likeEnabled=${likeEnabled} saveEnabled=${saveEnabled}`,
+);
 
 try {
     const remoteControl = new WdaRemoteControl({
@@ -186,7 +217,7 @@ try {
     });
 
     await driver.updateSettings({ defaultActiveApplication: tiktokBundleId });
-    await driver.pause(3000);
+    await driver.pause(motion.pause('afterOpenApp'));
 
     if (switchAccountName) {
         console.log(`Switching to TikTok account "${switchAccountName}"`);
@@ -194,7 +225,7 @@ try {
         // switchTikTokAccount leaves the app on the Profile tab; the loop
         // below expects the Home feed.
         await tapCoordinate(driver, homeTabX, homeTabY, 'Home tab');
-        await driver.pause(1500);
+        await driver.pause(motion.pause('reaction'));
     }
 
     try {
@@ -214,7 +245,7 @@ try {
         console.log(`Engagement control detection failed; using profile coordinates: ${error instanceof Error ? error.message : String(error)}`);
     }
 
-    const deadline = Date.now() + durationMinutes * 60_000;
+    const deadline = Date.now() + sessionMinutes * 60_000;
 
     while (!stopRequested && hasTimeRemaining(Date.now(), deadline)) {
         await cancellableDelay(clampToDeadline(Date.now(), deadline, pickWatchDurationMs(profile)));
@@ -222,7 +253,7 @@ try {
         if (stopRequested || !hasTimeRemaining(Date.now(), deadline)) break;
 
         if (likeEnabled && decideLike(profile)) {
-            await cancellableDelay(clampToDeadline(Date.now(), deadline, interactionPauseMs()));
+            await cancellableDelay(clampToDeadline(Date.now(), deadline, motion.pause('beforeLike')));
             if (stopRequested || !hasTimeRemaining(Date.now(), deadline)) break;
             await doubleTapCoordinate(driver, likeX, likeY, 'Like');
             likes += 1;
@@ -230,7 +261,7 @@ try {
         if (stopRequested || !hasTimeRemaining(Date.now(), deadline)) break;
 
         if (saveEnabled && decideSave(profile)) {
-            await cancellableDelay(clampToDeadline(Date.now(), deadline, interactionPauseMs()));
+            await cancellableDelay(clampToDeadline(Date.now(), deadline, motion.pause('afterLike')));
             if (stopRequested || !hasTimeRemaining(Date.now(), deadline)) break;
             await tapCoordinate(driver, saveX, saveY, 'Save');
             saves += 1;
@@ -243,24 +274,10 @@ try {
         }
         if (stopRequested || !hasTimeRemaining(Date.now(), deadline)) break;
 
-        await cancellableDelay(clampToDeadline(Date.now(), deadline, interactionPauseMs()));
+        await cancellableDelay(clampToDeadline(Date.now(), deadline, motion.pause('beforeSwipe')));
         if (stopRequested || !hasTimeRemaining(Date.now(), deadline)) break;
 
-        // Coordinate actions bypass XCTest's expensive application-element
-        // lookup, which can hang on TikTok's continuously updating feed.
-        await driver.performActions([{
-            type: 'pointer',
-            id: 'finger',
-            parameters: { pointerType: 'touch' },
-            actions: [
-                { type: 'pointerMove', duration: 0, x: swipeX, y: swipeStartY },
-                { type: 'pointerDown', button: 0 },
-                { type: 'pause', duration: 100 },
-                { type: 'pointerMove', duration: swipeDurationMs, x: swipeX, y: swipeEndY },
-                { type: 'pointerUp', button: 0 },
-            ],
-        }]);
-        await driver.releaseActions();
+        await swipeToNextVideo(driver);
         swipes += 1;
     }
 

@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import type { RegisteredDevice } from '../src/devices/registry.js';
 import type { DeviceDriver } from '../src/drivers/types.js';
+import { motionProfileFor } from '../src/motion/profile.js';
 import { automationFromDriver, createLogRedactor, pluginEnvironment, readinessProblem } from '../src/scheduler/executor.js';
 
 const ios: RegisteredDevice = { name: 'iphone', udid: 'UDID-1', wdaLocalPort: 8101, pluginData: {} };
@@ -47,15 +48,20 @@ test('a bridge device still needs adb, because launch, terminate and push fall b
 test('plugin environment is platform-specific and never leaks iOS variables to Android', () => {
     assert.deepEqual(pluginEnvironment(ios, '1234'), {
         DEVICE_UDID: 'UDID-1', DEVICE_PLATFORM: 'ios', DEVICE_DRIVER: 'wda',
+        MOTION_HAND: motionProfileFor('UDID-1').hand, MOTION_SPEED: motionProfileFor('UDID-1').speed,
         IOS_UDID: 'UDID-1', WDA_URL: 'http://127.0.0.1:8101', IOS_PASSCODE: '1234',
     });
     assert.deepEqual(pluginEnvironment(adb, undefined), {
         DEVICE_UDID: 'R58N1', DEVICE_PLATFORM: 'android', DEVICE_DRIVER: 'adb', ANDROID_SERIAL: 'R58N1',
+        MOTION_HAND: motionProfileFor('R58N1').hand, MOTION_SPEED: motionProfileFor('R58N1').speed,
     });
     assert.deepEqual(pluginEnvironment(bridge, undefined), {
         DEVICE_UDID: 'R58N1', DEVICE_PLATFORM: 'android', DEVICE_DRIVER: 'a11y-bridge', ANDROID_SERIAL: 'R58N1',
+        MOTION_HAND: motionProfileFor('R58N1').hand, MOTION_SPEED: motionProfileFor('R58N1').speed,
         A11Y_BRIDGE_URL: 'http://192.168.1.40:18300', A11Y_BRIDGE_TOKEN: 'secret',
     });
+    // One seed per execution, handed to the routine so its gestures replay.
+    assert.equal(pluginEnvironment(adb, undefined, '4242').MOTION_SEED, '4242');
 });
 
 test('the legacy automation surface forwards to the driver', async () => {
