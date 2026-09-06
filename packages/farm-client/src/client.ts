@@ -14,6 +14,7 @@ import type {
     Bootstrap,
     BulkScheduleInput,
     BulkScheduleResult,
+    ContentLibraryItem,
     ContentQueueItem,
     CreateScheduleInput,
     DeviceConnectionStatus,
@@ -39,6 +40,7 @@ import type {
     TimelineQuery,
 } from './models';
 import { SseClient, type SseStatus } from './sse';
+import { abortUpload, uploadAsset, type UploadAssetOptions, type UploadFile } from './uploads';
 
 /** What React Native's `<Image>` needs. Headers because auth is a bearer token. */
 export interface ImageRef {
@@ -123,6 +125,14 @@ export interface FarmClient {
     deletePushRegistration(id: string): Promise<void>;
 
     listContentQueue(): Promise<{ items: ContentQueueItem[] }>;
+    /**
+     * Adds a clip to the library through the chunked protocol, so a phone on a
+     * flaky connection resumes instead of starting over. `onSession` hands back
+     * the id to persist for that resume.
+     */
+    uploadAsset(file: UploadFile, options?: UploadAssetOptions): Promise<ContentLibraryItem>;
+    /** Drops a session started by `uploadAsset` and never finished. */
+    abortUpload(uploadId: string): Promise<void>;
     approveContentItem(id: string): Promise<ContentQueueItem>;
     skipContentItem(id: string): Promise<ContentQueueItem>;
     assetThumbnailRef(assetId: string): ImageRef;
@@ -344,6 +354,14 @@ export class FarmHttpClient implements FarmClient {
             uri: this.http.url(`/api/assets/${encodeURIComponent(assetId)}/thumbnail`),
             headers: this.http.imageHeaders(),
         };
+    }
+
+    uploadAsset(file: UploadFile, options: UploadAssetOptions = {}): Promise<ContentLibraryItem> {
+        return uploadAsset(this.http, file, options);
+    }
+
+    abortUpload(uploadId: string): Promise<void> {
+        return abortUpload(this.http, uploadId);
     }
 }
 
