@@ -68,6 +68,7 @@ function fakeDriver(recorded: DriverCalls, root: UiNode | undefined = tree, over
         async terminateApp() {},
         async tap(point) { recorded.taps.push(point); },
         async swipe(swipe) { recorded.swipes.push(swipe); },
+        async gesture() {},
         async type(text) { recorded.typed.push(text); },
         async pressKey(key) { recorded.keys.push(key); },
         async screenshot() { return PNG; },
