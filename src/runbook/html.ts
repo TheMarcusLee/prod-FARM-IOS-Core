@@ -198,7 +198,7 @@ function recordControl(runbook: Runbook, devices: readonly RegisteredDevice[], r
 <form class="bl-inline-form" hx-post="${ROUTE_PREFIX}/runbooks/${escapeHtml(runbook.id)}/record/start-form" hx-target="#runbook-editor" hx-swap="outerHTML">
 <label class="bl-field"><span>Phone</span><select class="bl-select" name="udid">${deviceOptions(devices, runbook.createdFor.udid)}</select></label>
 <button class="bl-btn" type="submit"${devices.length ? '' : ' disabled'}>${icon('play')}Record what I do next</button>
-<button class="bl-btn bl-btn-primary" type="submit" formaction="${ROUTE_PREFIX}/runbooks/${escapeHtml(runbook.id)}/try"
+<button class="bl-btn bl-btn-primary" type="button"
  hx-post="${ROUTE_PREFIX}/runbooks/${escapeHtml(runbook.id)}/try" hx-target="#runbook-run" hx-swap="outerHTML"${runbook.steps.length ? '' : ' disabled'}>Run it on this phone now</button>
 <a class="bl-btn" href="${ROUTE_PREFIX}/runbooks/${escapeHtml(runbook.id)}/export">Export</a>
 </form></div></section>`;

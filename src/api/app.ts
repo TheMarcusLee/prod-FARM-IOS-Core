@@ -1066,7 +1066,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
             body: renderControlCenter(data),
             toolbar: wallToolbar(),
             toolbarRight: `${wallToolbarRight()}${AVATAR}`,
-            head: scriptTag('wall.js'),
+            head: `${scriptTag('wall.js')}<link rel="stylesheet" href="/assets/pages.css">`,
         }, data.read));
     });
 
@@ -1123,7 +1123,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
                 title: `${number} ${device.name}`.trim(), active: 'devices', body,
                 toolbar: `<a class="bl-btn" href="/">${icon('chevronLeft')}Control Center</a>`,
                 toolbarRight: wall ? stateBadge(wall.state) : '',
-                head: scriptTag('device.js'),
+                head: `${scriptTag('device.js')}<link rel="stylesheet" href="/assets/pages.css">`,
             }, read));
         }
         return reply.type('text/html').send(renderPage(device.name,
