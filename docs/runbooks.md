@@ -62,6 +62,63 @@ on the runbook's page opens the step table, with types, retries, timeouts and th
 Every sentence also has a **Details** disclosure holding its step JSON. Nobody has to look, and
 nothing is hidden from whoever wants to.
 
+## Starter runbooks
+
+A fresh farm's Runbooks page is not empty. Ten flows are shipped with Backline as JSON under
+`src/runbook/templates/`, and seeded into `SCHEDULER_DATA_DIR/runbooks` on first boot:
+
+| Runbook | Platform | Asks for | What it does |
+| --- | --- | --- | --- |
+| Warm-up scroll | Android, iPhone | `scrolls` | Opens TikTok, waits for the feed, scrolls it that many times |
+| Post from Recents | Android, iPhone | `caption` | Create → Upload → the newest clip → Next → caption → Post → the upload confirmation |
+| Save to drafts | Android, iPhone | `caption` | The same, up to the caption, then Drafts |
+| Follow-back sweep | Android | `follows` | Opens the inbox and taps Follow back on that many rows |
+| Search a niche | Android | `term`, `scrolls` | Searches, opens the top result, watches a few, comes back |
+| Clear notifications | Android | — | Opens the inbox, scrolls the activity list so it is all seen |
+| Switch account | Android | `handle` | Profile → account switcher → the row for that handle |
+
+A seeded copy is an **ordinary runbook**: its own id, editable, deletable, renameable. The one
+thing it keeps is `template`, the name of the flow it came from — which is what puts the
+**Starter** badge on it in the list, and what groups the shipped ones above your own.
+
+**Seeding never overwrites.** A template whose name is already present on disk is skipped
+entirely, edits and all, so the first-boot install is safe to run on every boot. **Restore starter
+runbooks** on the Runbooks page (or `POST /api/runbooks/templates/install`) runs the same thing on
+demand: it puts back the ones you deleted and leaves the ones you changed alone. Deleting a starter
+and pressing Restore is therefore how you get a clean copy back.
+
+### Unverified labels
+
+TikTok's resource-ids and button texts move between builds, regions and A/B buckets, and nobody
+can know them without a phone in hand. Every label in a starter runbook that was written from
+memory rather than read off a device carries `guess: true`, and reads back with **(unverified)** on
+the end of its sentence:
+
+```
+Tapped Inbox (unverified)
+Waited for “followed you” to appear (unverified)
+Tapped Follow back, as many times as the follows says (unverified)
+```
+
+That is the checklist for the first session with real hardware: run each starter once, and every
+sentence that fails is a label to correct. Amber steps offer **Pick the label** over the texts that
+were on screen when it was written down, so most corrections are one click.
+
+The Android targets are the same ids and texts as the selector tables in
+`src/tiktok/android/post.ts` and `src/tiktok/android/doomscroll.ts` — correct both together. The
+iPhone versions have no tree to look things up in, so they are the fractions from the `iphone8`
+coordinate profile in `src/devices/coordinates.ts`; a different iPhone needs those re-pointed.
+
+### Repeating a step
+
+"Swipe up twelve times" is one step, not twelve. Any step takes `repeat` — a whole number up to 50,
+or a single blank, so the run asks how many times — and `repeatDelayMs`, the gap between
+repetitions. It narrates as *Swiped up, as many times as the scrolls says*.
+
+Repeating a tap on a **label** walks a list rather than hitting the same row: following the top
+"Follow back" row promotes the next one into first place, which is the whole of the follow-back
+sweep. A tap target's label may itself be a blank — that is how *Tapped the handle* works.
+
 ### Moving one between farms
 
 **Export** downloads a runbook as a `.json` file; **Import a file** on the Runbooks page reads one
@@ -100,8 +157,8 @@ migration. Copy one between farms with `scp`.
 | `assert` | `text` or `id`, `expect: present\|absent` | Fails the run when the screen disagrees |
 | `screenshot` | `label` | Captured into the execution log |
 
-Every step also takes `retries` (0–10), `retryDelayMs`, and `optional` — none of which the
-recording flow shows anyone. An **optional** step that
+Every step also takes `retries` (0–10), `retryDelayMs`, `repeat` (a count or a blank),
+`repeatDelayMs`, `guess` and `optional` — none of which the recording flow shows anyone. An **optional** step that
 keeps failing is logged and skipped instead of failing the run — the right setting for cookie
 banners, "rate this app" prompts and other things that only sometimes appear.
 
@@ -114,7 +171,8 @@ A tap target is `{ id?, text?, description?, fraction: { x, y } }`, resolved **i
 3. OCR, when a recognizer is available, for screens that draw their own controls.
 4. `fraction` — the recorded position, scaled to the target device's screen.
 
-The tap lands on the nearest *clickable* ancestor of the match, not on the label inside it. A step
+A target's `text` may hold a blank, filled in per run like a typed line. The tap lands on the
+nearest *clickable* ancestor of the match, not on the label inside it. A step
 also carries `seen`, the texts that were on screen when it was recorded, and a `type` step carries
 `fixed` once the "does it change?" question has been answered.
 
@@ -173,6 +231,7 @@ is reported as stopped rather than failed.
 | `PUT` | `/api/runbooks/:id` | Full replace, fully validated |
 | `DELETE` | `/api/runbooks/:id` | Delete (refused while recording) |
 | `POST` | `/api/runbooks/:id/duplicate` | Copy, for a variant flow |
+| `POST` | `/api/runbooks/templates/install` | Restore the starter library; never overwrites |
 | `POST` | `/api/runbooks/:id/record/start` | `{ udid }` |
 | `POST` | `/api/runbooks/:id/record/stop` | — |
 | `POST` | `/api/runbooks/:id/steps` | `{ action }` — called by the device page while recording |

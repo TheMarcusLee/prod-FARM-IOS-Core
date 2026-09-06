@@ -21,7 +21,8 @@ import {
 } from '../src/runbook/narrate.js';
 import { createRecorder, stepFromAction, targetAtPoint, validateRemoteAction } from '../src/runbook/recorder.js';
 import { RunbookStepError, replayRunbook, resolveTapPoint } from '../src/runbook/replay.js';
-import { devicePanelFragment, runbookListFragment, scriptLiteral } from '../src/runbook/html.js';
+import { devicePanelFragment, orderRunbooks, runbookListFragment, scriptLiteral } from '../src/runbook/html.js';
+import { describeInstall, installStarterRunbooks, loadStarterRunbooks } from '../src/runbook/starters.js';
 import { blankFields } from '../src/runbook/story.js';
 import { stepsFromForm } from '../src/runbook/routes.js';
 import { listRunbooks, readRunbook, writeRunbook } from '../src/runbook/store.js';
@@ -890,4 +891,122 @@ test('a failed runbook execution offers the operator somewhere to fix it', async
     assert.equal(failed.lastFailure?.stepIndex, 0);
     assert.equal(failed.lastFailure?.executionId, 'exec-1');
     assert.deepEqual(failed.lastFailure?.visibleTexts, ['Follow', 'Submit']);
+});
+
+/* ---- the starter library ----------------------------------------------- */
+
+test('every starter runbook validates and reads back as sentences', async () => {
+    const starters = await loadStarterRunbooks();
+    assert.ok(starters.length >= 10, `expected the whole starter library, got ${starters.length}`);
+
+    // One template name per file, and the iPhone versions of the three flows that have them.
+    const names = starters.map((starter) => starter.template!);
+    assert.equal(new Set(names).size, names.length, 'template names are unique');
+    for (const wanted of ['warm-up-scroll', 'post-from-recents', 'save-to-drafts', 'follow-back-sweep',
+        'search-a-niche', 'clear-notifications', 'switch-account',
+        'warm-up-scroll-ios', 'post-from-recents-ios', 'save-to-drafts-ios']) {
+        assert.ok(names.includes(wanted), `${wanted} is missing from the starter library`);
+    }
+    assert.deepEqual(
+        starters.filter((starter) => starter.platform === 'ios').map((starter) => starter.template),
+        ['post-from-recents-ios', 'save-to-drafts-ios', 'warm-up-scroll-ios'],
+    );
+
+    for (const starter of starters) {
+        assert.ok(starter.steps.length > 0, `${starter.template} has no steps`);
+        for (const [index, step] of starter.steps.entries()) {
+            const sentence = describeStep(step);
+            assert.ok(sentence.trim().length > 0, `${starter.template} step ${index + 1} narrates to nothing`);
+            assert.doesNotMatch(sentence, /\(nothing\)|undefined|\{\{/, `${starter.template} step ${index + 1}: ${sentence}`);
+            // A tap that only knows where it landed must offer something to pick from.
+            if (step.type === 'tap' && stepConfidence(step) === 'position') {
+                assert.ok(step.seen?.length, `${starter.template} step ${index + 1} has no labels to pick from`);
+            }
+        }
+        // The blanks are named, and each has an answer already in the box for the first run.
+        for (const name of variableNames(starter)) {
+            assert.ok(starter.lastValues?.[name], `${starter.template} does not suggest a ${name}`);
+        }
+    }
+});
+
+test('the starter library marks every label nobody has held a phone up to', async () => {
+    const guessed = new Set<string>();
+    for (const starter of await loadStarterRunbooks()) {
+        for (const step of starter.steps) if (step.guess) guessed.add(`${starter.template}: ${describeStep(step)}`);
+    }
+    assert.ok(guessed.size > 0);
+    for (const sentence of guessed) assert.match(sentence, /\(unverified\)$/);
+});
+
+test('seeding installs the starters once and never touches an edited copy', async () => {
+    const directory = path.join(workspace, 'starters');
+    const first = await installStarterRunbooks(directory);
+    assert.equal(first.kept.length, 0);
+    assert.equal(first.installed.length, (await loadStarterRunbooks()).length);
+    const installed = await listRunbooks(directory);
+    // A seeded copy is an ordinary runbook under its own fresh id.
+    assert.ok(installed.every((entry) => /^rb-[a-z0-9]+$/.test(entry.id)));
+    assert.ok(installed.every((entry) => entry.template));
+
+    const warmUp = installed.find((entry) => entry.template === 'warm-up-scroll')!;
+    await writeRunbook({ ...warmUp, name: 'My warm-up', steps: warmUp.steps.slice(0, 2) }, directory);
+
+    const second = await installStarterRunbooks(directory);
+    assert.deepEqual(second.installed, []);
+    assert.equal(second.kept.length, first.installed.length);
+    assert.equal((await listRunbooks(directory)).length, installed.length, 'seeding twice installs nothing twice');
+    const edited = (await readRunbook(warmUp.id, directory))!;
+    assert.equal(edited.name, 'My warm-up');
+    assert.equal(edited.steps.length, 2, 'an edited copy is left exactly as the operator left it');
+    assert.match(describeInstall(second), /already here/);
+});
+
+test('a repeated step runs its count, and a blank says how many times', async () => {
+    let recorded = calls();
+    const swipe: Step = {
+        type: 'swipe', from: { x: 0.5, y: 0.8 }, to: { x: 0.5, y: 0.2 }, durationMs: 300,
+        repeat: '{{scrolls}}', repeatDelayMs: 0,
+    };
+    assert.equal(describeStep(swipe), 'Swiped up, as many times as the scrolls says');
+    await replayRunbook(fakeDriver(recorded), runbook([swipe]), { vars: { scrolls: '4' } });
+    assert.equal(recorded.swipes.length, 4);
+
+    const fixed = await replayRunbook(fakeDriver(recorded = calls()), runbook([{ ...swipe, repeat: 3 }]), {});
+    assert.equal(fixed.stepsRun, 1);
+    assert.equal(recorded.swipes.length, 3);
+    assert.equal(describeStep({ ...swipe, repeat: 3 }), 'Swiped up, 3 times');
+
+    // A blank that is not a number of times is the operator's mistake, and is named as one.
+    await assert.rejects(
+        replayRunbook(fakeDriver(calls()), runbook([swipe]), { vars: { scrolls: 'lots' } }),
+        /"lots" is not a number of times between 1 and 50/,
+    );
+    assert.throws(() => validateStep({ type: 'wait', ms: 1, repeat: '{{a}} {{b}}' }, 0), /repeat must be a whole number/);
+});
+
+test('the Runbooks page badges the starters, groups them first, and restores them on demand', async (context) => {
+    const directory = path.join(workspace, 'starter-routes');
+    const app = await appWithRunbooks(directory);
+    context.after(() => app.close());
+
+    const restored = await inject(app, { method: 'POST', url: '/api/runbooks/templates/install' });
+    assert.equal(restored.statusCode, 200);
+    const count = (restored.json() as { installed: string[] }).installed.length;
+    assert.ok(count >= 10);
+    const again = (await inject(app, { method: 'POST', url: '/api/runbooks/templates/install' }))
+        .json() as { installed: string[]; kept: string[]; message: string };
+    assert.deepEqual(again.installed, [], 'restoring twice installs nothing twice');
+    assert.equal(again.kept.length, count);
+    assert.match(again.message, /already here/);
+
+    const mine = await writeRunbook(runbook([{ type: 'key', key: 'home' }], { id: 'rb-mine0001abc', name: 'Aardvark' }), directory);
+    const list = runbookListFragment(await listRunbooks(directory), []);
+    assert.match(list, />Starter</);
+    // "Aardvark" sorts first by name and last by kind: the shipped ones lead.
+    assert.ok(list.indexOf('Warm-up scroll') < list.indexOf(mine.name), 'the starters are grouped first');
+    assert.equal(orderRunbooks(await listRunbooks(directory)).at(-1)!.id, mine.id);
+
+    const page = await inject(app, { method: 'GET', url: '/runbooks' });
+    assert.match(page.body, /Restore starter runbooks/);
 });

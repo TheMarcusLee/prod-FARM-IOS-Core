@@ -7,7 +7,8 @@ import {
     DEFAULT_MOTION_EVENT_COST_MS, createAdbDriver, createMotionEventBudget, motionEventCommand, samplePath,
 } from '../src/drivers/adb.js';
 import type { CommandResult, CommandRunner } from '../src/drivers/common.js';
-import type { TimedPoint } from '../src/drivers/types.js';
+import type { DeviceDriver, TimedPoint } from '../src/drivers/types.js';
+import { humanTapAt, tapFirst } from '../src/tiktok/android/ui.js';
 import {
     PAUSE_SHAPES, SAMPLE_COUNT, SWIPE_DURATION_MS, THUMB_ZONE,
     humanTap, pathKey, pauseCeilingMs, pauseMs, thumbSwipe,
@@ -317,4 +318,44 @@ test('the start jitter is seeded, spread, and never reaches the run-window deadl
     assert.deepEqual(parseStartJitterMinutes('2-5'), { min: 2, max: 5 });
     assert.throws(() => parseStartJitterMinutes('5-2'), /RUN_START_JITTER_MINUTES/);
     assert.throws(() => parseStartJitterMinutes('soon'), /RUN_START_JITTER_MINUTES/);
+});
+
+test('a routine tap is jittered, pressed, and the same on every run of the same seed', async () => {
+    const hand = () => createMotionSource({ udid: 'R58N1ABCDE', seed: 'tap-jitter' });
+    const played: TimedPoint[][] = [];
+    const driver = {
+        udid: 'R58N1ABCDE', kind: 'adb', platform: 'android',
+        gesture: async (path: TimedPoint[]) => { played.push(path); },
+        uiTree: async () => ({
+            id: 'com.app:id/like', type: 'View', text: 'Like', description: '',
+            bounds: { left: 900, top: 1000, right: 1000, bottom: 1100 },
+            clickable: true, enabled: true, children: [],
+        }),
+        screen: async () => ({ width: 1080, height: 2400, scale: 1 }),
+    } as unknown as DeviceDriver;
+
+    const centre = { x: 950, y: 1050 };
+    for (const source of [hand(), hand()]) {
+        for (let index = 0; index < 40; index += 1) await humanTapAt(driver, centre, source);
+    }
+    assert.equal(played.length, 80);
+    // The same seed lands in the same pixels, in the same order.
+    assert.deepEqual(played.slice(0, 40), played.slice(40));
+
+    for (const [down, up] of played) {
+        assert.ok(Math.abs(down!.x - centre.x) <= 6 && Math.abs(down!.y - centre.y) <= 6, 'jitter stays within a few pixels');
+        assert.deepEqual({ x: down!.x, y: down!.y }, { x: up!.x, y: up!.y }, 'a press does not move');
+        assert.equal(down!.t, 0);
+        assert.ok(up!.t >= 40 && up!.t <= 120, `${up!.t} ms is not a human press`);
+    }
+    // No two taps in a row land on exactly the same pixel; that is what the jitter is for.
+    assert.ok(new Set(played.slice(0, 40).map(([point]) => `${point!.x},${point!.y}`)).size > 20);
+
+    // A tap through the selector table goes down the same channel.
+    played.length = 0;
+    await tapFirst(driver, 'Like', [{ id: 'like' }], { motion: hand() });
+    assert.equal(played.length, 1);
+    assert.deepEqual(played[0]!.map(({ x, y }) => ({ x, y })), [
+        { x: played[0]![0]!.x, y: played[0]![0]!.y }, { x: played[0]![0]!.x, y: played[0]![0]!.y },
+    ]);
 });
