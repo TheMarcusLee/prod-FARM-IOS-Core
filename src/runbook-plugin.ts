@@ -7,9 +7,9 @@ import type { PhoneFarmPlugin, TaskDefinition } from './plugin.js';
 import type { JsonObject, JsonValue } from './types.js';
 import { platformCompatible, validateRunbookId, variableNames, type RunbookRunStatus } from './runbook/model.js';
 import { recognizeOnDevice } from './runbook/ocr.js';
-import { replayRunbook } from './runbook/replay.js';
+import { replayRunbook, RunbookStepError } from './runbook/replay.js';
 import { registerRunbookRoutes } from './runbook/routes.js';
-import { mutateRunbook, readRunbook, runbookExists } from './runbook/store.js';
+import { mutateRunbook, readRunbook, runbookExists, writeFailureScreenshot } from './runbook/store.js';
 
 export const RUNBOOK_PLUGIN_ID = 'com.farm.runbook';
 
@@ -43,6 +43,30 @@ function validateVars(value: JsonValue | undefined): Record<string, string> | un
     return vars;
 }
 
+/**
+ * What a failed replay leaves behind for the operator: which sentence gave up, what the phone
+ * showed, and the picture the replay took. The runbook page opens at exactly this.
+ */
+async function rememberFailure(
+    runbookId: string, error: unknown, executionId: string, deviceUdid: string, directory?: string,
+): Promise<void> {
+    if (!(error instanceof RunbookStepError)) return;
+    try {
+        const screenshot = error.screenshot
+            ? await writeFailureScreenshot(runbookId, error.screenshot, directory).catch(() => undefined)
+            : undefined;
+        await mutateRunbook(runbookId, (stored) => {
+            stored.lastFailure = {
+                stepIndex: error.stepIndex, reason: error.reason, visibleTexts: error.visibleTexts,
+                at: new Date().toISOString(), executionId, deviceUdid,
+                ...(screenshot ? { screenshot } : {}),
+            };
+        }, directory);
+    } catch {
+        // A runbook deleted mid-run has nothing to annotate.
+    }
+}
+
 function createRunTask(configuration: RunbookPluginConfiguration): TaskDefinition<RunPayload> {
     return {
         type: 'run',
@@ -63,6 +87,9 @@ function createRunTask(configuration: RunbookPluginConfiguration): TaskDefinitio
         estimateDurationMs: () => 120_000,
         retryPolicy: () => ({ retryLimit: 1, retryDelaySeconds: 60, retryBackoff: false }),
         supportsStop: () => true,
+        // Where a failure is repaired: the runbook's own page, which opens at the sentence that
+        // gave up, with the picture the replay took beside it.
+        fixUrl: (payload) => `/runbooks/${payload.runbookId}#runbook-story`,
         async execute(context, payload) {
             /**
              * The list page's last column answers "does this still work, and when did it last?",
@@ -102,6 +129,8 @@ function createRunTask(configuration: RunbookPluginConfiguration): TaskDefinitio
                     signal: context.signal,
                     log: (line) => context.log(line),
                 });
+                await mutateRunbook(payload.runbookId, (stored) => { delete stored.lastFailure; }, configuration.directory)
+                    .catch(() => undefined);
                 await record(result.stopped ? 'stopped' : 'succeeded');
                 return { exitCode: result.stopped ? null : 0, stopped: result.stopped };
             } catch (error) {
@@ -110,6 +139,8 @@ function createRunTask(configuration: RunbookPluginConfiguration): TaskDefinitio
                     return { exitCode: null, stopped: true };
                 }
                 await record('failed');
+                await rememberFailure(payload.runbookId, error, context.executionId, context.device.udid,
+                    configuration.directory);
                 return { exitCode: null, stopped: false, error: error instanceof Error ? error.message : String(error) };
             }
         },

@@ -178,3 +178,37 @@
 .bl-rb-live li { padding: 4px 0; border-bottom: 1px solid var(--bl-hairline); }
 .bl-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
 .bl-form-actions { display: flex; gap: 8px; margin-top: 12px; }
+
+/* The runbook as a story: one sentence per recorded step, a dot for how sure the
+   recorder is, and everything else folded away behind a summary. */
+.bl-rb-story { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.bl-rb-line { display: flex; align-items: flex-start; gap: 10px; padding: 9px 2px; border-bottom: 1px solid var(--bl-hairline); font-size: 13.5px; }
+.bl-rb-line:last-child { border-bottom: 0; }
+.bl-rb-line > .bl-dot { margin-top: 6px; flex: none; }
+.bl-rb-line-body { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.bl-rb-line-state { flex: none; font-size: 11.5px; color: var(--bl-text-4); text-transform: lowercase; }
+.bl-rb-line.is-running { background: var(--bl-accent-soft); border-radius: 8px; }
+.bl-rb-line.is-running .bl-rb-sentence { font-weight: 600; }
+.bl-rb-line.is-done .bl-rb-sentence { color: var(--bl-text-3); }
+.bl-rb-line.is-broken, .bl-rb-line.is-failed { background: var(--bl-bad-soft); border-radius: 8px; }
+.bl-rb-sentence { color: var(--bl-text); }
+.bl-rb-details, .bl-rb-fix { font-size: 12px; color: var(--bl-text-3); }
+.bl-rb-details summary, .bl-rb-fix summary { cursor: pointer; color: var(--bl-text-4); }
+.bl-rb-details pre { margin: 6px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--bl-panel-2); overflow-x: auto; font-size: 11.5px; }
+.bl-rb-picks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.bl-rb-ask { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12.5px; color: var(--bl-text-3); }
+.bl-rb-blank-name { display: flex; align-items: center; gap: 6px; }
+.bl-rb-blank-name .bl-input { width: 140px; height: 28px; font-size: 12px; }
+.bl-rb-repair { display: flex; gap: 16px; margin-top: 14px; padding: 12px; border-radius: 10px; background: var(--bl-bad-soft); border: 1px solid var(--bl-bad-line); }
+.bl-rb-repair-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; font-size: 12.5px; }
+.bl-rb-repair-shot { flex: none; width: 180px; }
+.bl-rb-shot { width: 100%; border-radius: 10px; border: 1px solid var(--bl-line); display: block; }
+.bl-rb-try { display: flex; gap: 16px; align-items: flex-start; }
+.bl-rb-try-screen { flex: none; width: 200px; display: flex; }
+.bl-rb-try-story { flex: 1; min-width: 0; }
+.bl-rb-run-head { margin-bottom: 8px; }
+.bl-rb-power { padding: 0; }
+.bl-rb-power > summary { padding: 12px 14px; cursor: pointer; font-weight: 600; }
+.bl-rb-import { display: inline-flex; }
+.bl-rb-import .bl-btn { cursor: pointer; }
+.bl-rb-name .bl-field { flex: 1 1 220px; }

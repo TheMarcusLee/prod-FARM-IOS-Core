@@ -653,14 +653,16 @@ export async function registerRunbookRoutes(context: PluginRouteContext, options
                         if (label === 'failure') await writeFailureScreenshot(runbook.id, png, directory).catch(() => undefined);
                     },
                 });
-                run.outcome = result.stopped ? 'stopped' : 'succeeded';
+                // Stamped before the run is announced as over, so what the page says and what the
+                // list page reads back can never disagree.
+                const outcome = result.stopped ? 'stopped' : 'succeeded';
                 await mutateRunbook(runbook.id, (stored) => {
                     stored.lastRunAt = new Date().toISOString();
-                    stored.lastRunStatus = run.outcome === 'stopped' ? 'stopped' : 'succeeded';
-                    if (run.outcome === 'succeeded') delete stored.lastFailure;
-                }, directory);
+                    stored.lastRunStatus = outcome;
+                    if (outcome === 'succeeded') delete stored.lastFailure;
+                }, directory).catch(() => undefined);
+                run.outcome = outcome;
             } catch (error) {
-                run.outcome = 'failed';
                 run.error = errorMessage(error);
                 if (error instanceof RunbookStepError) {
                     run.failedIndex = error.stepIndex;
@@ -676,6 +678,7 @@ export async function registerRunbookRoutes(context: PluginRouteContext, options
                         };
                     }, directory).catch(() => undefined);
                 }
+                run.outcome = 'failed';
             }
         })();
         return run;

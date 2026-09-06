@@ -11,12 +11,20 @@ import type { TaskExecutionContext } from '../src/plugin.js';
 import type { JsonValue } from '../src/types.js';
 import { PluginRegistry } from '../src/registry.js';
 import type { SchedulerRepository } from '../src/scheduler/repository.js';
-import { applyVariables, validateRunbook, validateStep, type Runbook, type Step } from '../src/runbook/model.js';
-import { stepFromAction, targetAtPoint, validateRemoteAction } from '../src/runbook/recorder.js';
+import { visibleTexts } from '../src/drivers/verify.js';
+import { safeFixUrl } from '../src/fleet/scheduler-events.js';
+import {
+    applyVariables, validateRunbook, validateStep, variableNames, type Runbook, type Step,
+} from '../src/runbook/model.js';
+import {
+    autoWaitStep, confidenceWords, describeStep, newTexts, stepConfidence,
+} from '../src/runbook/narrate.js';
+import { createRecorder, stepFromAction, targetAtPoint, validateRemoteAction } from '../src/runbook/recorder.js';
 import { RunbookStepError, replayRunbook, resolveTapPoint } from '../src/runbook/replay.js';
 import { devicePanelFragment, runbookListFragment, scriptLiteral } from '../src/runbook/html.js';
+import { blankFields } from '../src/runbook/story.js';
 import { stepsFromForm } from '../src/runbook/routes.js';
-import { readRunbook, writeRunbook } from '../src/runbook/store.js';
+import { listRunbooks, readRunbook, writeRunbook } from '../src/runbook/store.js';
 import { createRunbookPlugin } from '../src/runbook-plugin.js';
 
 process.env.ANDROID_DISCOVERY = 'off';
@@ -77,6 +85,27 @@ function fakeDriver(recorded: DriverCalls, root: UiNode | undefined = tree, over
         async pause() {},
         ...overrides,
     };
+}
+
+/** Polls until something is there, so a test never races an in-process replay. */
+async function until<T>(read: () => Promise<T | undefined>, timeoutMs = 5_000): Promise<T> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+        const value = await read();
+        if (value !== undefined) return value;
+        if (Date.now() > deadline) throw new Error('Timed out waiting for the run to finish');
+        await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+}
+
+/** A multipart body with one file field, built by hand so no test dependency is needed. */
+function multipart(field: string, filename: string, content: string): {
+    payload: Buffer; headers: Record<string, string>;
+} {
+    const boundary = '----BacklineRunbookTest';
+    const body = `--${boundary}\r\nContent-Disposition: form-data; name="${field}"; filename="${filename}"\r\n`
+        + `Content-Type: application/json\r\n\r\n${content}\r\n--${boundary}--\r\n`;
+    return { payload: Buffer.from(body), headers: { 'content-type': `multipart/form-data; boundary=${boundary}` } };
 }
 
 function runbook(steps: Step[], overrides: Partial<Runbook> = {}): Runbook {
@@ -335,7 +364,11 @@ test('the routes create a runbook, record enriched steps into it, and serve the 
         method: 'POST', url: `/api/runbooks/${id}/steps`, payload: { action: { type: 'tap', x: 200, y: 100 } },
     });
     assert.equal(step.statusCode, 201);
-    assert.deepEqual((step.json() as { step: Step }).step, { type: 'tap', target: { text: 'Follow', fraction: { x: 0.18519, y: 0.04167 } } });
+    assert.deepEqual((step.json() as { step: Step }).step, {
+        type: 'tap', target: { text: 'Follow', fraction: { x: 0.18519, y: 0.04167 } },
+        // What was on screen, kept so "pick the label" can offer it later without the phone.
+        seen: ['Follow', 'Submit'],
+    });
 
     const refused = await inject(app, {
         method: 'POST', url: `/api/runbooks/${id}/steps`, payload: { action: { type: 'unlock' } },
@@ -360,17 +393,25 @@ test('the routes create a runbook, record enriched steps into it, and serve the 
     assert.doesNotMatch(page.body, /iOS Farm|Phone Farm|Handler|Agniverse|gethandler/);
 
     const editor = await inject(app, { method: 'GET', url: `/runbooks/${id}` });
-    assert.match(editor.body, /Save steps/);
+    assert.match(editor.body, /Save steps/, 'the raw steps are still there, folded away');
     assert.match(editor.body, /class="bl-steps"/);
-    assert.match(editor.body, /Start recording/, 'the record toggle lives on the editor too');
+    assert.match(editor.body, /Record what I do next/, 'recording starts from the editor too');
+    assert.match(editor.body, /Run it on this phone now/);
+    assert.match(editor.body, /Tapped Follow/, 'the step reads as a sentence');
+    assert.match(editor.body, /Recorded on Pixel 7 · works on Android; iPhone untested/);
     assert.match(editor.body, /\/assets\/pages\.css/);
+
+    // The story is sentences and nothing else: no step types, no tables, no braces.
+    const story = await inject(app, { method: 'GET', url: `/plugins/com.farm.runbook/runbooks/${id}/story` });
+    assert.match(story.body, /Tapped Follow/);
+    assert.doesNotMatch(story.body, /<table|<select|timeoutMs=|name="step\./);
 
     const script = await inject(app, { method: 'GET', url: '/assets/runbooks.js' });
     assert.equal(script.statusCode, 200);
     assert.match(String(script.headers['content-type']), /javascript/);
 
     const panel = await inject(app, { method: 'GET', url: `/plugins/com.farm.runbook/devices/${SERIAL}/panel` });
-    assert.match(panel.body, /Start recording/);
+    assert.match(panel.body, /Record what I do next/);
     assert.match(panel.body, /id="runbook-panel"/);
     assert.match(panel.body, /class="bl-inline-form"/, 'the panel fragment is on the tokens');
 
@@ -384,9 +425,9 @@ test('the routes create a runbook, record enriched steps into it, and serve the 
     assert.match(recording.body, /bl-rb-banner/);
     assert.match(recording.body, /Recording on Pixel 7/);
     const editorAfterStop = await inject(app, {
-        method: 'POST', url: `/plugins/com.farm.runbook/runbooks/${id}/record/stop-form`, payload: {},
+        method: 'POST', url: `/plugins/com.farm.runbook/runbooks/${id}/done`, payload: {},
     });
-    assert.match(editorAfterStop.body, /Start recording/);
+    assert.match(editorAfterStop.body, /Record what I do next/);
     assert.doesNotMatch(editorAfterStop.body, /bl-rb-banner/);
 
     const run = await inject(app, {
@@ -461,7 +502,7 @@ test('the recording flag is escaped for the script it lands in, not for HTML', (
     const hostile = "x'; document.body.remove(); //</script><img src=x onerror=alert(1)>";
     const panel = devicePanelFragment(
         'udid-1', [],
-        { runbookId: hostile, udid: 'udid-1', screen: { width: 1, height: 1, scale: 1 }, startedAt: '', steps: 0 },
+        { runbookId: hostile, udid: 'udid-1', screen: { width: 1, height: 1, scale: 1 }, texts: [], startedAt: '', steps: 0 },
         undefined,
     );
     assert.ok(!panel.includes('</script><img'), 'the element must not be closed early');
@@ -522,4 +563,328 @@ test('a rejected runbook body is a 400 that names the field', async (context) =>
     });
     assert.equal(badPlatform.statusCode, 400);
     assert.match((badPlatform.json() as { error: string }).error, /platform/);
+});
+
+/* ---- the simple flow: sentences, auto-waits, blanks, try it now -------- */
+
+test('every step type reads back as a plain sentence', () => {
+    const sentences = ([
+        { type: 'launchApp', appId: 'com.zhiliaoapp.musically' },
+        { type: 'tap', target: { text: 'Create', fraction: { x: 0.5, y: 0.9 } } },
+        { type: 'tap', target: { id: 'com.app:id/follow_row', fraction: { x: 0.5, y: 0.1 } } },
+        { type: 'tap', target: { fraction: { x: 0.5, y: 0.82 } } },
+        { type: 'swipe', from: { x: 0.5, y: 0.8 }, to: { x: 0.5, y: 0.2 }, durationMs: 300 },
+        { type: 'swipe', from: { x: 0.2, y: 0.5 }, to: { x: 0.8, y: 0.5 }, durationMs: 300 },
+        { type: 'type', text: 'hello farm' },
+        { type: 'type', text: '{{caption}}' },
+        { type: 'key', key: 'back' },
+        { type: 'key', key: 'home' },
+        { type: 'wait', ms: 2_000 },
+        { type: 'waitForText', text: 'Upload', timeoutMs: 15_000 },
+        { type: 'assert', text: 'Done', expect: 'present' },
+        { type: 'assert', id: 'com.app:id/spinner', expect: 'absent' },
+        { type: 'screenshot', label: 'after' },
+    ] as Step[]).map((step) => describeStep(step));
+
+    assert.deepEqual(sentences, [
+        'Opened TikTok',
+        'Tapped Create',
+        'Tapped Follow row',
+        'Tapped the screen 50% across, 82% down',
+        'Swiped up',
+        'Swiped right',
+        'Typed “hello farm”',
+        'Typed the caption',
+        'Pressed back',
+        'Went to the home screen',
+        'Waited 2 seconds',
+        'Waited for “Upload” to appear',
+        'Checked that “Done” is on screen',
+        'Checked that Spinner is gone',
+        'Took a picture of the screen (after)',
+    ]);
+    // Nothing an operator reads mentions the engine.
+    for (const sentence of sentences) assert.doesNotMatch(sentence, /\{\{|timeout|retr|step type/i);
+});
+
+test('a tap keeps its confidence: green by name, amber by position alone', () => {
+    assert.equal(stepConfidence({ type: 'tap', target: { id: 'com.app:id/submit', fraction: { x: 0, y: 0 } } }), 'sure');
+    assert.equal(stepConfidence({ type: 'tap', target: { text: 'Follow', fraction: { x: 0, y: 0 } } }), 'sure');
+    assert.equal(stepConfidence({ type: 'tap', target: { fraction: { x: 0.5, y: 0.5 } } }), 'position');
+    assert.equal(stepConfidence({ type: 'key', key: 'home' }), 'sure');
+    assert.match(confidenceWords({ type: 'tap', target: { fraction: { x: 0, y: 0 } } }), /pick the label/);
+});
+
+test('a screen that changed between two actions earns a wait, a screen that barely moved does not', () => {
+    const before = node({
+        bounds: { left: 0, top: 0, right: 1080, bottom: 2400 },
+        children: [node({ text: 'For You' }), node({ text: 'Following' }), node({ text: 'Likes 41' })],
+    });
+    const after = node({
+        bounds: { left: 0, top: 0, right: 1080, bottom: 2400 },
+        children: [node({ text: 'For You' }), node({ text: 'Upload a video' }), node({ text: 'Choose from gallery' })],
+    });
+    const wait = autoWaitStep(visibleTexts(before), visibleTexts(after));
+    assert.deepEqual(wait, {
+        type: 'waitForText', text: 'Upload a video', timeoutMs: 15_000,
+        seen: ['Upload a video', 'Choose from gallery'],
+    });
+    assert.equal(describeStep(wait!), 'Waited for “Upload a video” to appear');
+
+    // One counter ticking over is not a new screen.
+    const twitch = node({
+        bounds: { left: 0, top: 0, right: 1080, bottom: 2400 },
+        children: [node({ text: 'For You' }), node({ text: 'Following' }), node({ text: 'Likes 42' })],
+    });
+    assert.equal(autoWaitStep(visibleTexts(before), visibleTexts(twitch)), undefined);
+    assert.deepEqual(newTexts(['A', 'B'], ['b', 'C']), ['C']);
+});
+
+test('recording inserts the wait it earned in front of the next action', async () => {
+    const first = node({ bounds: { left: 0, top: 0, right: 1080, bottom: 2400 }, children: [node({ text: 'Feed' })] });
+    const second = node({
+        bounds: { left: 0, top: 0, right: 1080, bottom: 2400 },
+        children: [node({ text: 'Upload a video' }), node({ text: 'Choose from gallery' })],
+    });
+    let root = first;
+    const recorder = createRecorder();
+    const driver = fakeDriver(calls(), first, { async uiTree() { return root; } });
+    const session = await recorder.start(SERIAL, 'rb-test0001abcd', driver);
+
+    const one = await recorder.record(session, { type: 'tap', x: 100, y: 100 }, driver);
+    assert.deepEqual(one.map((step) => step.type), ['tap'], 'the first action has nothing in front of it');
+    root = second;
+    // The tree the recorder re-reads after that tap is the new screen, so the next action waits.
+    await recorder.record(session, { type: 'home' }, driver);
+    root = second;
+    const three = await recorder.record(session, { type: 'tap', x: 200, y: 200 }, driver);
+    assert.deepEqual(three.map((step) => step.type), ['waitForText', 'tap']);
+    assert.equal(describeStep(three[0]!), 'Waited for “Upload a video” to appear');
+    // The action carries what was on screen, which is what "pick the label" offers.
+    assert.deepEqual(three[1]!.seen, ['Upload a video', 'Choose from gallery']);
+});
+
+test('a typed line becomes a named blank, and the run form asks for it with last time’s answer', async (context) => {
+    const directory = path.join(workspace, 'blanks');
+    const app = await appWithRunbooks(directory);
+    context.after(() => app.close());
+    const stored = await writeRunbook(runbook([
+        { type: 'type', text: 'gym pov day 14' },
+        { type: 'type', text: 'always this' },
+    ], { id: 'rb-blank0001a' }), directory);
+
+    // The question is asked inline, in words, on the runbook's own page.
+    const page = await inject(app, { method: 'GET', url: `/runbooks/${stored.id}` });
+    assert.match(page.body, /Is this always the same, or does it change each run\?/);
+
+    const changed = await inject(app, {
+        method: 'POST', url: `/plugins/com.farm.runbook/runbooks/${stored.id}/steps/0/blank`,
+        payload: 'answer=changes&name=caption', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    });
+    assert.match(changed.body, /Typed the caption/);
+    const same = await inject(app, {
+        method: 'POST', url: `/plugins/com.farm.runbook/runbooks/${stored.id}/steps/1/blank`,
+        payload: 'answer=same', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    });
+    assert.doesNotMatch(same.body, /Is this always the same/, 'both lines have been answered');
+
+    const saved = (await readRunbook(stored.id, directory))!;
+    assert.equal((saved.steps[0] as { text: string }).text, '{{caption}}');
+    assert.deepEqual(variableNames(saved), ['caption']);
+    // The value it had when it became a blank is what the form offers next time.
+    assert.equal(saved.lastValues?.caption, 'gym pov day 14');
+    assert.match(blankFields(saved), /name="vars\.caption"/);
+    assert.match(blankFields(saved), /value="gym pov day 14"/);
+    assert.doesNotMatch(blankFields(saved), /\{\{/, 'nobody types braces');
+
+    const badName = await inject(app, {
+        method: 'POST', url: `/plugins/com.farm.runbook/runbooks/${stored.id}/steps/0/blank`,
+        payload: 'answer=changes&name=not a name', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    });
+    assert.match(badName.body, /A blank is named with letters/);
+});
+
+test('an amber step is repaired by picking a label the screen actually showed', async (context) => {
+    const directory = path.join(workspace, 'pick');
+    const app = await appWithRunbooks(directory);
+    context.after(() => app.close());
+    const stored = await writeRunbook(runbook([
+        { type: 'tap', target: { fraction: { x: 0.5, y: 0.8 } }, seen: ['Follow', 'Submit'] },
+    ], { id: 'rb-pick0001ab' }), directory);
+
+    const offered = await inject(app, { method: 'GET', url: `/plugins/com.farm.runbook/runbooks/${stored.id}/story` });
+    assert.match(offered.body, /Pick the label/);
+    assert.match(offered.body, /value="Follow"/);
+
+    const picked = await inject(app, {
+        method: 'POST', url: `/plugins/com.farm.runbook/runbooks/${stored.id}/steps/0/target`,
+        payload: 'text=Follow', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    });
+    assert.match(picked.body, /Tapped Follow/);
+    assert.deepEqual((await readRunbook(stored.id, directory))!.steps[0], {
+        type: 'tap', seen: ['Follow', 'Submit'], target: { text: 'Follow', fraction: { x: 0.5, y: 0.8 } },
+    });
+
+    // Only what was on that screen can be picked; anything else is refused.
+    const invented = await inject(app, {
+        method: 'POST', url: `/plugins/com.farm.runbook/runbooks/${stored.id}/steps/0/target`,
+        payload: 'text=Delete%20everything', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    });
+    assert.match(invented.body, /That text was not on the screen/);
+    const gone = await inject(app, {
+        method: 'POST', url: `/plugins/com.farm.runbook/runbooks/${stored.id}/steps/9/target`,
+        payload: 'text=Follow', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    });
+    assert.match(gone.body, /That step is gone/);
+});
+
+test('one press records: the runbook is created, named later, and the phone is never asked twice', async (context) => {
+    const directory = path.join(workspace, 'quick');
+    const app = await appWithRunbooks(directory);
+    context.after(() => app.close());
+
+    const started = await inject(app, {
+        method: 'POST', url: '/api/runbooks/record/here', payload: { udid: SERIAL },
+    });
+    assert.equal(started.statusCode, 201);
+    const { runbookId } = started.json() as { runbookId: string };
+    const fresh = (await readRunbook(runbookId, directory))!;
+    assert.match(fresh.name, /^Untitled recording on Pixel 7$/);
+    assert.equal(fresh.platform, 'android', 'the platform is a fact about the phone, not a question');
+
+    const twice = await inject(app, { method: 'POST', url: '/api/runbooks/record/here', payload: { udid: SERIAL } });
+    assert.equal(twice.statusCode, 409);
+
+    await inject(app, {
+        method: 'POST', url: `/api/runbooks/${runbookId}/steps`, payload: { action: { type: 'tap', x: 200, y: 100 } },
+    });
+    const done = await inject(app, { method: 'POST', url: `/plugins/com.farm.runbook/runbooks/${runbookId}/done`, payload: {} });
+    // Done asks for a name and one optional line, and nothing else at all.
+    assert.match(done.body, /What is it called\?/);
+    assert.match(done.body, /What is it for\? \(optional\)/);
+    // Two questions, no third: the naming panel has no other control in it.
+    const naming = /class="bl-panel bl-rb-name">([\s\S]*?)<\/section>/.exec(done.body)?.[1] ?? '';
+    assert.doesNotMatch(naming, /<select|platform|app id/i, 'platform is a fact, not a field');
+    assert.equal(naming.match(/<input/g)?.length, 2);
+
+    const named = await inject(app, {
+        method: 'POST', url: `/plugins/com.farm.runbook/runbooks/${runbookId}/name`,
+        payload: 'name=Follow%20back&description=Follows%20whoever%20followed',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    });
+    assert.match(named.body, /Follow back/);
+    const saved = (await readRunbook(runbookId, directory))!;
+    assert.equal(saved.name, 'Follow back');
+    assert.equal(saved.description, 'Follows whoever followed');
+});
+
+test('"run it on this phone now" replays here, lights up each sentence, and points at the failure', async (context) => {
+    const directory = path.join(workspace, 'try');
+    const app = await appWithRunbooks(directory);
+    context.after(() => app.close());
+    const stored = await writeRunbook(runbook([
+        { type: 'key', key: 'home' },
+        { type: 'tap', target: { text: 'Follow', fraction: { x: 0.1, y: 0.1 } } },
+    ], { id: 'rb-try00001ab' }), directory);
+
+    const started = await inject(app, {
+        method: 'POST', url: `/plugins/com.farm.runbook/runbooks/${stored.id}/try`,
+        payload: `udid=${SERIAL}`, headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    });
+    assert.equal(started.statusCode, 200);
+    // The phone's live screen sits beside the sentences — the wall inspector's own viewer.
+    assert.match(started.body, /data-viewer/);
+    assert.match(started.body, /Went to the home screen/);
+    assert.match(started.body, /Trying it on Pixel 7/);
+
+    const finished = await until(async () => {
+        const progress = await inject(app, { method: 'GET', url: `/plugins/com.farm.runbook/runbooks/${stored.id}/progress` });
+        return /It worked/.test(progress.body) ? progress.body : undefined;
+    });
+    assert.match(finished, /It worked/);
+    assert.equal((await readRunbook(stored.id, directory))!.lastRunStatus, 'succeeded');
+
+    // A step that cannot be found stops the run at that sentence, with the screen it saw.
+    const broken = await writeRunbook(runbook([
+        { type: 'assert', text: 'Nowhere at all', expect: 'present' },
+    ], { id: 'rb-try00002ab' }), directory);
+    await inject(app, {
+        method: 'POST', url: `/plugins/com.farm.runbook/runbooks/${broken.id}/try`,
+        payload: `udid=${SERIAL}`, headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    });
+    const failure = await until(async () => {
+        const runbook = await readRunbook(broken.id, directory);
+        return runbook?.lastFailure ? runbook : undefined;
+    });
+    assert.equal(failure.lastFailure!.stepIndex, 0);
+    assert.deepEqual(failure.lastFailure!.visibleTexts, ['Follow', 'Submit']);
+    assert.equal(failure.lastFailure!.screenshot, `${broken.id}-failure.png`);
+
+    // The runbook page opens at that sentence, with the picture beside it.
+    const page = await inject(app, { method: 'GET', url: `/runbooks/${broken.id}` });
+    assert.match(page.body, /It stopped at “Checked that “Nowhere at all” is on screen”/);
+    assert.match(page.body, /Try again/);
+    assert.match(page.body, new RegExp(`/runbooks/${broken.id}/failure.png`));
+    const picture = await inject(app, { method: 'GET', url: `/plugins/com.farm.runbook/runbooks/${broken.id}/failure.png` });
+    assert.equal(picture.statusCode, 200);
+    assert.equal(String(picture.headers['content-type']), 'image/png');
+
+    // And the list says so in a word, rather than a timestamp.
+    const list = await inject(app, { method: 'GET', url: '/runbooks' });
+    assert.match(list.body, /Needs fixing/);
+});
+
+test('a runbook exports as a file and imports back, validated', async (context) => {
+    const directory = path.join(workspace, 'transfer');
+    const app = await appWithRunbooks(directory);
+    context.after(() => app.close());
+    const stored = await writeRunbook(runbook([{ type: 'key', key: 'home' }], { id: 'rb-export001a', name: 'Portable' }), directory);
+
+    const exported = await inject(app, { method: 'GET', url: `/plugins/com.farm.runbook/runbooks/${stored.id}/export` });
+    assert.equal(exported.statusCode, 200);
+    assert.match(String(exported.headers['content-disposition']), /attachment; filename="rb-export001a\.json"/);
+    const file = exported.body;
+    assert.equal((JSON.parse(file) as Runbook).name, 'Portable');
+
+    const imported = await inject(app, {
+        method: 'POST', url: '/plugins/com.farm.runbook/runbooks/import',
+        ...multipart('runbook', 'portable.json', file),
+    });
+    assert.equal(imported.statusCode, 200);
+    assert.match(imported.body, /Imported “Portable”/);
+    const all = await listRunbooks(directory);
+    assert.equal(all.length, 2, 'the import is a copy under its own id, never an overwrite');
+    assert.notEqual(all[0]!.id, all[1]!.id);
+
+    // A file that is not a runbook is refused by name, not by stack trace.
+    const junk = await inject(app, {
+        method: 'POST', url: '/plugins/com.farm.runbook/runbooks/import',
+        ...multipart('runbook', 'junk.json', JSON.stringify({ ...stored, steps: [{ type: 'teleport' }] })),
+    });
+    assert.match(junk.body, /That file is not a runbook: .*teleport/);
+    const notJson = await inject(app, {
+        method: 'POST', url: '/plugins/com.farm.runbook/runbooks/import',
+        ...multipart('runbook', 'junk.json', 'not json at all'),
+    });
+    assert.match(notJson.body, /That file is not a runbook/);
+    assert.equal((await listRunbooks(directory)).length, 2);
+});
+
+test('a failed runbook execution offers the operator somewhere to fix it', async () => {
+    const directory = path.join(workspace, 'fix-url');
+    const stored = await writeRunbook(runbook([{ type: 'key', key: 'home' }], { id: 'rb-fixurl001a' }), directory);
+    const plugin = createRunbookPlugin({ directory });
+    assert.equal(plugin.tasks[0]!.fixUrl?.({ runbookId: stored.id }), `/runbooks/${stored.id}#runbook-story`);
+    assert.equal(safeFixUrl('/runbooks/rb-1#runbook-story'), '/runbooks/rb-1#runbook-story');
+    assert.equal(safeFixUrl('https://elsewhere.example/steal'), undefined);
+    assert.equal(safeFixUrl('javascript:alert(1)'), undefined);
+
+    // A replay that gives up leaves the failure on the runbook, picture and all.
+    const logs: string[] = [];
+    const broken = await writeRunbook(runbook([{ type: 'assert', text: 'Nowhere', expect: 'present' }], { id: 'rb-fixurl002a' }), directory);
+    await plugin.tasks[0]!.execute(executionContext(fakeDriver(calls()), logs), { runbookId: broken.id });
+    const failed = (await readRunbook(broken.id, directory))!;
+    assert.equal(failed.lastFailure?.stepIndex, 0);
+    assert.equal(failed.lastFailure?.executionId, 'exec-1');
+    assert.deepEqual(failed.lastFailure?.visibleTexts, ['Follow', 'Submit']);
 });

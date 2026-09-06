@@ -45,6 +45,7 @@ export async function startWorker(plugins: PluginRegistry): Promise<WorkerRuntim
     await boss.start();
     const repository = new SchedulerRepository(connection, boss, plugins, schedulerEventHook(
         createEventRecorder(createEventStore(connection), { notifications: notificationConfigFromEnv() }),
+        undefined, plugins,
     ));
     const workingQueues = new Set<string>();
     const running = new Map<string, StopRunning>();
