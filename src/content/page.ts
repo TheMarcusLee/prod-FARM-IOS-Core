@@ -9,7 +9,7 @@
 import type { CaptionTemplateRow, ContentItemRow, ContentSetRow, DripPlanRow, DripRuleRow } from '../database/schema.js';
 import { assignAccountColours, colourFor, type AccountColour } from '../schedule/accounts.js';
 import { icon } from '../ui/icons.js';
-import { renderShell, type RigStatus } from '../ui/shell.js';
+import type { ShellPage } from '../ui/context.js';
 
 export function escapeHtml(value: unknown): string {
     return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -199,17 +199,12 @@ function rulesForm(): string {
 </form>`;
 }
 
-export interface ContentPageInput {
-    rig?: RigStatus;
-    unreadAlerts?: number;
-    pluginNav?: string;
-    authNav?: string;
-    assetVersion?: string;
-}
-
-/** The whole /content page. Listings load themselves over HTMX so the first paint is instant. */
-export function renderContentPage(input: ContentPageInput = {}): string {
-    const version = input.assetVersion ?? '';
+/**
+ * The whole /content page, as the shell's page slots. `createShellContext`'s `shell` turns it into
+ * a document with the sidebar's rig block and unread count already filled in — see src/ui/context.ts.
+ */
+export function contentPage(assetVersion = ''): ShellPage {
+    const version = assetVersion;
     const load = (url: string, id: string) => `<div id="${id}" hx-get="${url}" hx-trigger="load" hx-swap="outerHTML">`
         + '<p class="bl-muted">Loading…</p></div>';
     const body = `<div class="bl-content-page">
@@ -238,16 +233,12 @@ ${panel('Caption templates', `<form id="template-form" class="bl-inline-form">
 ${load('/api/content/templates', 'caption-templates')}`)}
 </div>
 </div>`;
-    return renderShell({
+    return {
         title: 'Content',
         active: 'content',
         toolbar: `<button type="button" class="bl-btn" id="refresh-content">${icon('refresh')}Refresh</button>`,
         body,
         head: `<link rel="stylesheet" href="/assets/pages.css${version}">`
             + `<script type="module" src="/assets/content.js${version}" defer></script>`,
-        ...(input.rig ? { rig: input.rig } : {}),
-        ...(input.unreadAlerts === undefined ? {} : { unreadAlerts: input.unreadAlerts }),
-        ...(input.pluginNav ? { pluginNav: input.pluginNav } : {}),
-        ...(input.authNav ? { authNav: input.authNav } : {}),
-    });
+    };
 }

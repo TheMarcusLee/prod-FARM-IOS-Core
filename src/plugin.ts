@@ -12,6 +12,7 @@ import type { SchedulerRepository } from './scheduler/repository.js';
 import type { DeviceDriver } from './drivers/types.js';
 import type { RegisteredDevice } from './devices/registry.js';
 import type { RemoteControl } from './devices/wda-remote.js';
+import type { ShellRenderer } from './ui/context.js';
 
 export interface DeviceAutomation {
     activateApp(bundleId: string): Promise<void>;
@@ -102,6 +103,13 @@ export interface PluginRouteContext {
     /** Load → mutate → save devices.json atomically under the shared in-process lock. Prefer this over load+saveDevices. */
     mutateDevices<T>(mutate: (devices: RegisteredDevice[]) => T | Promise<T>): Promise<T>;
     renderActivity(deviceUdid: string, message?: string): Promise<string>;
+    /**
+     * Renders a page through the Backline shell with the farm's own chrome — the rig block, the
+     * Alerts unread count, plugin nav and the operator's theme. There is one implementation of it
+     * (`createShellContext` in src/ui/context.ts) and a plugin page must use it rather than call
+     * `renderShell` itself, or its sidebar says "Rig status unknown".
+     */
+    shell: ShellRenderer;
 }
 
 export interface PhoneFarmPlugin {

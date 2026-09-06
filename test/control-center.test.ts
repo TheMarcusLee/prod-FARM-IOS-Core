@@ -143,3 +143,36 @@ test('the accounts page groups every phone under its handle', async (context) =>
     assert.match(page.body, /bl-swatch" style="background:#a3c497"/);
     assert.match(page.body, /bl-swatch" style="background:#b9a6dc"/);
 });
+
+/**
+ * The chrome — the sidebar's rig block and the Alerts unread count — is one implementation in
+ * src/ui/context.ts, and every page that renders through the shell gets it. Content and Runbooks
+ * used to wire their own subset, so they said "Rig status unknown" and never showed a count.
+ */
+test('every shell page carries the same rig block and unread count', async (context) => {
+    const { createRunbookPlugin } = await import('../src/runbook-plugin.js');
+    const store = createMemoryEventStore();
+    await store.record({ kind: 'execution.failed', severity: 'error', deviceUdid: ANDROID.udid, title: 'The post failed' });
+    await store.record({ kind: 'device.disconnected', severity: 'warning', deviceUdid: ANDROID.udid, title: 'Pixel 7 went offline' });
+    await writeFile(DEVICES_PATH, JSON.stringify([ANDROID, IPHONE]));
+    const instance = await createApp({
+        plugins: new PluginRegistry([createRunbookPlugin({
+            directory: path.join(mkdtempSync(path.join(os.tmpdir(), 'bl-rb-')), 'runbooks'),
+        })]),
+        scheduler: {} as SchedulerRepository,
+        dashboardTheme: defaultDashboardTheme,
+        connectedUdids: async () => [ANDROID.udid],
+        events: store,
+    });
+    context.after(() => instance.close());
+
+    for (const url of ['/', '/schedule', '/content', '/runbooks', '/devices', '/alerts', '/settings']) {
+        const page = await inject(instance, { method: 'GET', url });
+        assert.equal(page.statusCode, 200, url);
+        assert.doesNotMatch(page.body, /Rig status unknown/, url);
+        assert.match(page.body, /class="bl-rig-status">.*2 phones/s, url);
+        assert.match(page.body, /class="bl-count">2</, url);
+        // The plugin's own nav entry is in the sidebar of every page too.
+        assert.match(page.body, /href="\/runbooks"[\s\S]*?Runbooks/, url);
+    }
+});

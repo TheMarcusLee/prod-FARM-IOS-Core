@@ -24,7 +24,7 @@ import { type RemoteAction } from '../devices/wda-remote.js';
 import { requestWdaService } from '../devices/wda-service-client.js';
 import type { DeviceConnectionStatus } from '../devices/connection-manager.js';
 import { SESSION_COOKIE } from '../auth/local.js';
-import type { AuthProvider, PluginNavLink } from '../plugin.js';
+import type { AuthProvider } from '../plugin.js';
 import type { PluginRegistry } from '../registry.js';
 import type { CreateTaskInput, JsonObject, ScheduleTiming } from '../types.js';
 import { ScheduleTransitionError, type SchedulerRepository } from '../scheduler/repository.js';
@@ -36,7 +36,8 @@ import {
     hardwareColumn, viewer, timeOfDay, type WallDevice,
 } from '../fleet/page.js';
 import { collectWall, inspectorLog, parseLogLine, readFleet, toWallDevices, type FleetRead } from '../ui/wall-data.js';
-import { renderShell, stateBadge, slotNumber, PRODUCT_NAME, type NavKey, type ShellInput } from '../ui/shell.js';
+import { renderShell, stateBadge, slotNumber, PRODUCT_NAME, type NavKey } from '../ui/shell.js';
+import { THEME_COOKIE, createShellContext } from '../ui/context.js';
 import { icon } from '../ui/icons.js';
 import { rigServices, rigStatus, type RigFacts } from '../ui/rig.js';
 import {
@@ -137,7 +138,6 @@ export { DEVICE_ID_PATTERN } from '../devices/identifiers.js';
 export const MAX_DEVICE_NAME_LENGTH = 200;
 
 /** Remembers the operator's appearance choice; 'auto' follows the OS, anything else is light. */
-const THEME_COOKIE = 'bl-theme';
 
 /** Asset ids are database uuids; anything else never reaches a query. */
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -370,15 +370,6 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         const device = (await loadRegisteredDevices()).find((entry) => entry.udid === udid);
         return device && platformOf(device) === 'android' ? device : undefined;
     };
-    const logoutPath = options.authProvider?.logoutPath;
-    const authNavHtml = logoutPath
-        ? `<a class="bl-btn app-logout" href="${escapeHtml(logoutPath)}">${icon('external')}Log out</a>` : '';
-    const navLinks: PluginNavLink[] = options.plugins.list()
-        .flatMap((plugin) => plugin.navLinks ?? [])
-        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-    const pluginNavHtml = navLinks
-        .map((link) => `<a href="${escapeHtml(link.href)}">${icon('layers')}${escapeHtml(link.label)}</a>`)
-        .join('');
     const assetHash = (body: string) => crypto.createHash('sha1').update(body).digest('base64url').slice(0, 10);
     /** A page script, at its content-hashed URL when the theme is loaded. */
     const scriptTag = (name: string): string => {
@@ -386,66 +377,25 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         return `<script type="module" src="/assets/${name}${version ? `?v=${version}` : ''}"></script>`;
     };
 
-    // The event log backs the Alerts page and the sidebar's unread count. A farm
-    // with no scheduler database simply has no alerts, which is not an error.
-    let eventLog: EventStore | null = options.events ?? null;
-    const events = (): EventStore | null => {
-        if (!eventLog) {
-            try {
-                if (options.scheduler?.connection) eventLog = createEventStore(options.scheduler.connection);
-            } catch { /* no database wired up */ }
-        }
-        return eventLog;
-    };
-    const unreadAlerts = async (request: FastifyRequest): Promise<number> => {
-        const store = events();
-        if (!store) return 0;
-        try {
-            return await store.countAfter(await acknowledgedMark(app, request) ?? 0);
-        } catch { return 0; }
-    };
-    /** The one place the page renderers learn where the fleet's facts come from. */
-    const wallSources = () => ({
-        scheduler: options.scheduler, events,
+    // Every page's sidebar, unread count, plugin nav and theme come from one
+    // place; see src/ui/context.ts.
+    const shellContext = createShellContext({
+        app, scheduler: options.scheduler,
+        plugins: options.plugins,
+        ...(options.authProvider ? { authProvider: options.authProvider } : {}),
+        ...(options.events ? { events: options.events } : {}),
         ...(options.connectedUdids ? { connectedUdids: options.connectedUdids } : {}),
+        head: () => scriptTag('shell.js'),
     });
-    const themeOf = (request: FastifyRequest): 'auto' | 'light' =>
-        (request.cookies?.[THEME_COOKIE] === 'auto' ? 'auto' : 'light');
+    const { chrome, shell, events, wallSources } = shellContext;
+    const unreadAlerts = shellContext.unreadAlerts;
+    const themeOf = shellContext.theme;
 
-    /** Sidebar rig block, unread count, plugin nav and theme — the chrome every page carries. */
-    const chrome = async (request: FastifyRequest, read?: FleetRead) => {
-        const fleet = read ?? await readFleet(wallSources());
-        const [statuses, unread] = await Promise.all([
-            wdaServiceStatuses().catch(() => [] as Awaited<ReturnType<typeof wdaServiceStatuses>>),
-            unreadAlerts(request),
-        ]);
-        const facts: RigFacts = {
-            devices: fleet.devices, connected: fleet.connected, statuses,
-            database: Boolean(options.scheduler?.connection),
-            running: fleet.executions.filter(({ status }) => status === 'running').length,
-            queued: fleet.executions.filter(({ status }) => status === 'queued').length,
-            eventLog: Boolean(events()), pushRegistrations: 0,
-        };
-        return { facts, fleet, rig: rigStatus(facts), unread, theme: themeOf(request) };
-    };
-    /** Render a page through the Backline shell with that chrome already filled in. */
-    const shell = async (
-        request: FastifyRequest,
-        input: Omit<ShellInput, 'rig' | 'unreadAlerts' | 'pluginNav' | 'authNav' | 'theme'>,
-        read?: FleetRead,
-    ): Promise<string> => {
-        const context = await chrome(request, read);
-        return renderShell({
-            ...input, head: `${scriptTag('shell.js')}${input.head ?? ''}`,
-            rig: context.rig, unreadAlerts: context.unread,
-            pluginNav: pluginNavHtml, authNav: authNavHtml, theme: context.theme,
-        });
-    };
     /** The old plain-HTML fallback, now the shell with a one-panel body. */
     const renderPage = (title: string, body: string, active: NavKey = 'devices') =>
         renderShell({
             title, active, body: `<div class="bl-page">${body}</div>`,
-            pluginNav: pluginNavHtml, authNav: authNavHtml, theme: 'light',
+            pluginNav: shellContext.pluginNav, authNav: shellContext.authNav, theme: 'light',
         });
 
     let themed: LoadedDashboardTheme | null = null;
@@ -481,8 +431,8 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         const finalize = (html: string) => {
             // The Schedule/Content templates are still whole documents with their own nav
             // placeholders; the shell-rendered pages carry neither.
-            let out = html.replaceAll('__AUTH_NAV__', authNavHtml)
-                .replaceAll('__PLUGIN_NAV__', pluginNavHtml).replaceAll('__FOOTER__', '');
+            let out = html.replaceAll('__AUTH_NAV__', shellContext.authNav)
+                .replaceAll('__PLUGIN_NAV__', shellContext.pluginNav).replaceAll('__FOOTER__', '');
             for (const [name, v] of Object.entries(versions)) out = out.replaceAll(`/assets/${name}`, `/assets/${name}?v=${v}`);
             return out;
         };
@@ -1015,9 +965,9 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         return reply.code(204).send();
     });
 
-    await registerContentRoutes(app, { scheduler: options.scheduler, navHtml: pluginNavHtml, footerHtml: '' });
+    await registerContentRoutes(app, { scheduler: options.scheduler, shell });
     await registerFleetRoutes(app, options);
-    await registerScheduleRoutes(app, options);
+    await registerScheduleRoutes(app, { ...options, shell });
     await registerPushRoutes(app, options);
     await registerMcpRoutes(app, {
         scheduler: options.scheduler, plugins: options.plugins, screenshot: (udid) => remote.getScreenshot(udid),
@@ -1027,7 +977,8 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     for (const plugin of options.plugins.list()) {
         if (plugin.registerRoutes) await plugin.registerRoutes({
             app, routePrefix: `/plugins/${plugin.id}`, scheduler: options.scheduler, remote,
-            loadDevices: loadRegisteredDevices, saveDevices: saveRegisteredDevices, mutateDevices: mutateRegisteredDevices, renderActivity,
+            loadDevices: loadRegisteredDevices, saveDevices: saveRegisteredDevices, mutateDevices: mutateRegisteredDevices,
+            renderActivity, shell,
         });
     }
 
@@ -1167,14 +1118,11 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
 
     app.get('/rig', async (request, reply) => {
         const context = await chrome(request);
-        return reply.type('text/html').send(renderShell({
+        return reply.type('text/html').send(shellContext.renderWith({
             title: 'Rig', active: 'rig',
             body: renderRigPage(rigServices(context.facts)),
             toolbarRight: `<span>${escapeHtml(context.rig.headline)}</span>`,
-            head: scriptTag('shell.js'),
-            rig: context.rig, unreadAlerts: context.unread,
-            pluginNav: pluginNavHtml, authNav: authNavHtml, theme: context.theme,
-        }));
+        }, context));
     });
 
     app.get('/alerts', async (request, reply) => {

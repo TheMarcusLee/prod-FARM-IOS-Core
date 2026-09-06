@@ -13,6 +13,7 @@ import type { RegisteredDevice } from '../src/devices/registry.js';
 import type { SchedulerRepository } from '../src/scheduler/repository.js';
 import { ACCOUNT_PALETTE, assignAccountColours, collectAccounts } from '../src/schedule/accounts.js';
 import { buildTimeline, windowForRange, type TimelinePayload } from '../src/schedule/timeline.js';
+import { createShellContext } from '../src/ui/context.js';
 
 /** 2026-09-05 19:30 local — an evening, so the range is the one the design calls "tonight". */
 const NOW = new Date(2026, 8, 5, 19, 30, 0);
@@ -46,11 +47,13 @@ function fakeScheduler(executions: ExecutionRow[], schedules: ScheduleRow[] = []
 
 async function scheduleApi(executions: ExecutionRow[], schedules: ScheduleRow[] = []): Promise<FastifyInstance> {
     const app = Fastify();
+    const scheduler = fakeScheduler(executions, schedules);
     await registerScheduleRoutes(app, {
-        scheduler: fakeScheduler(executions, schedules),
+        scheduler,
         loadDevices: async () => DEVICES,
         connectedUdids: async () => [DEVICES[0]!.udid],
         contentStore: null, events: null, now: () => NOW,
+        shell: createShellContext({ app, scheduler, loadDevices: async () => DEVICES }).shell,
     });
     return app;
 }
@@ -234,7 +237,9 @@ test('the retired /tasks page redirects to Schedule', async (context) => {
     const page = await inject(app, { method: 'GET', url: '/schedule' });
     assert.equal(page.statusCode, 200);
     assert.match(page.body, /No phones are active/);
-    // The shell's slots are filled from the same options app.ts already has.
-    assert.match(page.body, /href="\/stats"[^>]*>Stats</);
-    assert.match(page.body, /href="\/auth\/logout"[^>]*>Log out</);
+    // The shell's slots come from the one shell context, glyphs and all.
+    assert.match(page.body, /href="\/stats"[\s\S]*?Stats</);
+    assert.match(page.body, /href="\/auth\/logout"[\s\S]*?Log out</);
+    // And the sidebar carries the real rig block rather than "Rig status unknown".
+    assert.doesNotMatch(page.body, /Rig status unknown/);
 });

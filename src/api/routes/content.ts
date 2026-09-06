@@ -9,7 +9,8 @@ import type { DripRuleRow } from '../../database/schema.js';
 import type { SchedulerRepository } from '../../scheduler/repository.js';
 import { downloadWithYtDlp, ytDlpPath } from '../../content/ffmpeg.js';
 import { ingestDirectory, ingestMedia, listMediaFiles, mimeTypeFor, removeItemFiles } from '../../content/ingest.js';
-import { escapeHtml, renderContentPage, renderLibrary, renderRules, renderSets, renderTemplates } from '../../content/page.js';
+import { contentPage, escapeHtml, renderLibrary, renderRules, renderSets, renderTemplates } from '../../content/page.js';
+import type { ShellRenderer } from '../../ui/context.js';
 import { loadRegisteredDevices, type RegisteredDevice } from '../../devices/registry.js';
 import { assignAccountColours, collectAccounts } from '../../schedule/accounts.js';
 import { contentRoot } from '../../content/paths.js';
@@ -27,12 +28,10 @@ export interface ContentRouteOptions {
     store?: ContentStore;
     /** Overrides DRIP_PLANNER_INTERVAL_MINUTES. Zero or less disables the tick. */
     plannerIntervalMinutes?: number;
-    /** Rendered into the shell's sidebar; plugins contribute these. */
-    navHtml?: string;
+    /** The one shell renderer, from `createShellContext`; every page goes through it. */
+    shell: ShellRenderer;
     /** Test seam for the device registry, which supplies the account colour order. */
     loadDevices?: () => Promise<RegisteredDevice[]>;
-    /** Accepted and ignored: the Backline shell has no footer. Kept so app.ts still compiles. */
-    footerHtml?: string;
 }
 
 const STATIC_ROOT = fileURLToPath(new URL('../../../static/dashboard/', import.meta.url));
@@ -91,10 +90,7 @@ export async function registerContentRoutes(app: FastifyInstance, options: Conte
         readFile(path.join(STATIC_ROOT, 'pages.css'), 'utf8').catch(() => ''),
     ]);
     const version = `?v=${crypto.createHash('sha1').update(pageScript + pageStyles).digest('base64url').slice(0, 10)}`;
-    const page = renderContentPage({
-        assetVersion: version,
-        ...(options.navHtml ? { pluginNav: options.navHtml } : {}),
-    });
+    const page = contentPage(version);
 
     /** Colours follow the same registration order the Schedule timeline uses. */
     const ruleColours = async (accounts: readonly string[]) => {
@@ -102,7 +98,7 @@ export async function registerContentRoutes(app: FastifyInstance, options: Conte
         return assignAccountColours(collectAccounts(devices, accounts));
     };
 
-    app.get('/content', async (_request, reply) => reply.type('text/html').send(page));
+    app.get('/content', async (request, reply) => reply.type('text/html').send(await options.shell(request, page)));
     app.get('/assets/content.js', async (_request, reply) => reply.type('text/javascript').send(pageScript));
 
     // ---- library ------------------------------------------------------------

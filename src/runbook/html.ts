@@ -7,7 +7,7 @@
 
 import type { RegisteredDevice } from '../devices/registry.js';
 import { icon } from '../ui/icons.js';
-import { renderShell, type RigStatus } from '../ui/shell.js';
+import type { ShellPage } from '../ui/context.js';
 import {
     KEYS, STEP_TYPES, summarizeStep, variableNames,
     type Runbook, type Step, type StepType,
@@ -33,27 +33,17 @@ export function escapeHtml(value: unknown): string {
 /** Every runbook surface hangs off the plugin's own route prefix. */
 export const ROUTE_PREFIX = '/plugins/com.farm.runbook';
 
-export interface RunbookPageChrome {
-    rig?: RigStatus;
-    unreadAlerts?: number;
-    pluginNav?: string;
-    authNav?: string;
-    /** Cache-busting suffix for the page assets, e.g. `?v=abc123`. */
-    assetVersion?: string;
-}
-
-function layout(title: string, toolbar: string, body: string, chrome: RunbookPageChrome = {}): string {
-    const version = chrome.assetVersion ?? '';
-    return renderShell({
+/**
+ * Runbook pages are the shell's page slots; the chrome comes from `createShellContext`'s `shell`,
+ * which the plugin route context carries. `assetVersion` is the cache-busting suffix, e.g. `?v=abc`.
+ */
+function layout(title: string, toolbar: string, body: string, assetVersion = ''): ShellPage {
+    return {
         title, active: 'runbooks', toolbar,
         body: `<div class="bl-page">${body}</div>`,
-        head: `<link rel="stylesheet" href="/assets/pages.css${version}">`
-            + `<script type="module" src="/assets/runbooks.js${version}" defer></script>`,
-        ...(chrome.rig ? { rig: chrome.rig } : {}),
-        ...(chrome.unreadAlerts === undefined ? {} : { unreadAlerts: chrome.unreadAlerts }),
-        ...(chrome.pluginNav ? { pluginNav: chrome.pluginNav } : {}),
-        ...(chrome.authNav ? { authNav: chrome.authNav } : {}),
-    });
+        head: `<link rel="stylesheet" href="/assets/pages.css${assetVersion}">`
+            + `<script type="module" src="/assets/runbooks.js${assetVersion}" defer></script>`,
+    };
 }
 
 function notice(message?: string): string {
@@ -133,8 +123,8 @@ function createForm(devices: readonly RegisteredDevice[]): string {
 }
 
 export function runbooksPage(
-    runbooks: readonly Runbook[], devices: readonly RegisteredDevice[], chrome: RunbookPageChrome = {},
-): string {
+    runbooks: readonly Runbook[], devices: readonly RegisteredDevice[], assetVersion = '',
+): ShellPage {
     return layout('Runbooks',
         `<button type="button" class="bl-btn bl-btn-primary" data-dialog="new-runbook">${icon('plus')}New runbook</button>`,
         `<p class="bl-muted">Record a sequence once on one phone, replay it on the fleet.</p>`
@@ -142,7 +132,7 @@ export function runbooksPage(
         + `<dialog class="bl-dialog" id="new-runbook"><div class="bl-dialog-head"><strong>New runbook</strong>`
         + `<button type="button" class="bl-btn bl-btn-icon" data-dialog-close aria-label="Close">${icon('x')}</button></div>`
         + createForm(devices) + '</dialog>',
-        chrome);
+        assetVersion);
 }
 
 // ---- the editor ------------------------------------------------------------
@@ -243,12 +233,12 @@ ${runDialog(runbook, devices, 'editor')}</section>`;
 }
 
 export function runbookPage(
-    runbook: Runbook, devices: readonly RegisteredDevice[], chrome: RunbookPageChrome = {}, recordingOn?: string,
-): string {
+    runbook: Runbook, devices: readonly RegisteredDevice[], assetVersion = '', recordingOn?: string,
+): ShellPage {
     return layout(runbook.name,
         `<a class="bl-btn" href="/runbooks">${icon('chevronLeft')}All runbooks</a>`
         + `<button type="button" class="bl-btn bl-btn-primary" data-dialog="run-${escapeHtml(runbook.id)}">${icon('play')}Run on device</button>`,
-        runbookEditorFragment(runbook, devices, undefined, recordingOn), chrome);
+        runbookEditorFragment(runbook, devices, undefined, recordingOn), assetVersion);
 }
 
 /** The device-page panel: pick a runbook, toggle recording, watch the steps arrive. */
