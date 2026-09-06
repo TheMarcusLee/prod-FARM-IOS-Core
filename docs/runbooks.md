@@ -64,18 +64,28 @@ nothing is hidden from whoever wants to.
 
 ## Starter runbooks
 
-A fresh farm's Runbooks page is not empty. Ten flows are shipped with Backline as JSON under
-`src/runbook/templates/`, and seeded into `SCHEDULER_DATA_DIR/runbooks` on first boot:
+A fresh farm's Runbooks page is not empty. **Ten flows are shipped with Backline, each one twice —
+once for Android and once for the iPhone** — as the twenty JSON files under
+`src/runbook/templates/`, seeded into `SCHEDULER_DATA_DIR/runbooks` on first boot:
 
 | Runbook | Platform | Asks for | What it does |
 | --- | --- | --- | --- |
 | Warm-up scroll | Android, iPhone | `scrolls` | Opens TikTok, waits for the feed, scrolls it that many times |
 | Post from Recents | Android, iPhone | `caption` | Create → Upload → the newest clip → Next → caption → Post → the upload confirmation |
 | Save to drafts | Android, iPhone | `caption` | The same, up to the caption, then Drafts |
-| Follow-back sweep | Android | `follows` | Opens the inbox and taps Follow back on that many rows |
-| Search a niche | Android | `term`, `scrolls` | Searches, opens the top result, watches a few, comes back |
-| Clear notifications | Android | — | Opens the inbox, scrolls the activity list so it is all seen |
-| Switch account | Android | `handle` | Profile → account switcher → the row for that handle |
+| Follow-back sweep | Android, iPhone | `follows` | Opens the inbox and taps Follow back on that many rows |
+| Search a niche | Android, iPhone | `term`, `scrolls` | Searches, opens the top result, watches a few, comes back |
+| Clear notifications | Android, iPhone | — | Opens the inbox, scrolls the activity list so it is all seen |
+| Switch account | Android, iPhone | `handle` | Profile → account switcher → the row for that handle |
+| Like a hashtag feed | Android, iPhone | `hashtag`, `likes` | Searches a hashtag, opens its top video, taps the heart that many times |
+| Login check | Android, iPhone | `handle` | Profile → checks the handle is on screen → a picture of it. Schedule it daily |
+| Repost from the feed | Android, iPhone | `swipes` | Watches a couple of videos, opens Share, taps Repost |
+
+The file names are the flow's slug: `<slug>.json` is the Android one, `<slug>-ios.json` the iPhone
+one, and the template name inside each file matches its file name. The two are separate runbooks
+with the same steps in the same order — they ask the operator for exactly the same blanks, which is
+asserted in `test/runbook.test.ts` — because the controls are found completely differently on the
+two platforms. The list page's **Platform** column says which one you are looking at.
 
 A seeded copy is an **ordinary runbook**: its own id, editable, deletable, renameable. The one
 thing it keeps is `template`, the name of the flow it came from — which is what puts the
@@ -105,9 +115,16 @@ sentence that fails is a label to correct. Amber steps offer **Pick the label** 
 were on screen when it was written down, so most corrections are one click.
 
 The Android targets are the same ids and texts as the selector tables in
-`src/tiktok/android/post.ts` and `src/tiktok/android/doomscroll.ts` — correct both together. The
-iPhone versions have no tree to look things up in, so they are the fractions from the `iphone8`
-coordinate profile in `src/devices/coordinates.ts`; a different iPhone needs those re-pointed.
+`src/tiktok/android/post.ts` and `src/tiktok/android/doomscroll.ts` — correct both together.
+
+The iPhone versions target the labels WebDriverAgent's source tree exposes — the tab bar's
+**Home**, **Profile**, **Inbox** and **Create**, and buttons like **Post**, **Drafts**, **Next**,
+**Follow**, **Search**, **Share** and **Repost** — and fall back to fractions taken from the
+`iphone8` coordinate profile in `src/devices/coordinates.ts` (375×667 points, so a fraction is the
+point divided by the screen). A control with no point in that profile, and anything TikTok draws
+without a label, is a position and a plausible fraction; a different iPhone needs those re-pointed.
+The iPhone has no back button (`src/drivers/wda.ts` says so in as many words), so where the Android
+flow presses back its twin drags in from the left edge.
 
 ### Repeating a step
 
@@ -153,8 +170,8 @@ migration. Copy one between farms with `scp`.
 | `type` | `text` | Holds `{{name}}` blanks; the page asks about them for you |
 | `key` | `key` | `home`, `back`, `recents`, `power`, `enter`, `delete`. iOS has no `back` or `recents` |
 | `wait` | `ms` | Plain sleep; aborts promptly when the execution is stopped |
-| `waitForText` | `text` or `id`, `timeoutMs` | Polls the accessibility tree |
-| `assert` | `text` or `id`, `expect: present\|absent` | Fails the run when the screen disagrees |
+| `waitForText` | `text` or `id`, `timeoutMs` | Polls the accessibility tree; the `text` may hold a blank |
+| `assert` | `text` or `id`, `expect: present\|absent` | Fails the run when the screen disagrees; the `text` may hold a blank |
 | `screenshot` | `label` | Captured into the execution log |
 
 Every step also takes `retries` (0–10), `retryDelayMs`, `repeat` (a count or a blank),
@@ -198,7 +215,9 @@ adopts the recording phone's udid, screen and platform.
 
 ## Blanks, underneath
 
-A blank is a `{{name}}` placeholder in a `type` step. Supply the values when the task is created:
+A blank is a `{{name}}` placeholder in a `type` step, in a tap target's label, in a `repeat` count,
+or in the `text` a `waitForText` or `assert` looks for — which is how the login check asks *which*
+handle it should find on the profile. Supply the values when the task is created:
 
 ```jsonc
 { "pluginId": "com.farm.runbook", "taskType": "run", "taskVersion": 1,
