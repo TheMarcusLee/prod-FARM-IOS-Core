@@ -106,6 +106,8 @@ function render(payload) {
         for (const tick of payload.ticks)
             ruler.append(element('span', undefined, tick.label));
         grid.append(ruler);
+        // The band the playhead's label is drawn in, so it never sits on an hour mark.
+        grid.append(element('div', 'bl-tl-band-corner'), element('div', 'bl-tl-band'));
         for (const track of payload.tracks) {
             const name = element('div', 'bl-tl-track-name');
             name.dataset.state = track.state;

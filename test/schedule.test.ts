@@ -204,6 +204,11 @@ test('the schedule page renders a track per active phone through the shell', asy
     assert.doesNotMatch(page.body, /data-device="device-3"/, 'a disabled phone has no track');
     assert.match(page.body, /20:00 morning routine/);
     assert.match(page.body, /bl-playhead/);
+    // The "now HH:MM" label is drawn in a band of its own between the ruler and the
+    // first track, so it never lands on an hour mark. static/dashboard/ts/schedule.ts
+    // builds the same two cells.
+    assert.match(page.body, /bl-tl-ruler[\s\S]*?bl-tl-band-corner"><\/div><div class="bl-tl-band"><\/div>/);
+    assert.match(page.body, /class="bl-tl-band"><\/div>[\s\S]*?bl-playhead-label/);
     assert.match(page.body, /\/assets\/pages\.css\?v=/);
     assert.doesNotMatch(page.body, /iOS Farm|Phone Farm|Handler|Agniverse/);
 

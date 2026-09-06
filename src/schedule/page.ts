@@ -83,8 +83,11 @@ export function timelineHtml(payload: TimelinePayload): string {
     const marker = playhead === null ? ''
         : `<div class="bl-playhead" style="left:${playhead.toFixed(3)}%">`
             + `<span class="bl-playhead-label">now ${escapeHtml(hhmm(new Date(payload.now)))}</span></div>`;
+    // The playhead's label gets a band of its own between the ruler and the first
+    // track; drawn inside the ruler it sat on whichever hour mark was nearest.
     return `<div class="bl-tl" style="--bl-tl-step:${step.toFixed(4)}%">`
         + `<div class="bl-tl-corner"></div><div class="bl-tl-ruler">${head}</div>`
+        + `<div class="bl-tl-band-corner"></div><div class="bl-tl-band"></div>`
         + `${body}<div class="bl-tl-overlay">${marker}</div></div>`;
 }
 
