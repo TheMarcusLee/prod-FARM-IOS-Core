@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { mkdir, open, readFile } from 'node:fs/promises';
+import { copyFile, mkdir, open, readFile, rename, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import sharp from 'sharp';
@@ -8,6 +8,9 @@ import { z } from 'zod';
 import type { CreateTaskInput, JsonObject, ScheduleTiming } from '../types.js';
 import type { McpDependencies, DeviceLike } from './types.js';
 import { resolveUploadPath, uploadDirectories } from './uploads.js';
+import {
+    abortUpload, chunkLength, completeUpload, createUpload, uploadChunkBytes, writeChunk,
+} from '../content/uploads.js';
 
 export const TIKTOK_PLUGIN_ID = 'com.git-agni.tiktok';
 /**
@@ -85,6 +88,48 @@ export async function shrinkScreenshot(image: Buffer, maxWidth = MCP_SCREENSHOT_
 
 /** Inline base64 is held whole in memory, twice, before it reaches the disk. */
 export const MAX_INLINE_UPLOAD_BYTES = 32 * 1024 * 1024;
+
+/**
+ * Reads `source` through the chunked upload protocol and leaves the assembled
+ * file at `relativePath` under the data root. No HTTP: `createUpload` and
+ * `writeChunk` are the very same functions `/api/uploads` calls, so a 2 GB clip
+ * costs one chunk of memory here as well, and every chunk is digest-checked on
+ * the way in.
+ */
+async function storeInChunks(
+    root: string, source: string, name: string, mimeType: string, size: number,
+): Promise<{ relativePath: string; sha256: string }> {
+    const session = await createUpload({ name, size, mimeType, identity: 'mcp' });
+    try {
+        const handle = await open(source, 'r');
+        try {
+            for (let index = 0; index < session.chunkCount; index += 1) {
+                const length = chunkLength(session, index);
+                const buffer = Buffer.alloc(length);
+                await handle.read(buffer, 0, length, index * session.chunkSize);
+                await writeChunk({
+                    session, index, body: buffer,
+                    sha256: crypto.createHash('sha256').update(buffer).digest('hex'),
+                });
+            }
+        } finally {
+            await handle.close();
+        }
+        const assembled = await completeUpload(session);
+        const relativePath = path.join('uploads', crypto.randomUUID());
+        const destination = path.join(root, relativePath);
+        await mkdir(path.dirname(destination), { recursive: true });
+        // Same filesystem in every deployment we ship; a copy is the fallback
+        // for the one where the data root is a mount of its own.
+        await rename(assembled.path, destination).catch(async (error) => {
+            if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
+            await copyFile(assembled.path, destination);
+        });
+        return { relativePath, sha256: assembled.sha256 };
+    } finally {
+        await abortUpload(session.id);
+    }
+}
 
 function dataRoot(dependencies: McpDependencies): string {
     return path.resolve(dependencies.dataDirectory ?? process.env.SCHEDULER_DATA_DIR ?? '.scheduler-data');
@@ -342,14 +387,30 @@ function registerAssetTools(server: McpServer, dependencies: McpDependencies): v
         if ((sourcePath === undefined) === (base64 === undefined)) {
             return failure('Provide exactly one of path or base64');
         }
-        const body = sourcePath === undefined
-            ? Buffer.from(base64 ?? '', 'base64')
-            : await readFile(await resolveUploadPath(sourcePath, allowedUploadDirectories(dependencies)));
-        if (sourcePath === undefined && body.length > MAX_INLINE_UPLOAD_BYTES) {
+        const root = dataRoot(dependencies);
+        const resolved = sourcePath === undefined
+            ? null
+            : await resolveUploadPath(sourcePath, allowedUploadDirectories(dependencies));
+
+        // A file on the host over one chunk goes through the resumable
+        // protocol's own machinery rather than being read into memory whole.
+        if (resolved !== null) {
+            const { size } = await stat(resolved);
+            if (!size) return failure('The upload is empty');
+            if (size > uploadChunkBytes()) {
+                const stored = await storeInChunks(root, resolved, name, mimeType, size);
+                const [chunked] = await dependencies.scheduler.registerAssets([{
+                    relativePath: stored.relativePath, originalName: name, mimeType, size, sha256: stored.sha256,
+                }]);
+                return chunked ? json(chunked) : failure('The scheduler did not register the asset');
+            }
+        }
+
+        const body = resolved === null ? Buffer.from(base64 ?? '', 'base64') : await readFile(resolved);
+        if (resolved === null && body.length > MAX_INLINE_UPLOAD_BYTES) {
             return failure(`base64 uploads are limited to ${MAX_INLINE_UPLOAD_BYTES} bytes — use path for larger files`);
         }
         if (!body.length) return failure('The upload is empty');
-        const root = dataRoot(dependencies);
         await mkdir(path.join(root, 'uploads'), { recursive: true });
         const relativePath = path.join('uploads', crypto.randomUUID());
         const handle = await open(path.join(root, relativePath), 'wx', 0o600);

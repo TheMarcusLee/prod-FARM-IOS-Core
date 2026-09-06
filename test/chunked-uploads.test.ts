@@ -6,6 +6,8 @@ import path from 'node:path';
 import test from 'node:test';
 
 import Fastify, { type FastifyInstance } from 'fastify';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 import { inject } from './support.js';
 
@@ -23,9 +25,11 @@ const { registerUploadRoutes } = await import('../src/api/routes/uploads.js');
 const { sweepUploads, uploadsRoot, UPLOAD_TTL_MS } = await import('../src/content/uploads.js');
 const { setMediaTools } = await import('../src/content/ffmpeg.js');
 const { bucketFor } = await import('../src/api/routes/mobile.js');
+const { createFarmMcpServer } = await import('../src/mcp/server.js');
 
 import type { ContentItemRow } from '../src/database/schema.js';
 import type { ContentStore, NewAsset } from '../src/content/store.js';
+import type { McpDependencies } from '../src/mcp/types.js';
 import type { SchedulerRepository } from '../src/scheduler/repository.js';
 
 // ffprobe never runs on these fixtures; `/usr/bin/false` fails fast so the
@@ -328,4 +332,69 @@ test('chunk puts get a bucket of their own, not the shared write budget', () => 
     assert.equal(bucketFor('POST', '/api/uploads').name, 'write');
     assert.equal(bucketFor('POST', `/api/uploads/${id}/complete`).name, 'write');
     assert.equal(bucketFor('PUT', '/api/uploads/not-an-id/chunks/7').name, 'write');
+});
+
+// ---- the MCP tool ----------------------------------------------------------
+
+/**
+ * `upload_asset` with a `path` bigger than one chunk goes through the very same
+ * session machinery, in process — no HTTP, and never the whole file in memory.
+ */
+test('upload_asset chunks a host file over one chunk and registers the same asset', async (context) => {
+    await ownDataRoot(context);
+    const allowed = await mkdtemp(path.join(workspace, 'mcp-'));
+    const registered: Array<{ relativePath: string; size: number; sha256: string; originalName: string }> = [];
+    const dependencies = {
+        scheduler: {
+            async registerAssets(files: readonly { relativePath: string; size: number; sha256: string; originalName: string; mimeType: string }[]) {
+                registered.push(...files);
+                return files.map((file) => ({ id: 'asset-1', name: file.originalName, mimeType: file.mimeType }));
+            },
+        },
+        async loadDevices() { return []; },
+        async discoverDevices() { return []; },
+        async screenshot() { return Buffer.alloc(0); },
+        async listAssets() { return []; },
+        listPlugins() { return []; },
+        dataDirectory: process.env.SCHEDULER_DATA_DIR,
+        uploadDirectories: [allowed],
+    } as unknown as McpDependencies;
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const server = createFarmMcpServer(dependencies);
+    const client = new Client({ name: 'test', version: '1.0.0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+        // 200 bytes over a 64-byte chunk: four chunks, and a remainder.
+        const body = crypto.randomBytes(200);
+        const source = path.join(allowed, 'big.mp4');
+        await writeFile(source, body);
+
+        const result = await client.callTool({
+            name: 'upload_asset', arguments: { name: 'big.mp4', mimeType: 'video/mp4', path: source },
+        }) as { isError?: boolean; content: Array<{ text?: string }> };
+        assert.notEqual(result.isError, true, result.content[0]?.text ?? 'upload rejected');
+
+        const asset = registered[0];
+        assert.equal(asset?.size, 200);
+        assert.equal(asset?.sha256, digest(body));
+        assert.deepEqual(await readFile(path.resolve(process.env.SCHEDULER_DATA_DIR!, asset!.relativePath)), body);
+        // The session directory it used is cleaned up behind it.
+        assert.deepEqual(
+            (await readdir(uploadsRoot())).filter((entry) => /^[0-9a-f]{32}$/.test(entry)),
+            [],
+        );
+
+        // A small file still takes the plain read-and-write path.
+        const small = path.join(allowed, 'small.jpg');
+        await writeFile(small, Buffer.alloc(10, 7));
+        const tiny = await client.callTool({
+            name: 'upload_asset', arguments: { name: 'small.jpg', mimeType: 'image/jpeg', path: small },
+        }) as { isError?: boolean };
+        assert.notEqual(tiny.isError, true);
+        assert.equal(registered[1]?.size, 10);
+    } finally {
+        await client.close();
+        await server.close();
+    }
 });
