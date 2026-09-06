@@ -293,6 +293,7 @@ in `src/scheduler/recurrence.ts`; the next occurrence is written to
 | `src/plugin.ts` | **Stable plugin & auth interfaces** |
 | `src/registry.ts` | `PluginRegistry` — task resolution and validation |
 | `src/loader.ts` | Dynamic import of `PHONE_FARM_PLUGINS` / `PHONE_FARM_AUTH_PLUGIN` |
+| `src/motion/` | The human motion model: swipe arcs, pauses, per-device handedness (`docs/motion.md`) |
 | `src/example-plugin.ts` | Minimal reference plugin |
 | `static/dashboard/` | HTML templates, browser TS (`tsconfig.web.json` → `static/dashboard/assets/*.js`) |
 | `Patches/` | WDA source patches applied by `wda:prepare` |
