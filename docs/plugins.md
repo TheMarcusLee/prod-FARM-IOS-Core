@@ -12,7 +12,7 @@ compatibility rules. This document is the how‑to.
 Everything is in `src/plugin.ts`. A plugin is a plain object:
 
 ```ts
-import type { PhoneFarmPlugin } from '@git-agni/phone-farm-core';
+import type { PhoneFarmPlugin } from '@git-agni/backline';
 
 const plugin: PhoneFarmPlugin = {
     id: 'com.acme.instagram',   // reverse-DNS, stable forever
@@ -39,7 +39,7 @@ package names. `loadPlugins()` imports each and expects a `default` (or
 ## A task definition
 
 ```ts
-import type { TaskDefinition } from '@git-agni/phone-farm-core';
+import type { TaskDefinition } from '@git-agni/backline';
 
 interface LikePayload extends Record<string, unknown> {
     count: number;
@@ -150,7 +150,9 @@ navLinks: [{ label: 'Mac', href: '/mac', order: 20 }]  // lower order = further 
 Pair it with `registerRoutes` to serve the page the link points at. Unlike
 task panels, a plugin route can register **any** path (not just under
 `/plugins/<id>`) and return a whole HTML document — it still sits inside the
-authenticated host, so link `/assets/styles.css` for the dashboard's styling.
+authenticated host, so link `/assets/backline.css` for the dashboard's styling — or,
+better, render through the `shell` on the route context so the page gets the whole Backline
+shell (sidebar, rig block, unread count) rather than a bare styled document.
 A host-stats plugin, for example, might add a `Mac` nav link plus
 `GET /mac` (a live page) and `GET /mac/stats.json`.
 
@@ -205,7 +207,7 @@ through `wda:prepare`.
 ## Packaging & shipping
 
 1. A normal npm package, `"type": "module"`, `export default` the plugin.
-2. `peerDependencies`: `@git-agni/phone-farm-core`.
+2. `peerDependencies`: `@git-agni/backline`.
 3. Publish privately (or reference a pinned git commit).
 4. Add the package name to `PHONE_FARM_PLUGINS` for **both** the `web` and
    `worker` units; restart both.

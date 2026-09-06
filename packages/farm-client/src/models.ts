@@ -80,6 +80,10 @@ export type RemoteAction =
     | { type: 'swipe'; startX: number; startY: number; endX: number; endY: number; durationMs: number }
     | { type: 'home' }
     | { type: 'back' }
+    /** The app switcher. Android only — iOS has no recents key. */
+    | { type: 'recents' }
+    /** The side button: `adb` keyevent 26 on Android, the WDA lock on iOS. */
+    | { type: 'power' }
     | { type: 'text'; text: string };
 
 export interface ReconnectResult {
@@ -117,6 +121,8 @@ export interface FleetDevice {
     state: DeviceState;
     /** Bootstrap sends only this; the full record is `/api/devices/:udid/connection`. */
     connection: { connected: boolean };
+    /** Handles signed in on this phone, in the order its plugins list them. Drives clip colour. */
+    accounts?: string[];
     currentExecution: FleetCurrentExecution | null;
     nextRunAt: string | null;
     lastError: string | null;
@@ -452,25 +458,37 @@ export const ACCOUNT_COLORS: AccountColor[] = ['sage', 'lilac', 'coral', 'sky', 
  * One block on the Schedule timeline. `kind: 'execution'` is a run that exists;
  * `kind: 'plan'` is a schedule's next fire, which has no execution row yet.
  */
+/**
+ * One clip on the timeline. The field names are the farm's own — `src/schedule/timeline.ts`
+ * builds this and both the dashboard and the app read it, so they are not renamed in transit.
+ */
 export interface TimelineClip {
     id: string;
+    deviceUdid: string;
     kind: 'execution' | 'plan';
-    /** ISO. `end` is the deadline for a plan and for a run still going. */
-    start: string;
-    end: string;
+    /** ISO. `endsAt` is the deadline for a plan and for a run still going. */
+    startsAt: string;
+    endsAt: string;
     /** An `ExecutionStatus` for a run, a `ScheduleStatus` for a plan. */
     status: ExecutionStatus | ScheduleStatus | (string & {});
-    /** The posting account this clip belongs to. */
-    account: string;
+    /** The posting account this clip belongs to; null for work with no account (a warm-up). */
+    account: string | null;
+    /** Local wall clock of `startsAt`, HH:MM. */
+    time: string;
     /** What to write on the clip — already sentence case. */
-    label: string;
+    title: string;
+    /**
+     * The palette entry's name, assigned in order of account registration — the same rule the
+     * dashboard uses, so one account is the same colour on both screens. See
+     * `src/schedule/accounts.ts` and `accountColors` in the app's theme.
+     */
     accountColor: AccountColor | (string & {});
 }
 
-/** A track is a phone. `number` is the operator's 01–99 slot handle. */
+/** A track is a phone. `slot` is the operator's 01–99 handle. */
 export interface TimelineTrack {
-    udid: string;
-    number: string;
+    deviceUdid: string;
+    slot: string;
     name: string;
     clips: TimelineClip[];
 }

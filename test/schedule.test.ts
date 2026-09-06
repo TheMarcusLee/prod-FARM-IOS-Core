@@ -13,6 +13,7 @@ import type { RegisteredDevice } from '../src/devices/registry.js';
 import type { SchedulerRepository } from '../src/scheduler/repository.js';
 import { ACCOUNT_PALETTE, assignAccountColours, collectAccounts } from '../src/schedule/accounts.js';
 import { buildTimeline, windowForRange, type TimelinePayload } from '../src/schedule/timeline.js';
+import { createShellContext } from '../src/ui/context.js';
 
 /** 2026-09-05 19:30 local — an evening, so the range is the one the design calls "tonight". */
 const NOW = new Date(2026, 8, 5, 19, 30, 0);
@@ -46,11 +47,13 @@ function fakeScheduler(executions: ExecutionRow[], schedules: ScheduleRow[] = []
 
 async function scheduleApi(executions: ExecutionRow[], schedules: ScheduleRow[] = []): Promise<FastifyInstance> {
     const app = Fastify();
+    const scheduler = fakeScheduler(executions, schedules);
     await registerScheduleRoutes(app, {
-        scheduler: fakeScheduler(executions, schedules),
+        scheduler,
         loadDevices: async () => DEVICES,
         connectedUdids: async () => [DEVICES[0]!.udid],
         contentStore: null, events: null, now: () => NOW,
+        shell: createShellContext({ app, scheduler, loadDevices: async () => DEVICES }).shell,
     });
     return app;
 }
@@ -201,6 +204,11 @@ test('the schedule page renders a track per active phone through the shell', asy
     assert.doesNotMatch(page.body, /data-device="device-3"/, 'a disabled phone has no track');
     assert.match(page.body, /20:00 morning routine/);
     assert.match(page.body, /bl-playhead/);
+    // The "now HH:MM" label is drawn in a band of its own between the ruler and the
+    // first track, so it never lands on an hour mark. static/dashboard/ts/schedule.ts
+    // builds the same two cells.
+    assert.match(page.body, /bl-tl-ruler[\s\S]*?bl-tl-band-corner"><\/div><div class="bl-tl-band"><\/div>/);
+    assert.match(page.body, /class="bl-tl-band"><\/div>[\s\S]*?bl-playhead-label/);
     assert.match(page.body, /\/assets\/pages\.css\?v=/);
     assert.doesNotMatch(page.body, /iOS Farm|Phone Farm|Handler|Agniverse/);
 
@@ -234,7 +242,47 @@ test('the retired /tasks page redirects to Schedule', async (context) => {
     const page = await inject(app, { method: 'GET', url: '/schedule' });
     assert.equal(page.statusCode, 200);
     assert.match(page.body, /No phones are active/);
-    // The shell's slots are filled from the same options app.ts already has.
-    assert.match(page.body, /href="\/stats"[^>]*>Stats</);
-    assert.match(page.body, /href="\/auth\/logout"[^>]*>Log out</);
+    // The shell's slots come from the one shell context, glyphs and all.
+    assert.match(page.body, /href="\/stats"[\s\S]*?Stats</);
+    assert.match(page.body, /href="\/auth\/logout"[\s\S]*?Log out</);
+    // And the sidebar carries the real rig block rather than "Rig status unknown".
+    assert.doesNotMatch(page.body, /Rig status unknown/);
+});
+
+/**
+ * The wire the phone app reads. `packages/farm-client/src/models.ts` names these exact fields,
+ * and `accountColor` is what colours a clip there — the palette entry's name, not its hex.
+ */
+test('the timeline endpoint names an account and its palette entry on every clip', async (context) => {
+    const started = new Date(2026, 8, 5, 19, 20);
+    const app = await scheduleApi([
+        execution({
+            id: 'running', deviceUdid: 'device-1', scheduledFor: started, startedAt: started,
+            deadlineAt: new Date(2026, 8, 5, 19, 40), status: 'running',
+            payload: { account: '@one', caption: 'gym pov #3' },
+        }),
+        execution({ id: 'warmup', deviceUdid: 'device-2', scheduledFor: new Date(2026, 8, 5, 20, 0) }),
+    ]);
+    context.after(() => app.close());
+
+    const payload = await timeline(app);
+    const clips = payload.tracks.flatMap((track) => track.clips);
+    assert.ok(clips.length);
+    for (const clip of clips) {
+        assert.ok('account' in clip, 'every clip names its account, even as null');
+        assert.equal(clip.accountColor, clip.colour.name);
+        assert.ok(ACCOUNT_PALETTE.some(({ name }) => name === clip.accountColor) || clip.accountColor === 'neutral');
+    }
+
+    // The colour a clip carries is the one the shared rule assigns to its account.
+    const colours = assignAccountColours(collectAccounts(DEVICES));
+    for (const clip of clips.filter(({ account }) => account)) {
+        assert.equal(clip.accountColor, colours.get(clip.account as string)?.name);
+    }
+
+    // And the tracks are named the way the app's TimelineTrack is.
+    for (const track of payload.tracks) {
+        assert.equal(typeof track.deviceUdid, 'string');
+        assert.match(track.slot, /^\d{2}$/);
+    }
 });

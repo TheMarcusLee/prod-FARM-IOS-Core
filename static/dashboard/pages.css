@@ -10,6 +10,8 @@
     --bl-track: 44px;
     --bl-gutter: 150px;
     --bl-ruler: 24px;
+    /* A band of its own under the ruler, so "now 19:03" never lands on an hour mark. */
+    --bl-playband: 18px;
 }
 @media (prefers-color-scheme: dark) {
     :root[data-theme="auto"] { --bl-hairline: #232832; }
@@ -69,11 +71,19 @@
 .bl-tl-device { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bl-tl-track-name[data-state="offline"] { color: var(--bl-text-4); }
 .bl-tl-empty { padding: 14px; color: var(--bl-text-3); font-size: 12.5px; }
-.bl-tl-overlay { position: absolute; left: var(--bl-gutter); right: 0; top: var(--bl-ruler); bottom: 0; pointer-events: none; }
-.bl-tl-overlay .bl-playhead { position: absolute; top: calc(var(--bl-ruler) * -1); bottom: 0; }
-/* The label sits in the ruler band and can land on an hour mark; its own
-   background keeps both readable. */
-.bl-tl-overlay .bl-playhead-label { top: 4px; padding: 0 4px; background: var(--bl-panel); border-radius: 4px; }
+.bl-tl-band { height: var(--bl-playband); }
+.bl-tl-band-corner { border-right: 1px solid var(--bl-line); height: var(--bl-playband); }
+.bl-tl-overlay {
+    position: absolute; left: var(--bl-gutter); right: 0;
+    top: calc(var(--bl-ruler) + var(--bl-playband)); bottom: 0; pointer-events: none;
+}
+.bl-tl-overlay .bl-playhead { position: absolute; top: calc((var(--bl-ruler) + var(--bl-playband)) * -1); bottom: 0; }
+/* The label lives in its own band under the ruler; the ruler's hour marks stay
+   legible whatever time it is. */
+.bl-tl-overlay .bl-playhead-label {
+    top: var(--bl-ruler); left: 6px; line-height: var(--bl-playband);
+    padding: 0 4px; background: var(--bl-panel); border-radius: 4px;
+}
 .bl-seg a, .bl-seg button { white-space: nowrap; }
 
 /* Short work still has to be readable and clickable, so a clip has a floor in pixels
@@ -97,12 +107,9 @@
 .bl-recent-row.is-warning span { color: var(--bl-warn); }
 .bl-sched-planner .bl-panel-body { display: flex; flex-direction: column; gap: 10px; }
 
+/* The shell is never narrower than 1180 — below that the window scrolls — so the
+   only breakpoint left is the one that keeps the foot's two panels honest. */
 @media (max-width: 1400px) { .bl-sched-foot { grid-template-columns: 1fr 300px; } }
-@media (max-width: 1179px) {
-    :root { --bl-gutter: 56px; }
-    .bl-tl-device { display: none; }
-    .bl-sched-foot { grid-template-columns: 1fr; }
-}
 
 /* ---- content --------------------------------------------------------- */
 .bl-content-page { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; padding: 20px; align-items: start; }

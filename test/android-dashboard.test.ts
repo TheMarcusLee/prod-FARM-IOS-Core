@@ -196,9 +196,12 @@ test('remote screenshot and input for an Android device go through its driver, a
     assert.equal(typed.statusCode, 200);
     assert.deepEqual(calls.typed, ['hello']);
 
-    const home = await inject(app, { method: 'POST', url: `/api/devices/${SERIAL}/remote/action`, payload: { type: 'home' } });
-    assert.equal(home.statusCode, 200);
-    assert.deepEqual(calls.keys, ['home']);
+    // Home, the app switcher and the side button are all keyevents on Android.
+    for (const type of ['home', 'recents', 'power'] as const) {
+        const pressed = await inject(app, { method: 'POST', url: `/api/devices/${SERIAL}/remote/action`, payload: { type } });
+        assert.equal(pressed.statusCode, 200, type);
+    }
+    assert.deepEqual(calls.keys, ['home', 'recents', 'power']);
 
     // WDA-only verbs have no adb equivalent and must not silently do nothing.
     const locked = await inject(app, { method: 'POST', url: `/api/devices/${SERIAL}/remote/action`, payload: { type: 'lock' } });

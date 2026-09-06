@@ -42,7 +42,7 @@ export function send(url: string, body: unknown, method = 'POST'): Promise<unkno
 /** Frames per second for each notch of the refresh slider; 0 means "hold the last frame". */
 export const FRAME_RATES = [0, 0.5, 1, 2, 4] as const;
 /** Tile minimum width in px for small, medium and large. */
-export const TILE_SIZES = [120, 170, 240] as const;
+export const TILE_SIZES = [120, 150, 210] as const;
 export const TILE_SIZE_LABELS = ['S', 'M', 'L'] as const;
 
 export function rateLabel(rate: number): string {
@@ -167,7 +167,7 @@ export function devicePoint(image: HTMLElement, screen: ScreenInfo, event: Point
 export type RemoteAction =
     | { type: 'tap'; x: number; y: number }
     | { type: 'swipe'; startX: number; startY: number; endX: number; endY: number; durationMs: number }
-    | { type: 'home' | 'back' | 'lock' | 'wake' | 'unlock' | 'volumeUp' | 'volumeDown' }
+    | { type: 'home' | 'back' | 'recents' | 'lock' | 'power' | 'wake' | 'unlock' | 'volumeUp' | 'volumeDown' }
     | { type: 'text'; text: string };
 
 export function remoteAction(udid: string, action: RemoteAction): Promise<unknown> {

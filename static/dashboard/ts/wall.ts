@@ -261,12 +261,6 @@ async function hardware(udid: string, key: string): Promise<void> {
             await remoteAction(udid, { type: 'text', text });
             return;
         }
-        if (key === 'recents') {
-            // adb has no "recents" verb of its own; the farm's key set stops at home and back.
-            await remoteAction(udid, { type: 'home' });
-            await remoteAction(udid, { type: 'home' });
-            return;
-        }
         await remoteAction(udid, { type: key as 'home' });
     } catch (error) {
         window.alert(errorMessage(error));

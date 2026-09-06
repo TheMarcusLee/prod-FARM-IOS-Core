@@ -6,7 +6,8 @@
  */
 
 import { icon } from '../ui/icons.js';
-import { escapeHtml, renderShell, type RigStatus } from '../ui/shell.js';
+import type { ShellPage } from '../ui/context.js';
+import { escapeHtml } from '../ui/shell.js';
 import {
     RANGE_LABELS, clipGeometry, hhmm, playheadPercent,
     type TimelineClip, type TimelinePayload, type TimelineRange, type TimelineTrack,
@@ -82,8 +83,11 @@ export function timelineHtml(payload: TimelinePayload): string {
     const marker = playhead === null ? ''
         : `<div class="bl-playhead" style="left:${playhead.toFixed(3)}%">`
             + `<span class="bl-playhead-label">now ${escapeHtml(hhmm(new Date(payload.now)))}</span></div>`;
+    // The playhead's label gets a band of its own between the ruler and the first
+    // track; drawn inside the ruler it sat on whichever hour mark was nearest.
     return `<div class="bl-tl" style="--bl-tl-step:${step.toFixed(4)}%">`
         + `<div class="bl-tl-corner"></div><div class="bl-tl-ruler">${head}</div>`
+        + `<div class="bl-tl-band-corner"></div><div class="bl-tl-band"></div>`
         + `${body}<div class="bl-tl-overlay">${marker}</div></div>`;
 }
 
@@ -138,16 +142,6 @@ function pickerHtml(payload: TimelinePayload): string {
         + `<div class="bl-picker">${rows || '<p class="bl-muted">No phones are active yet.</p>'}</div></div></dialog>`;
 }
 
-export interface SchedulePageInput {
-    payload: TimelinePayload;
-    rig?: RigStatus;
-    unreadAlerts?: number;
-    pluginNav?: string;
-    authNav?: string;
-    /** Cache-busting suffix for the page assets, e.g. `?v=abc123`. */
-    assetVersion?: string;
-}
-
 function rangeControl(range: TimelineRange): string {
     const options = (['today', 'tomorrow', 'week'] as const).map((key) => {
         const current = key === range ? ' aria-current="true"' : '';
@@ -156,20 +150,19 @@ function rangeControl(range: TimelineRange): string {
     return `<div class="bl-seg" role="group" aria-label="Range">${options}</div>`;
 }
 
-export function renderSchedulePage(input: SchedulePageInput): string {
-    const version = input.assetVersion ?? '';
-    return renderShell({
+/**
+ * The Schedule page as the shell's page slots; `createShellContext`'s `shell` supplies the chrome.
+ * `assetVersion` is the cache-busting suffix for the page assets, e.g. `?v=abc123`.
+ */
+export function schedulePage(payload: TimelinePayload, assetVersion = ''): ShellPage {
+    return {
         title: 'Schedule',
         active: 'schedule',
-        toolbar: `${rangeControl(input.payload.range)}`
+        toolbar: `${rangeControl(payload.range)}`
             + `<button type="button" class="bl-btn bl-btn-primary" id="schedule-post">${icon('plus')}Schedule post</button>`,
-        toolbarRight: `<span id="schedule-updated" class="bl-faint">Updated ${escapeHtml(hhmm(new Date(input.payload.now)))}</span>`,
-        body: schedulePageBody(input.payload),
-        head: `<link rel="stylesheet" href="/assets/pages.css${version}">`
-            + `<script type="module" src="/assets/schedule.js${version}" defer></script>`,
-        ...(input.rig ? { rig: input.rig } : {}),
-        ...(input.unreadAlerts === undefined ? {} : { unreadAlerts: input.unreadAlerts }),
-        ...(input.pluginNav ? { pluginNav: input.pluginNav } : {}),
-        ...(input.authNav ? { authNav: input.authNav } : {}),
-    });
+        toolbarRight: `<span id="schedule-updated" class="bl-faint">Updated ${escapeHtml(hhmm(new Date(payload.now)))}</span>`,
+        body: schedulePageBody(payload),
+        head: `<link rel="stylesheet" href="/assets/pages.css${assetVersion}">`
+            + `<script type="module" src="/assets/schedule.js${assetVersion}" defer></script>`,
+    };
 }

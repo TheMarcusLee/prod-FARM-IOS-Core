@@ -34,7 +34,7 @@ migration. Copy one between farms with `scp`.
 | `tap` | `target` | See *Targets* below |
 | `swipe` | `from`, `to`, `durationMs` | Points are fractions (0–1) of the screen |
 | `type` | `text` | Supports `{{variable}}` placeholders |
-| `key` | `key` | `home`, `back`, `enter`, `delete` |
+| `key` | `key` | `home`, `back`, `recents`, `power`, `enter`, `delete`. iOS has no `back` or `recents` |
 | `wait` | `ms` | Plain sleep; aborts promptly when the execution is stopped |
 | `waitForText` | `text` or `id`, `timeoutMs` | Polls the accessibility tree |
 | `assert` | `text` or `id`, `expect: present\|absent` | Fails the run when the screen disagrees |

@@ -203,7 +203,7 @@ export function pushMessage(
     };
     return {
         to: registration.expoPushToken,
-        title: events.length === 1 ? latest.title.slice(0, 100) : `${events.length} farm alerts`,
+        title: events.length === 1 ? latest.title.slice(0, 100) : `${events.length} Backline alerts`,
         body: events.length === 1
             ? shortDetail(latest)
             : `${latest.title} · and ${events.length - 1} more`.slice(0, 200),

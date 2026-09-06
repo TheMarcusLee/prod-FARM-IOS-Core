@@ -14,7 +14,7 @@ import type { SchedulerRepository } from '../src/scheduler/repository.js';
 import { applyVariables, validateRunbook, validateStep, type Runbook, type Step } from '../src/runbook/model.js';
 import { stepFromAction, targetAtPoint, validateRemoteAction } from '../src/runbook/recorder.js';
 import { RunbookStepError, replayRunbook, resolveTapPoint } from '../src/runbook/replay.js';
-import { devicePanelFragment, scriptLiteral } from '../src/runbook/html.js';
+import { devicePanelFragment, runbookListFragment, scriptLiteral } from '../src/runbook/html.js';
 import { stepsFromForm } from '../src/runbook/routes.js';
 import { readRunbook, writeRunbook } from '../src/runbook/store.js';
 import { createRunbookPlugin } from '../src/runbook-plugin.js';
@@ -278,6 +278,25 @@ test('the plugin replays in process and reports a platform mismatch as a clear f
     const missingVar = await writeRunbook(runbook([{ type: 'type', text: 'hi {{who}}' }], { id: 'rb-vars0001abc' }), directory);
     const failed = await task.execute(executionContext(fakeDriver(calls()), []), { runbookId: missingVar.id });
     assert.match(failed.error ?? '', /Missing values for \{\{who\}\}/);
+
+    // Every run stamps the runbook with when it ran and how it went; that is what the
+    // list page's last column shows instead of "Updated".
+    const ran = await readRunbook('rb-test0001abcd', directory);
+    assert.equal(ran?.lastRunStatus, 'succeeded');
+    assert.match(ran?.lastRunAt ?? '', /^\d{4}-\d{2}-\d{2}T/);
+    assert.equal((await readRunbook('rb-ios00001abc', directory))?.lastRunStatus, 'failed');
+    assert.equal((await readRunbook(missingVar.id, directory))?.lastRunStatus, 'failed');
+
+    // A runbook nobody has run yet has neither, and the list page says so in words.
+    const never = await writeRunbook(runbook([{ type: 'key', key: 'home' }], { id: 'rb-never001abc' }), directory);
+    assert.equal(never.lastRunAt, undefined);
+    const rows = runbookListFragment(
+        [(await readRunbook('rb-test0001abcd', directory))!, never], [],
+    );
+    assert.match(rows, /Last run/);
+    assert.doesNotMatch(rows, />Updated</);
+    assert.match(rows, /Never run/);
+    assert.match(rows, new RegExp(`bl-dot ok"></span>${ran!.lastRunAt!.slice(0, 10)}`));
 });
 
 async function appWithRunbooks(directory: string, created: unknown[] = []): Promise<Awaited<ReturnType<typeof createApp>>> {

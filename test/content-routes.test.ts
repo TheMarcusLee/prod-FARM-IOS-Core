@@ -5,6 +5,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 
 import { inject } from './support.js';
 import { createApp } from '../src/api/app.js';
+import { createShellContext } from '../src/ui/context.js';
 import { registerContentRoutes } from '../src/api/routes/content.js';
 import { defaultDashboardTheme } from '../src/dashboard-theme.js';
 import { PluginRegistry } from '../src/registry.js';
@@ -113,7 +114,9 @@ async function contentApi(): Promise<{ app: FastifyInstance; state: ReturnType<t
     const { store, state } = fakeStore();
     const app = Fastify();
     const scheduler = { async setScheduleStatus() { return null; } } as unknown as SchedulerRepository;
-    await registerContentRoutes(app, { scheduler, store, plannerIntervalMinutes: 0 });
+    await registerContentRoutes(app, {
+        scheduler, store, plannerIntervalMinutes: 0, shell: createShellContext({ app, scheduler }).shell,
+    });
     return { app, state };
 }
 
@@ -307,7 +310,10 @@ test('a fragment request without a database answers in the element the page is w
     context.after(() => app.close());
     // No store, and a scheduler with no connection — exactly a web process
     // started before the database is reachable.
-    await registerContentRoutes(app, { scheduler: {} as SchedulerRepository, plannerIntervalMinutes: 0 });
+    const scheduler = {} as SchedulerRepository;
+    await registerContentRoutes(app, {
+        scheduler, plannerIntervalMinutes: 0, shell: createShellContext({ app, scheduler }).shell,
+    });
 
     for (const [url, id] of [
         ['/api/content/items', 'content-library'],

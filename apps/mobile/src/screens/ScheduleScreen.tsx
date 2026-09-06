@@ -341,8 +341,8 @@ function Timeline({ timeline }: { timeline: ScheduleTimeline | null }) {
                 <Row gap={0} style={{ alignItems: 'stretch' }}>
                     <View style={{ width: GUTTER, paddingTop: 18 }}>
                         {tracks.map((track) => (
-                            <View key={track.udid} style={{ height: TRACK_HEIGHT, justifyContent: 'center', paddingLeft: spacing.sm }}>
-                                <NumberChip number={track.number} />
+                            <View key={track.deviceUdid} style={{ height: TRACK_HEIGHT, justifyContent: 'center', paddingLeft: spacing.sm }}>
+                                <NumberChip number={track.slot} />
                             </View>
                         ))}
                     </View>
@@ -370,8 +370,8 @@ function Timeline({ timeline }: { timeline: ScheduleTimeline | null }) {
                             </View>
                             {tracks.map((track) => (
                                 <View
-                                    key={track.udid}
-                                    accessibilityLabel={`${track.number} ${track.name}, ${track.clips.length} clips`}
+                                    key={track.deviceUdid}
+                                    accessibilityLabel={`${track.slot} ${track.name}, ${track.clips.length} clips`}
                                     style={{
                                         height: TRACK_HEIGHT,
                                         justifyContent: 'center',
@@ -383,8 +383,8 @@ function Timeline({ timeline }: { timeline: ScheduleTimeline | null }) {
                                         <Clip
                                             key={clip.id}
                                             clip={clip}
-                                            left={Math.max(0, xOf(clip.start))}
-                                            width={Math.max(26, xOf(clip.end) - Math.max(0, xOf(clip.start)))}
+                                            left={Math.max(0, xOf(clip.startsAt))}
+                                            width={Math.max(26, xOf(clip.endsAt) - Math.max(0, xOf(clip.startsAt)))}
                                             scheme={scheme}
                                         />
                                     ))}
@@ -420,7 +420,7 @@ function Clip({ clip, left, width, scheme }: { clip: TimelineClip; left: number;
 
     return (
         <View
-            accessibilityLabel={`${clip.label} for ${clip.account}, ${clip.status}`}
+            accessibilityLabel={`${clip.title} for ${clip.account ?? 'no account'}, ${clip.status}`}
             style={{
                 position: 'absolute',
                 left,
@@ -444,7 +444,7 @@ function Clip({ clip, left, width, scheme }: { clip: TimelineClip; left: number;
                     color: failed ? colors.bad : plan ? colors.text2 : account.text,
                 }}
             >
-                {clip.label}
+                {clip.title}
             </Text>
         </View>
     );

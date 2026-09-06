@@ -5,11 +5,11 @@ import type { DeviceDriver } from './drivers/types.js';
 import type { Recognize } from './drivers/verify.js';
 import type { PhoneFarmPlugin, TaskDefinition } from './plugin.js';
 import type { JsonObject, JsonValue } from './types.js';
-import { platformCompatible, validateRunbookId, variableNames } from './runbook/model.js';
+import { platformCompatible, validateRunbookId, variableNames, type RunbookRunStatus } from './runbook/model.js';
 import { recognizeOnDevice } from './runbook/ocr.js';
 import { replayRunbook } from './runbook/replay.js';
 import { registerRunbookRoutes } from './runbook/routes.js';
-import { readRunbook, runbookExists } from './runbook/store.js';
+import { mutateRunbook, readRunbook, runbookExists } from './runbook/store.js';
 
 export const RUNBOOK_PLUGIN_ID = 'com.farm.runbook';
 
@@ -64,11 +64,28 @@ function createRunTask(configuration: RunbookPluginConfiguration): TaskDefinitio
         retryPolicy: () => ({ retryLimit: 1, retryDelaySeconds: 60, retryBackoff: false }),
         supportsStop: () => true,
         async execute(context, payload) {
+            /**
+             * The list page's last column answers "does this still work, and when did it last?",
+             * which only the run itself knows. Recorded through `mutateRunbook` so a run that
+             * lands while the operator is editing steps does not clobber the edit.
+             */
+            const record = async (status: RunbookRunStatus): Promise<void> => {
+                try {
+                    await mutateRunbook(payload.runbookId, (stored) => {
+                        stored.lastRunAt = new Date().toISOString();
+                        stored.lastRunStatus = status;
+                    }, configuration.directory);
+                } catch {
+                    // A runbook deleted mid-run has nothing to stamp; the run's own
+                    // result is what the operator is told about.
+                }
+            };
             try {
                 const runbook = await readRunbook(payload.runbookId, configuration.directory);
                 if (!runbook) return { exitCode: null, stopped: false, error: `Runbook ${payload.runbookId} no longer exists` };
                 const platform = context.device.platform ?? 'ios';
                 if (!platformCompatible(runbook, platform)) {
+                    await record('failed');
                     return {
                         exitCode: null, stopped: false,
                         error: `"${runbook.name}" was recorded for ${runbook.platform}; ${context.device.name} is ${platform}`,
@@ -76,6 +93,7 @@ function createRunTask(configuration: RunbookPluginConfiguration): TaskDefinitio
                 }
                 const missing = variableNames(runbook).filter((name) => payload.vars?.[name] === undefined);
                 if (missing.length) {
+                    await record('failed');
                     return { exitCode: null, stopped: false, error: `Missing values for ${missing.map((name) => `{{${name}}}`).join(', ')}` };
                 }
                 const result = await replayRunbook(context.driver, runbook, {
@@ -84,9 +102,14 @@ function createRunTask(configuration: RunbookPluginConfiguration): TaskDefinitio
                     signal: context.signal,
                     log: (line) => context.log(line),
                 });
+                await record(result.stopped ? 'stopped' : 'succeeded');
                 return { exitCode: result.stopped ? null : 0, stopped: result.stopped };
             } catch (error) {
-                if (context.signal.aborted) return { exitCode: null, stopped: true };
+                if (context.signal.aborted) {
+                    await record('stopped');
+                    return { exitCode: null, stopped: true };
+                }
+                await record('failed');
                 return { exitCode: null, stopped: false, error: error instanceof Error ? error.message : String(error) };
             }
         },

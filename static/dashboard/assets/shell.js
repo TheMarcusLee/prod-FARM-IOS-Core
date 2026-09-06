@@ -31,7 +31,7 @@ export function send(url, body, method = 'POST') {
 /** Frames per second for each notch of the refresh slider; 0 means "hold the last frame". */
 export const FRAME_RATES = [0, 0.5, 1, 2, 4];
 /** Tile minimum width in px for small, medium and large. */
-export const TILE_SIZES = [120, 170, 240];
+export const TILE_SIZES = [120, 150, 210];
 export const TILE_SIZE_LABELS = ['S', 'M', 'L'];
 export function rateLabel(rate) {
     return rate === 0 ? 'off' : `${rate} fps`;

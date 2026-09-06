@@ -111,6 +111,11 @@ test('the tool set exposes every farm tool plus the status resource and planning
         assert.deepEqual(prompts, ['plan_posting_day']);
         const prompt = await client.getPrompt({ name: 'plan_posting_day' });
         assert.match(String((prompt.messages[0]?.content as { text: string }).text), /list_devices/);
+
+        // The product has one name everywhere a person reads one; the client's own
+        // config key stays `phone-farm` for compatibility, which is not this.
+        assert.equal(client.getServerVersion()?.name, 'backline');
+        assert.doesNotMatch(String(prompt.description ?? ''), /phone-farm|Phone Farm|Handler|Agniverse/);
     } finally { await close(); }
 });
 

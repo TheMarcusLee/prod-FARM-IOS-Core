@@ -116,7 +116,8 @@ export function gestureToAction(
 
 /** `back` and `text` are Android-only; the farm answers 400 otherwise. */
 export function isActionSupported(action: RemoteAction['type'], platform: Platform): boolean {
-    if (action === 'back' || action === 'text') return platform === 'android';
+    // `power` works on both: keyevent 26 on Android, the WDA lock on iOS.
+    if (action === 'back' || action === 'recents' || action === 'text') return platform === 'android';
     return true;
 }
 
@@ -180,21 +181,49 @@ export function wallSummary(devices: Pick<FleetDevice, 'state' | 'currentExecuti
 
 /* --------------------------------------------------------------- timeline */
 
-/** Stable account colour for a device, assigned by its place in the fleet. */
+/** Stable account colour for a slot in the registration order. */
 export function accountColorForIndex(index: number): AccountColor {
     return ACCOUNT_COLORS[index % ACCOUNT_COLORS.length]!;
+}
+
+/**
+ * Every account the fleet knows, in registration order: device by device in the order the farm
+ * lists them, then each device's accounts in the order its plugins list them. The dashboard does
+ * exactly this in `src/schedule/accounts.ts` (`collectAccounts` + `assignAccountColours`), so an
+ * account is the same colour on the wall, on the desktop timeline and on the phone.
+ */
+export function assignAccountColors(devices: Pick<FleetDevice, 'accounts'>[]): Map<string, AccountColor> {
+    const colors = new Map<string, AccountColor>();
+    for (const device of devices) {
+        for (const account of device.accounts ?? []) {
+            const name = account.trim();
+            if (!name || colors.has(name)) continue;
+            colors.set(name, accountColorForIndex(colors.size));
+        }
+    }
+    return colors;
 }
 
 /** A run with no deadline still occupies a block; this is how wide it is. */
 const DEFAULT_CLIP_MS = 30 * 60_000;
 
+/** Local wall clock, HH:MM — the farm's `hhmm`, on the phone's own clock. */
+function hhmm(at: number): string {
+    const stamp = new Date(at);
+    return `${String(stamp.getHours()).padStart(2, '0')}:${String(stamp.getMinutes()).padStart(2, '0')}`;
+}
+
 /**
  * The fallback for a farm without `GET /api/schedule/timeline`: the same shape,
  * composed from the schedules and executions the app already has. It is not a
  * second source of truth — when the endpoint answers, this is not called.
+ *
+ * Clips are coloured by *account*, in registration order, not by the phone's position in the
+ * fleet: a phone is not an identity, and two phones posting the same handle must read as one
+ * colour here just as they do on the dashboard.
  */
 export function composeTimeline(input: {
-    devices: Pick<FleetDevice, 'udid' | 'name'>[];
+    devices: Pick<FleetDevice, 'udid' | 'name' | 'accounts'>[];
     schedules: ScheduleRow[];
     executions: ExecutionRow[];
     from: string;
@@ -204,10 +233,13 @@ export function composeTimeline(input: {
     const fromMs = Date.parse(input.from);
     const toMs = Date.parse(input.to);
     const overlaps = (start: number, end: number) => end > fromMs && start < toMs;
+    const colors = assignAccountColors(input.devices);
+    /** Work with no account of its own belongs to the phone's first handle, if it has one. */
+    const neutral: AccountColor = 'slate';
 
     const tracks: TimelineTrack[] = input.devices.map((device, index) => {
-        const color = accountColorForIndex(index);
-        const account = deviceDisplayName(device.name);
+        const account = (device.accounts ?? [])[0]?.trim() || null;
+        const color = account ? colors.get(account) ?? neutral : neutral;
         const clips: TimelineClip[] = [];
 
         for (const row of input.executions) {
@@ -220,12 +252,14 @@ export function composeTimeline(input: {
             if (!overlaps(start, end)) continue;
             clips.push({
                 id: row.id,
+                deviceUdid: device.udid,
                 kind: 'execution',
-                start: new Date(start).toISOString(),
-                end: new Date(end).toISOString(),
+                startsAt: new Date(start).toISOString(),
+                endsAt: new Date(end).toISOString(),
                 status: row.status,
                 account,
-                label: clipLabel(row.taskType),
+                time: hhmm(start),
+                title: clipLabel(row.taskType),
                 accountColor: color,
             });
         }
@@ -239,18 +273,20 @@ export function composeTimeline(input: {
             if (!overlaps(start, end)) continue;
             clips.push({
                 id: `plan:${row.id}`,
+                deviceUdid: device.udid,
                 kind: 'plan',
-                start: new Date(start).toISOString(),
-                end: new Date(end).toISOString(),
+                startsAt: new Date(start).toISOString(),
+                endsAt: new Date(end).toISOString(),
                 status: row.status,
                 account,
-                label: clipLabel(row.taskType),
+                time: hhmm(start),
+                title: clipLabel(row.taskType),
                 accountColor: color,
             });
         }
 
-        clips.sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
-        return { udid: device.udid, number: deviceNumber(index), name: deviceDisplayName(device.name), clips };
+        clips.sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt));
+        return { deviceUdid: device.udid, slot: deviceNumber(index), name: deviceDisplayName(device.name), clips };
     });
 
     return { tracks, now: input.now ?? new Date().toISOString() };

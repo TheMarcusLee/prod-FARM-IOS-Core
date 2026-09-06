@@ -62,7 +62,7 @@ export async function requestExpoPushToken(): Promise<{ token: string | null; re
 
     if (Platform.OS === 'android') {
         await Notifications.setNotificationChannelAsync('farm-alerts', {
-            name: 'Farm alerts',
+            name: 'Backline alerts',
             importance: Notifications.AndroidImportance.HIGH,
             vibrationPattern: [0, 250, 250, 250],
         });

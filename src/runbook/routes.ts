@@ -127,7 +127,7 @@ export async function registerRunbookRoutes(context: PluginRouteContext, options
     const pageScript = await readFile(path.join(STATIC_ROOT, 'assets/runbooks.js'), 'utf8')
         .catch(() => '/* run npm run build:web */');
     const pageStyles = await readFile(path.join(STATIC_ROOT, 'pages.css'), 'utf8').catch(() => '');
-    const chrome = { assetVersion: `?v=${crypto.createHash('sha1').update(pageScript + pageStyles).digest('base64url').slice(0, 10)}` };
+    const assetVersion = `?v=${crypto.createHash('sha1').update(pageScript + pageStyles).digest('base64url').slice(0, 10)}`;
     app.get('/assets/runbooks.js', async (request: FastifyRequest, reply: FastifyReply) => {
         const versioned = Boolean((request.query as { v?: string }).v);
         return reply.header('cache-control', versioned ? 'public, max-age=31536000, immutable' : 'no-cache')
@@ -283,13 +283,17 @@ export async function registerRunbookRoutes(context: PluginRouteContext, options
 
     // ---- Pages and fragments --------------------------------------------------------------
 
-    app.get('/runbooks', async (_request, reply) =>
-        html(reply, runbooksPage(await listRunbooks(directory), await context.loadDevices(), chrome)));
+    /** The list page, rendered through the farm's own shell so the sidebar is the real one. */
+    const listPage = async (request: FastifyRequest): Promise<string> => context.shell(request,
+        runbooksPage(await listRunbooks(directory), await context.loadDevices(), assetVersion));
+
+    app.get('/runbooks', async (request, reply) => html(reply, await listPage(request)));
 
     app.get<{ Params: { id: string } }>('/runbooks/:id', async (request, reply) => {
         const runbook = await readRunbook(request.params.id, directory);
-        if (!runbook) return reply.code(404).type('text/html').send(runbooksPage(await listRunbooks(directory), await context.loadDevices(), chrome));
-        return html(reply, runbookPage(runbook, await context.loadDevices(), chrome, recorder.forRunbook(runbook.id)?.udid));
+        if (!runbook) return reply.code(404).type('text/html').send(await listPage(request));
+        return html(reply, await context.shell(request,
+            runbookPage(runbook, await context.loadDevices(), assetVersion, recorder.forRunbook(runbook.id)?.udid)));
     });
 
     app.post<{ Body: FormBody }>(`${ROUTE_PREFIX}/runbooks`, async (request, reply) => {

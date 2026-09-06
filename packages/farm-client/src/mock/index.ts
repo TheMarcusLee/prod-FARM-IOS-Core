@@ -345,6 +345,15 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
 
     /* ---------------------------------------------------------- reading */
 
+    /** The handles a phone's plugin data lists — the farm's `deviceAccounts`, in miniature. */
+    function accountsOf(device: RegisteredDevice): string[] {
+        return Object.values(device.pluginData ?? {}).flatMap((data) => {
+            const value = data as { accounts?: unknown; handle?: unknown };
+            if (Array.isArray(value.accounts)) return value.accounts.filter((entry): entry is string => typeof entry === 'string');
+            return typeof value.handle === 'string' ? [value.handle] : [];
+        });
+    }
+
     function fleetDevices(): FleetDevice[] {
         return devices.map((device) => {
             const state = states.get(device.udid) ?? 'online';
@@ -361,6 +370,7 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
                 state,
                 // Bootstrap sends only this; the full record is `getDeviceConnection`.
                 connection: { connected: state !== 'offline' && state !== 'disabled' },
+                accounts: accountsOf(device),
                 currentExecution: active
                     ? {
                           id: active.id,
@@ -482,7 +492,8 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
             if (activeExecutionFor(udid)) {
                 fail('conflict', 'Remote input is disabled while automation is running', 409);
             }
-            if ((action.type === 'back' || action.type === 'text') && (device.platform ?? 'ios') === 'ios') {
+            const androidOnly = action.type === 'back' || action.type === 'recents' || action.type === 'text';
+            if (androidOnly && (device.platform ?? 'ios') === 'ios') {
                 fail('validation', `"${action.type}" is an Android-only remote action`, 400);
             }
             // A new frame, so the operator sees the tap did something.

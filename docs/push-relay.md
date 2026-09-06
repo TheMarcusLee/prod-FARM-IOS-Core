@@ -52,7 +52,7 @@ typo in `PUSH_QUIET_HOURS` disables quiet hours, it does not stop the relay.
    than sliding an hour.
 5. **Coalesce.** The first event for a quiet registration is pushed
    immediately; anything arriving inside the next 30 s is held and folded into
-   one message — `"3 farm alerts"`, with `data.count` — so a half-out USB cable
+   one message — `"3 Backline alerts"`, with `data.count` — so a half-out USB cable
    flapping all night is one notification, not two hundred. The flush timer
    ticks every `min(PUSH_COALESCE_WINDOW_MS, 1000)` ms.
 6. **Send** in batches of at most 100 to `https://exp.host/--/api/v2/push/send`.

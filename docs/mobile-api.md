@@ -260,19 +260,25 @@ Needed to map a tap in the app's image view back to device coordinates.
 | `swipe` | `startX`, `startY`, `endX`, `endY`, `durationMs` | iOS, Android |
 | `home` | — | iOS, Android |
 | `back` | — | Android only |
+| `recents` | — | Android only |
+| `power` | — | iOS, Android |
 | `text` | `text` | Android only |
 | `lock`, `wake`, `unlock` | — | iOS only |
 | `volumeUp`, `volumeDown` | — | iOS only |
+
+`recents` is `adb` keyevent 187 (the app switcher); iOS has no such key.
+`power` is the side button: keyevent 26 on Android, WDA's `/wda/lock` on iOS,
+so one button works on both platforms. `lock` is the older iOS-only spelling of
+`power` and still works.
 
 Returns `{ "ok": true }`. `409` — `"Remote input is disabled while automation
 is running"` — whenever the device has a queued or running execution. This
 guard is server-side and non-negotiable; the app's safety toggle is a second
 lock, not the first.
 
-An unsupported verb on **Android** is a clean `400` naming it. Sending an
-Android-only verb (`back`, `text`) to an **iOS** device is not currently
-validated — it falls through to WDA and fails opaquely. Send only what the
-table allows for the device's platform.
+An unsupported verb on **Android** is a clean `400` naming it, and so is an
+Android-only verb (`back`, `recents`, `text`) sent to an **iOS** device:
+`{ "error": "\"recents\" is an Android-only remote action" }`.
 
 `GET /api/devices/:udid/remote/stream` (MJPEG) exists but the app should not
 use it — see the plan's §5 note on battery and background limits.
@@ -406,6 +412,72 @@ be cancelled). The error text comes from `ScheduleTransitionError`.
 
 `{ timing?, runWindowMinutes?, recurringPublishConfirmed? }`. Returns the row,
 or `409` `"Completed or cancelled schedules cannot be edited"`.
+
+### `GET /api/schedule/timeline?range=|from=&to=`
+
+The Schedule board: one track per active phone, one clip per piece of work.
+`range` is `today | tomorrow | week`; an explicit `from`/`to` pair (ISO) wins
+over it. Built by `src/schedule/timeline.ts` and served to the dashboard and the
+app unchanged — the field names below are the farm's own.
+
+```json
+{
+  "from": "2026-09-05T17:00:00.000Z",
+  "to": "2026-09-06T05:00:00.000Z",
+  "now": "2026-09-05T18:03:11.000Z",
+  "range": "today",
+  "heading": "Tonight, Saturday 5 September",
+  "ticks": [{ "at": "2026-09-05T17:00:00.000Z", "label": "18:00" }],
+  "accounts": [{ "account": "@farm.one", "colour": { "name": "sage", "fill": "#a3c497", "line": "#7fa66a", "ink": "#24391c" } }],
+  "tracks": [
+    {
+      "deviceUdid": "R58N12ABCDE",
+      "name": "Pixel 7",
+      "slot": "02",
+      "state": "online",
+      "accounts": ["@farm.one"],
+      "clips": [
+        {
+          "id": "0b6d…",
+          "deviceUdid": "R58N12ABCDE",
+          "kind": "execution",
+          "status": "running",
+          "account": "@farm.one",
+          "accountColor": "sage",
+          "colour": { "name": "sage", "fill": "#a3c497", "line": "#7fa66a", "ink": "#24391c" },
+          "startsAt": "2026-09-05T18:00:00.000Z",
+          "endsAt": "2026-09-05T18:30:00.000Z",
+          "time": "19:00",
+          "title": "posting",
+          "summary": "Posting now on Pixel 7.",
+          "scheduleId": "sch_1",
+          "schedulePaused": false,
+          "taskLabel": "Post a clip",
+          "progress": 0.1
+        }
+      ]
+    }
+  ],
+  "counts": { "posts": 1, "accounts": 1, "needsYou": 0 },
+  "recent": [],
+  "planner": null
+}
+```
+
+`account` is the handle the clip posts as, or `null` for work with no identity
+(a warm-up, a runbook). **`accountColor`** is the palette entry's name — `sage`,
+`lilac`, `coral`, `sky`, `mustard`, `rose`, `mint`, `slate` — assigned in order
+of account registration by `src/schedule/accounts.ts`, so one handle is one
+colour on the wall, on the desktop timeline and on the phone. `colour` carries
+the same entry's hex for a client that does not keep its own palette; the app
+keeps one (`accountColors` in `src/theme`) and reads `accountColor`.
+
+`kind` is `execution` (stoppable, retryable) or `plan` (a drip post that has not
+been materialised; only skippable). `id` for a plan is `plan:<planId>`.
+
+A farm older than this endpoint answers `404`; the app falls back to
+`composeTimeline()` over `/api/schedules` and `/api/executions`, which applies
+the same account-order colour rule using each device's `accounts`.
 
 ---
 
@@ -697,6 +769,7 @@ Alerts tabs need before the first user interaction.
         "name": "iPhone 8 · slot 1",
         "platform": "ios",
         "tags": ["warm-up"],
+        "accounts": ["@farm.one"],
         "state": "busy",
         "connection": { "connected": true },
         "currentExecution": {

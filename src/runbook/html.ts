@@ -7,7 +7,7 @@
 
 import type { RegisteredDevice } from '../devices/registry.js';
 import { icon } from '../ui/icons.js';
-import { renderShell, type RigStatus } from '../ui/shell.js';
+import type { ShellPage } from '../ui/context.js';
 import {
     KEYS, STEP_TYPES, summarizeStep, variableNames,
     type Runbook, type Step, type StepType,
@@ -33,27 +33,17 @@ export function escapeHtml(value: unknown): string {
 /** Every runbook surface hangs off the plugin's own route prefix. */
 export const ROUTE_PREFIX = '/plugins/com.farm.runbook';
 
-export interface RunbookPageChrome {
-    rig?: RigStatus;
-    unreadAlerts?: number;
-    pluginNav?: string;
-    authNav?: string;
-    /** Cache-busting suffix for the page assets, e.g. `?v=abc123`. */
-    assetVersion?: string;
-}
-
-function layout(title: string, toolbar: string, body: string, chrome: RunbookPageChrome = {}): string {
-    const version = chrome.assetVersion ?? '';
-    return renderShell({
+/**
+ * Runbook pages are the shell's page slots; the chrome comes from `createShellContext`'s `shell`,
+ * which the plugin route context carries. `assetVersion` is the cache-busting suffix, e.g. `?v=abc`.
+ */
+function layout(title: string, toolbar: string, body: string, assetVersion = ''): ShellPage {
+    return {
         title, active: 'runbooks', toolbar,
         body: `<div class="bl-page">${body}</div>`,
-        head: `<link rel="stylesheet" href="/assets/pages.css${version}">`
-            + `<script type="module" src="/assets/runbooks.js${version}" defer></script>`,
-        ...(chrome.rig ? { rig: chrome.rig } : {}),
-        ...(chrome.unreadAlerts === undefined ? {} : { unreadAlerts: chrome.unreadAlerts }),
-        ...(chrome.pluginNav ? { pluginNav: chrome.pluginNav } : {}),
-        ...(chrome.authNav ? { authNav: chrome.authNav } : {}),
-    });
+        head: `<link rel="stylesheet" href="/assets/pages.css${assetVersion}">`
+            + `<script type="module" src="/assets/runbooks.js${assetVersion}" defer></script>`,
+    };
 }
 
 function notice(message?: string): string {
@@ -74,6 +64,18 @@ function platformOptions(selected: string): string {
 
 function stamp(iso: string): string {
     return iso.slice(0, 16).replace('T', ' ');
+}
+
+/**
+ * What the operator actually wants from the last column: whether this runbook still works, and
+ * when it last did. "Updated" only ever said when someone edited the steps.
+ */
+function lastRun(runbook: Runbook): string {
+    if (!runbook.lastRunAt) return '<span class="bl-faint">Never run</span>';
+    const word = runbook.lastRunStatus === 'failed' ? 'error'
+        : runbook.lastRunStatus === 'stopped' ? 'warn' : 'ok';
+    return `<span class="bl-state ${word}"><span class="bl-dot ${word}"></span>`
+        + `${escapeHtml(stamp(runbook.lastRunAt))}</span>`;
 }
 
 /**
@@ -104,7 +106,7 @@ export function runbookListFragment(runbooks: readonly Runbook[], devices: reado
 <p>${escapeHtml(runbook.description || runbook.id)}</p></div>
 <div class="bl-rb-col">${escapeHtml(runbook.platform)}</div>
 <div class="bl-rb-col">${runbook.steps.length} ${runbook.steps.length === 1 ? 'step' : 'steps'}</div>
-<div class="bl-rb-col">${escapeHtml(stamp(runbook.updatedAt))}</div>
+<div class="bl-rb-col">${lastRun(runbook)}</div>
 <div class="bl-rb-actions">
 <button type="button" class="bl-btn bl-btn-sm" data-dialog="run-${escapeHtml(runbook.id)}">Run on device</button>
 <form hx-post="${ROUTE_PREFIX}/runbooks/${escapeHtml(runbook.id)}/duplicate" hx-target="#runbook-list" hx-swap="outerHTML">
@@ -115,7 +117,7 @@ export function runbookListFragment(runbooks: readonly Runbook[], devices: reado
     const empty = '<div class="bl-empty">No runbooks yet. Create one, then record on it from a phone\'s page.</div>';
     return `<section id="runbook-list" class="bl-panel">${notice(message)}
 <div class="bl-rb-row bl-section-title"><div class="bl-rb-name">Runbook</div><div class="bl-rb-col">Platform</div>
-<div class="bl-rb-col">Steps</div><div class="bl-rb-col">Updated</div><div class="bl-rb-actions" style="width:250px"></div></div>
+<div class="bl-rb-col">Steps</div><div class="bl-rb-col">Last run</div><div class="bl-rb-actions" style="width:250px"></div></div>
 ${rows || empty}</section>`;
 }
 
@@ -133,8 +135,8 @@ function createForm(devices: readonly RegisteredDevice[]): string {
 }
 
 export function runbooksPage(
-    runbooks: readonly Runbook[], devices: readonly RegisteredDevice[], chrome: RunbookPageChrome = {},
-): string {
+    runbooks: readonly Runbook[], devices: readonly RegisteredDevice[], assetVersion = '',
+): ShellPage {
     return layout('Runbooks',
         `<button type="button" class="bl-btn bl-btn-primary" data-dialog="new-runbook">${icon('plus')}New runbook</button>`,
         `<p class="bl-muted">Record a sequence once on one phone, replay it on the fleet.</p>`
@@ -142,7 +144,7 @@ export function runbooksPage(
         + `<dialog class="bl-dialog" id="new-runbook"><div class="bl-dialog-head"><strong>New runbook</strong>`
         + `<button type="button" class="bl-btn bl-btn-icon" data-dialog-close aria-label="Close">${icon('x')}</button></div>`
         + createForm(devices) + '</dialog>',
-        chrome);
+        assetVersion);
 }
 
 // ---- the editor ------------------------------------------------------------
@@ -243,12 +245,12 @@ ${runDialog(runbook, devices, 'editor')}</section>`;
 }
 
 export function runbookPage(
-    runbook: Runbook, devices: readonly RegisteredDevice[], chrome: RunbookPageChrome = {}, recordingOn?: string,
-): string {
+    runbook: Runbook, devices: readonly RegisteredDevice[], assetVersion = '', recordingOn?: string,
+): ShellPage {
     return layout(runbook.name,
         `<a class="bl-btn" href="/runbooks">${icon('chevronLeft')}All runbooks</a>`
         + `<button type="button" class="bl-btn bl-btn-primary" data-dialog="run-${escapeHtml(runbook.id)}">${icon('play')}Run on device</button>`,
-        runbookEditorFragment(runbook, devices, undefined, recordingOn), chrome);
+        runbookEditorFragment(runbook, devices, undefined, recordingOn), assetVersion);
 }
 
 /** The device-page panel: pick a runbook, toggle recording, watch the steps arrive. */

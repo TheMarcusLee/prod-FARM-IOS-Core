@@ -54,7 +54,7 @@ export const STEP_TYPES: readonly StepType[] = [
     'launchApp', 'tap', 'swipe', 'type', 'key', 'wait', 'waitForText', 'assert', 'screenshot',
 ];
 
-export const KEYS: readonly Key[] = ['home', 'back', 'enter', 'delete'];
+export const KEYS: readonly Key[] = ['home', 'back', 'recents', 'power', 'enter', 'delete'];
 
 export type RunbookPlatform = 'ios' | 'android' | 'any';
 
@@ -77,6 +77,16 @@ export interface Runbook {
     version: 1;
     createdAt: string;
     updatedAt: string;
+    /** When the plugin's task last replayed this runbook, and how it went. Absent until it has. */
+    lastRunAt?: string;
+    lastRunStatus?: RunbookRunStatus;
+}
+
+/** `stopped` is the operator pressing Stop; `failed` is anything the replay could not do. */
+export type RunbookRunStatus = 'succeeded' | 'failed' | 'stopped';
+
+export function validateRunStatus(value: JsonValue | undefined): RunbookRunStatus | undefined {
+    return value === 'succeeded' || value === 'failed' || value === 'stopped' ? value : undefined;
 }
 
 export const MAX_STEPS = 200;
@@ -244,6 +254,8 @@ export function validateRunbook(value: JsonValue | undefined): Runbook {
         version: 1,
         createdAt: typeof input.createdAt === 'string' ? input.createdAt : now,
         updatedAt: now,
+        ...(typeof input.lastRunAt === 'string' ? { lastRunAt: input.lastRunAt } : {}),
+        ...(validateRunStatus(input.lastRunStatus) ? { lastRunStatus: validateRunStatus(input.lastRunStatus) } : {}),
     };
 }
 

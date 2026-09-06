@@ -87,3 +87,41 @@ describe('the device screen lock', () => {
         expect(screen.getByTestId('device-state-line')).toHaveTextContent(/^Busy · .+ · live 2 fps$/);
     });
 });
+
+/**
+ * Recents and Power were drawn but inert — the farm had no verb for either. It
+ * does now (`adb` keyevents 187 and 26; the WDA lock on iOS), so the two keys
+ * send like the rest. Recents is Android-only, because iOS has no such key.
+ */
+describe('the recents and power keys', () => {
+    const ANDROID_DEVICE = 'R58N12ABCDF';
+
+    beforeEach(() => {
+        authentication().mockReset();
+        authentication().mockResolvedValue({ success: true });
+    });
+
+    async function unlocked(udid: string) {
+        await renderWithProviders(<DeviceScreen udid={udid} />);
+        await fireEvent(await screen.findByTestId('device-lock-bar'), 'longPress');
+        await waitFor(() => expect(screen.getByTestId('device-key-power').props.accessibilityState.disabled).toBe(false));
+    }
+
+    it('are both live on an Android phone once touch is unlocked', async () => {
+        await unlocked(ANDROID_DEVICE);
+        expect(screen.getByTestId('device-key-recents').props.accessibilityState.disabled).toBe(false);
+
+        // Neither press raises "the farm has no … action yet".
+        const alert = jest.spyOn(require('react-native').Alert, 'alert');
+        await fireEvent.press(screen.getByTestId('device-key-recents'));
+        await fireEvent.press(screen.getByTestId('device-key-power'));
+        await waitFor(() => expect(alert).not.toHaveBeenCalled());
+        alert.mockRestore();
+    });
+
+    it('offers power but not recents on an iPhone', async () => {
+        await unlocked(BUSY_DEVICE);
+        expect(screen.getByTestId('device-key-power').props.accessibilityState.disabled).toBe(false);
+        expect(screen.getByTestId('device-key-recents').props.accessibilityState.disabled).toBe(true);
+    });
+});
