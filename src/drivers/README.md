@@ -71,13 +71,20 @@ visibility before it starts a run on an `a11y-bridge` device. Set `"bridgeOnly":
 
 | | adb visible | `bridgeOnly: true`, adb gone |
 |---|---|---|
-| tap / swipe / type / key / screenshot / tree | yes | yes |
+| tap / swipe / gesture / type / key / screenshot / tree | yes | yes |
 | `launchApp` / `terminateApp` / `pushMedia` | yes | **throws `UnsupportedOperationError` mid-run** |
 | starts a run while off USB | no — held until adb sees it | yes |
 
 So: leave it unset for a phone on a USB hub or on wireless adb, and set it only for a phone that
 is deliberately unreachable by adb *and* runs routines that launch apps by tapping the home-screen
 icon and never push media. `POST /api/devices` accepts the field; the dashboard does not set it.
+
+## Gestures
+
+`gesture(path)` plays a list of `{x, y, t}` samples: touch down on the first, follow the rest with
+their own timing, lift on the last. `swipe()` is a thin wrapper that generates a human arc and
+delegates to it — pass `straight: true` for the rare drag that has to be a straight line. Each
+driver's route to the phone, and what each one can and cannot honour, is in `docs/motion.md`.
 
 ## Bootstrapping the bridge on a phone (once, over USB)
 

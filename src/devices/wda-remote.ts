@@ -1,3 +1,4 @@
+import type { TimedPoint } from '../drivers/types.js';
 import { coordinatesForProfile } from './coordinates.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -30,7 +31,9 @@ export type RemoteAction =
         endX: number;
         endY: number;
         durationMs: number;
-    };
+    }
+    /** A sampled path: one touch-down, a move per point with its own duration, one lift. */
+    | { type: 'gesture'; path: TimedPoint[] };
 
 export interface PasscodeKeypadLayout {
     // x for columns [1,4,7/0], [2,5,8], [3,6,9]
@@ -251,7 +254,9 @@ export class WdaRemoteControl {
         // just to validate coordinates on every single tap/swipe.
         const screen = this.cachedScreenInfo ?? await this.getScreenInfo(udid);
         validateAction(action, screen.screenSize);
-        const actions = action.type === 'tap' ? tapActions(action) : swipeActions(action);
+        const actions = action.type === 'tap' ? tapActions(action)
+            : action.type === 'gesture' ? gestureActions(action.path)
+                : swipeActions(action);
         await this.request('/wda/absolute-actions', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
@@ -270,11 +275,13 @@ function validatePoint(x: number, y: number, { width, height }: ScreenSize): boo
 }
 
 function validateAction(action: RemoteAction, screenSize: ScreenSize): void {
-    if (action.type !== 'tap' && action.type !== 'swipe') return;
+    if (action.type !== 'tap' && action.type !== 'swipe' && action.type !== 'gesture') return;
     const valid = action.type === 'tap'
         ? validatePoint(action.x, action.y, screenSize)
-        : validatePoint(action.startX, action.startY, screenSize)
-            && validatePoint(action.endX, action.endY, screenSize);
+        : action.type === 'gesture'
+            ? action.path.length >= 2 && action.path.every(({ x, y }) => validatePoint(x, y, screenSize))
+            : validatePoint(action.startX, action.startY, screenSize)
+                && validatePoint(action.endX, action.endY, screenSize);
     if (!valid) {
         throw new RemoteDeviceError('Touch coordinates are outside the device screen');
     }
@@ -294,6 +301,34 @@ function tapActions({ x, y }: Extract<RemoteAction, { type: 'tap' }>): W3cPointe
         { type: 'pointerMove', duration: 0, x, y, origin: 'viewport' },
         { type: 'pointerDown', button: 0 },
         { type: 'pause', duration: 80 },
+        { type: 'pointerUp', button: 0 },
+    ]);
+}
+
+/**
+ * A path as W3C pointer actions. Each `pointerMove` carries the gap to the point before it, which
+ * is how the uneven speed of a real thumb survives the trip: WDA interpolates within a move, so
+ * a fast middle is a long move over a short duration and a slow start is the opposite.
+ *
+ * This goes to the fork's session-less `/wda/absolute-actions`, not `POST /session/:id/actions`:
+ * `WdaRemoteControl` deliberately holds no WebDriver session (the dashboard, the worker and the
+ * routines all share one WDA), and every tap and swipe already takes that route. Appium-driven
+ * routines that *do* own a session use the same action list through `performActions`.
+ */
+export function gestureActions(path: readonly TimedPoint[]): W3cPointerSource[] {
+    if (path.length < 2) throw new RemoteDeviceError('A gesture needs at least two points');
+    const first = path[0]!;
+    const moves: W3cActionItem[] = path.slice(1).map((point, index) => ({
+        type: 'pointerMove',
+        duration: Math.max(0, Math.round(point.t - path[index]!.t)),
+        x: point.x,
+        y: point.y,
+        origin: 'viewport',
+    }));
+    return pointerSource([
+        { type: 'pointerMove', duration: 0, x: first.x, y: first.y, origin: 'viewport' },
+        { type: 'pointerDown', button: 0 },
+        ...moves,
         { type: 'pointerUp', button: 0 },
     ]);
 }

@@ -57,6 +57,8 @@ interface FakeDriver {
     pushed: string[];
     launched: string[];
     swipes: number;
+    /** Every path handed to `gesture`, so a test can look at the shape of a swipe. */
+    paths: unknown[][];
 }
 
 /**
@@ -66,7 +68,7 @@ interface FakeDriver {
  */
 function fakeDriver(screens: UiNode[]): FakeDriver {
     const state: FakeDriver = {
-        taps: [], typed: [], keys: [], pushed: [], launched: [], swipes: 0,
+        taps: [], typed: [], keys: [], pushed: [], launched: [], swipes: 0, paths: [],
         driver: undefined as unknown as DeviceDriver,
     };
     let index = 0;
@@ -81,6 +83,7 @@ function fakeDriver(screens: UiNode[]): FakeDriver {
             if (hit?.type !== STAY) index = Math.min(index + 1, screens.length - 1);
         },
         swipe: async () => { state.swipes += 1; },
+        gesture: async (path: unknown[]) => { state.swipes += 1; state.paths.push(path); },
         type: async (text: string) => { state.typed.push(text); },
         pressKey: async (key: string) => { state.keys.push(key); },
         screenshot: async () => Buffer.alloc(0),
@@ -226,6 +229,7 @@ test('the Android doomscroll swipes, engages through the tree and reports a summ
         // Always engage, and advance the clock a fixed step per call so the run ends.
         random: () => 0,
         now: () => (clock += 2_000),
+        seed: 'test-seed',
     });
     assert.equal(summary.reason, 'completed');
     assert.ok(summary.videosViewed >= 1);
@@ -233,6 +237,8 @@ test('the Android doomscroll swipes, engages through the tree and reports a summ
     assert.ok(fake.taps.includes('Like'));
     assert.ok(fake.taps.includes('Add to Favorites'));
     assert.equal(fake.swipes, summary.swipes);
+    // Every flick is a sampled arc, not a two-point drag.
+    assert.ok(fake.paths.every((path) => path.length >= 12));
     assert.deepEqual(fake.launched, ['com.zhiliaoapp.musically']);
 });
 

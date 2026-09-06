@@ -66,7 +66,9 @@ test('adb driver issues the expected shell commands', async () => {
     assert.ok(findByText(await driver.uiTree(), { text: 'Post' }));
 
     assert.deepEqual(calls[0], ['adb', '-s', 'R58N1', 'shell', 'input', 'tap', '10', '21']);
-    assert.deepEqual(calls[1], ['adb', '-s', 'R58N1', 'shell', 'input', 'swipe', '0', '0', '100', '200', '300']);
+    // A plain swipe is now a generated arc played as one motionevent chain; `straight: true` and
+    // the motionevent-less fallback are covered in motion.test.ts.
+    assert.match(calls[1]!.at(-1)!, /^input motionevent DOWN 0 0;.*input motionevent UP \d+ \d+$/);
     assert.deepEqual(calls[2], ['adb', '-s', 'R58N1', 'shell', 'input', 'text', "'hello world'"]);
     assert.deepEqual(calls[3]?.slice(3, 6), ['shell', 'monkey', '-p']);
     assert.deepEqual(calls[4], ['adb', '-s', 'R58N1', 'push', '/tmp/clip.mp4', '/sdcard/DCIM/Camera/clip.mp4']);

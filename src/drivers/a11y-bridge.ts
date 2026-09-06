@@ -1,7 +1,10 @@
+import type { MotionSettings } from '../motion/profile.js';
+import type { Seed } from '../motion/rng.js';
+import { driverMotion, straightPath, type MotionSource } from '../motion/source.js';
 import { errorMessage, pause } from './common.js';
 import {
     DriverError, UnsupportedOperationError,
-    type DeviceDriver, type Key, type Point, type ScreenGeometry, type Swipe, type UiNode,
+    type DeviceDriver, type Key, type Point, type ScreenGeometry, type Swipe, type TimedPoint, type UiNode,
 } from './types.js';
 
 export interface A11yBridgeDriverOptions {
@@ -22,6 +25,21 @@ export interface A11yBridgeDriverOptions {
      * tapping the home-screen icon is the attachment-free alternative and lives in the routine.
      */
     fallback?: Pick<DeviceDriver, 'launchApp' | 'terminateApp' | 'pushMedia'>;
+    /** Handedness and pace for the generated swipe arcs; defaults to the serial's stable profile. */
+    motion?: MotionSettings;
+    /** One seed per run, so a replay draws the same paths. Defaults to `MOTION_SEED` or the clock. */
+    motionSeed?: Seed;
+}
+
+/**
+ * The body of a `/gesture` request carrying a sampled path. The bridge dispatches it as a single
+ * `StrokeDescription` along an Android `Path`, so the arc reaches the phone as an arc.
+ */
+export function gestureParams(path: readonly TimedPoint[]): Record<string, string> {
+    if (path.length < 2) throw new DriverError('A gesture needs at least two points');
+    return {
+        points: JSON.stringify(path.map(({ x, y, t }) => ({ x, y, t }))),
+    };
 }
 
 const ANDROID_KEYCODES: Record<Key, number> = { home: 3, back: 4, enter: 66, delete: 67, recents: 187, power: 26 };
@@ -83,6 +101,11 @@ export function createA11yBridgeDriver(options: A11yBridgeDriverOptions): Device
         return target;
     };
     let cachedScreen: ScreenGeometry | undefined;
+    let hand: MotionSource | undefined;
+    const motion = () => (hand ??= driverMotion(serial, options.motion, options.motionSeed));
+    const gesture = async (path: readonly TimedPoint[]): Promise<void> => {
+        await call('POST', '/gesture', gestureParams(path));
+    };
 
     return {
         kind: 'a11y-bridge',
@@ -91,11 +114,10 @@ export function createA11yBridgeDriver(options: A11yBridgeDriverOptions): Device
         launchApp: async (appId) => fallback('launchApp')(appId),
         terminateApp: async (appId) => fallback('terminateApp')(appId),
         tap: async ({ x, y }: Point) => { await call('POST', '/tap', { x: String(x), y: String(y) }); },
-        swipe: async ({ from, to, durationMs }: Swipe) => {
-            await call('POST', '/swipe', {
-                startX: String(from.x), startY: String(from.y), endX: String(to.x), endY: String(to.y), duration: String(durationMs),
-            });
-        },
+        swipe: ({ from, to, durationMs, straight }: Swipe) => gesture(
+            straight ? straightPath(from, to, durationMs) : motion().path(from, to, durationMs),
+        ),
+        gesture,
         type: async (text) => {
             await call('POST', '/keyboard/input', { base64_text: Buffer.from(text, 'utf8').toString('base64'), clear: 'false' });
         },

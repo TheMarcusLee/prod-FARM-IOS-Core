@@ -132,6 +132,9 @@ async function runStep(driver: DeviceDriver, step: Step, options: ReplayOptions,
                 from: { x: Math.round(step.from.x * screen.width), y: Math.round(step.from.y * screen.height) },
                 to: { x: Math.round(step.to.x * screen.width), y: Math.round(step.to.y * screen.height) },
                 durationMs: step.durationMs,
+                // A recorded swipe is a drag someone drew on the dashboard, often along a slider
+                // or a seek bar; a human arc through it would land somewhere else.
+                straight: true,
             });
         }
         case 'type':

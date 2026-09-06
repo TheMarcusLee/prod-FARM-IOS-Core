@@ -1,6 +1,6 @@
 export type {
     AndroidDeviceConfig, DeviceDriver, DriverKind, Key, MediaFile, Platform, Point, Rect,
-    ScreenGeometry, Swipe, UiNode,
+    ScreenGeometry, Swipe, TimedPoint, UiNode,
 } from './types.js';
 export { DriverError, UnsupportedOperationError } from './types.js';
 

@@ -5,6 +5,7 @@ import { coordinatesForProfile, validateCoordinateOverrides, type DeviceCoordina
 import { DEVICE_ID_MESSAGE, validDeviceId } from './identifiers.js';
 import type { JsonObject } from '../types.js';
 import type { AndroidDeviceConfig, DriverKind, Platform } from '../drivers/types.js';
+import { validateMotionSettings, type MotionSettings } from '../motion/profile.js';
 
 export interface RegisteredDevice {
     name: string;
@@ -22,6 +23,11 @@ export interface RegisteredDevice {
     passcode?: string;
     /** Per-device single-tap coordinate overrides (dashboard calibration). */
     coordinates?: DeviceCoordinateOverrides;
+    /**
+     * How this phone's "person" moves. Optional: with nothing set, handedness and pace come from
+     * a stable hash of the udid, so every device is consistent without being configured.
+     */
+    motion?: MotionSettings;
     /** When true the farm keeps the entry but stops supervising it — no WDA, no worker, no discovery polling. */
     disabled?: boolean;
     /** Free-form fleet labels used to filter and bulk-select devices on /fleet. */
@@ -102,6 +108,14 @@ export async function saveRegisteredDevices(devices: RegisteredDevice[], registr
         if (device.coordinates !== undefined) {
             device.coordinates = validateCoordinateOverrides(device.coordinates, device.coordinateProfile);
             if (Object.keys(device.coordinates).length === 0) delete device.coordinates;
+        }
+        if (device.motion !== undefined) {
+            try {
+                device.motion = validateMotionSettings(device.motion);
+            } catch (error) {
+                throw new Error(`Device ${device.udid} ${error instanceof Error ? error.message : String(error)}`);
+            }
+            if (!device.motion) delete device.motion;
         }
         if (device.disabled !== true) delete device.disabled;
         if (unique.has(device.udid)) throw new Error(`Device ${device.udid} is already registered`);

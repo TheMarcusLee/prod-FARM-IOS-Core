@@ -1,10 +1,14 @@
 import path from 'node:path';
 
-import { pause, runCommand, type CommandRunner } from './common.js';
+import type { MotionSettings } from '../motion/profile.js';
+import type { Seed } from '../motion/rng.js';
+import { driverMotion, straightPath, type MotionSource } from '../motion/source.js';
+import { errorMessage, pause, runCommand, type CommandRunner } from './common.js';
 import { parseUiautomatorXml } from './uiautomator-xml.js';
 import {
     DriverError,
-    type DeviceDriver, type Key, type MediaFile, type Point, type ScreenGeometry, type Swipe, type UiNode,
+    type DeviceDriver, type Key, type MediaFile, type Point, type ScreenGeometry, type Swipe,
+    type TimedPoint, type UiNode,
 } from './types.js';
 
 export interface AdbDriverOptions {
@@ -13,6 +17,10 @@ export interface AdbDriverOptions {
     run?: CommandRunner;
     /** Where pushed media lands. TikTok's picker reads the standard camera folder. */
     mediaDirectory?: string;
+    /** Handedness and pace for the generated swipe arcs; defaults to the serial's stable profile. */
+    motion?: MotionSettings;
+    /** One seed per run, so a replay draws the same paths. Defaults to `MOTION_SEED` or the clock. */
+    motionSeed?: Seed;
 }
 
 const ANDROID_KEYCODES: Record<Key, number> = { home: 3, back: 4, enter: 66, delete: 67, recents: 187, power: 26 };
@@ -37,6 +45,9 @@ export function createAdbDriver(options: AdbDriverOptions): DeviceDriver {
     const push = (localPath: string, remotePath: string) =>
         run('adb', ['-s', serial, 'push', localPath, remotePath], { timeoutMs: 10 * 60_000 });
     let cachedScreen: ScreenGeometry | undefined;
+    let hand: MotionSource | undefined;
+    const motion = () => (hand ??= driverMotion(serial, options.motion, options.motionSeed));
+    const motionEvents = createMotionEventBudget();
 
     return {
         kind: 'adb',
@@ -45,9 +56,13 @@ export function createAdbDriver(options: AdbDriverOptions): DeviceDriver {
         launchApp: (packageName) => launchViaAdb(packageName, shell),
         terminateApp: async (packageName) => { await shell('am', 'force-stop', shellQuote(packageName)); },
         tap: async ({ x, y }: Point) => { await shell('input', 'tap', String(Math.round(x)), String(Math.round(y))); },
-        swipe: async ({ from, to, durationMs }: Swipe) => {
-            await shell('input', 'swipe', ...[from.x, from.y, to.x, to.y, durationMs].map((v) => String(Math.round(v))));
+        swipe: async ({ from, to, durationMs, straight }: Swipe) => {
+            const path = straight
+                ? straightPath(from, to, durationMs)
+                : motion().path(from, to, durationMs);
+            await playPath(path, motionEvents, shell);
         },
+        gesture: (path: TimedPoint[]) => playPath(path, motionEvents, shell),
         type: async (text) => { await shell('input', 'text', escapeForInputText(text)); },
         pressKey: async (key) => { await shell('input', 'keyevent', String(ANDROID_KEYCODES[key])); },
         screenshot: () => screenshotViaScreencap(serial, run),
@@ -236,4 +251,119 @@ export async function discoverAdbDevices(run: CommandRunner = runCommand): Promi
     return parseAdbDevices(String(stdout))
         .filter(({ state }) => state === 'device')
         .map(({ serial, model }) => ({ serial, ...(model ? { model } : {}) }));
+}
+
+/**
+ * `input motionevent` (Android 8+) is the only way through adb to put more than two points into a
+ * gesture: DOWN, then one MOVE per sample, then UP. They go out as one `adb shell` invocation
+ * because the expensive part is the round trip, not the event.
+ */
+export const MOTION_EVENT_DOWN = 'DOWN';
+
+/**
+ * What one `input motionevent` costs on the phone before anything is measured: an `app_process`
+ * start plus the injection. Real devices come in between about 25 ms and 60 ms; the budget
+ * replaces this with what it actually observes after the first gesture.
+ */
+export const DEFAULT_MOTION_EVENT_COST_MS = 40;
+
+/** Below this, a `sleep` between two events costs more than the wait it inserts. */
+const MIN_SLEEP_MS = 15;
+
+/** A gesture is a shape, not a flip-book: three points is the floor, two dozen the ceiling. */
+const POINT_LIMITS = { min: 3, max: 24 } as const;
+
+export interface MotionEventBudget {
+    /** How many of a path's points fit inside `durationMs` at the cost measured so far. */
+    points(durationMs: number): number;
+    /** Feed back what a dispatch of `count` events actually took. */
+    record(count: number, elapsedMs: number): void;
+    /** False once this device turned out not to have `input motionevent`. */
+    supported(): boolean;
+    disable(): void;
+    costMs(): number;
+}
+
+/**
+ * Shell latency is the whole problem with playing a path over adb: ask for twenty points on a
+ * 300 ms swipe and the phone spends a second and a half delivering them, which is a drag rather
+ * than a flick. So measure what an event costs on this device and spend the gesture's duration
+ * accordingly — fewer points on a slow phone, the full sample count on a fast one.
+ */
+export function createMotionEventBudget(initialCostMs = DEFAULT_MOTION_EVENT_COST_MS): MotionEventBudget {
+    let cost = initialCostMs;
+    let available = true;
+    return {
+        points: (durationMs) => Math.max(
+            POINT_LIMITS.min,
+            Math.min(POINT_LIMITS.max, Math.floor(Math.max(0, durationMs) / Math.max(1, cost)) + 1),
+        ),
+        // An exponential moving average: one slow gesture (a screenshot landing mid-swipe) should
+        // nudge the estimate, not redefine it.
+        record: (count, elapsedMs) => {
+            if (count < 2 || !Number.isFinite(elapsedMs) || elapsedMs <= 0) return;
+            cost = cost * 0.7 + (elapsedMs / count) * 0.3;
+        },
+        supported: () => available,
+        disable: () => { available = false; },
+        costMs: () => cost,
+    };
+}
+
+/** Keeps the first and last point and spreads the rest evenly; a path never gets *more* points. */
+export function samplePath(path: readonly TimedPoint[], count: number): TimedPoint[] {
+    if (path.length <= count || count < 2) return [...path];
+    const step = (path.length - 1) / (count - 1);
+    return Array.from({ length: count }, (_, index) => path[Math.round(index * step)]!);
+}
+
+/**
+ * The chained shell command for one path. `sleep` only appears where the gap between two samples
+ * is wider than the event itself costs — otherwise the phone is already slower than the human.
+ */
+export function motionEventCommand(path: readonly TimedPoint[], costMs = DEFAULT_MOTION_EVENT_COST_MS): string {
+    if (path.length < 2) throw new DriverError('A gesture needs at least two points');
+    const at = (point: TimedPoint) => `${Math.round(point.x)} ${Math.round(point.y)}`;
+    const parts: string[] = [`input motionevent ${MOTION_EVENT_DOWN} ${at(path[0]!)}`];
+    for (let index = 1; index < path.length; index += 1) {
+        const previous = path[index - 1]!;
+        const point = path[index]!;
+        const slack = point.t - previous.t - costMs;
+        if (slack >= MIN_SLEEP_MS) parts.push(`sleep ${(slack / 1000).toFixed(3)}`);
+        const last = index === path.length - 1;
+        parts.push(`input motionevent ${last ? 'UP' : 'MOVE'} ${at(point)}`);
+    }
+    return parts.join('; ');
+}
+
+/** `input` prints its usage rather than failing cleanly on a build without `motionevent`. */
+export function motionEventUnsupported(text: string): boolean {
+    return /Unknown command|unknown command|Error: Unknown|Usage: input/.test(text);
+}
+
+async function playPath(path: readonly TimedPoint[], budget: MotionEventBudget, shell: Shell): Promise<void> {
+    if (path.length < 2) throw new DriverError('A gesture needs at least two points');
+    const first = path[0]!;
+    const last = path[path.length - 1]!;
+    const fallback = async () => {
+        await shell('input', 'swipe', ...[first.x, first.y, last.x, last.y, last.t - first.t]
+            .map((value) => String(Math.round(value))));
+    };
+    if (!budget.supported()) return fallback();
+    const limited = samplePath(path, budget.points(last.t - first.t));
+    const startedAt = Date.now();
+    let stdout: string;
+    try {
+        stdout = String((await shell(motionEventCommand(limited, budget.costMs()))).stdout);
+    } catch (error) {
+        if (!motionEventUnsupported(errorMessage(error))) throw error;
+        budget.disable();
+        return fallback();
+    }
+    if (motionEventUnsupported(stdout)) {
+        // Nothing was injected; the swipe still has to happen.
+        budget.disable();
+        return fallback();
+    }
+    budget.record(limited.length, Date.now() - startedAt);
 }

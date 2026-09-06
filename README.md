@@ -121,6 +121,7 @@ every Xcode step, and never run `appium` or `wda:service`.
 - [docs/android-dashboard.md](docs/android-dashboard.md) — registering an Android phone from the dashboard
 - [docs/android-tiktok.md](docs/android-tiktok.md) — the Android TikTok routines, phone-side prerequisites, selector table
 - [docs/coordinates.md](docs/coordinates.md) — iOS tap-layout profiles and how to add one
+- [docs/motion.md](docs/motion.md) — human swipe arcs, pause distributions, per-device handedness, run jitter
 - [src/drivers/README.md](src/drivers/README.md) — the `DeviceDriver` interface and the three control channels
 - [docs/adr/0001-multi-platform-device-drivers.md](docs/adr/0001-multi-platform-device-drivers.md) — why the driver layer looks like this
 

@@ -32,6 +32,20 @@ export interface Swipe {
     from: Point;
     to: Point;
     durationMs: number;
+    /**
+     * Skip the human arc and drag in a dead-straight line. Only for a replay of a runbook step
+     * that recorded a deliberate straight drag (a slider, a seek bar), where the curve would land
+     * somewhere else. Everything else wants the default.
+     */
+    straight?: boolean;
+}
+
+/** One sample of a gesture: where the finger is, and how long after touch-down it is there. */
+export interface TimedPoint {
+    x: number;
+    y: number;
+    /** Milliseconds since the first point. Monotonically increasing; the first point is 0. */
+    t: number;
 }
 
 /** A node from the accessibility tree, normalised across platforms. */
@@ -75,7 +89,13 @@ export interface DeviceDriver {
     terminateApp(appId: string): Promise<void>;
 
     tap(point: Point): Promise<void>;
+    /** A straight-line drag by default only in shape: it delegates to `gesture` with a generated arc. */
     swipe(swipe: Swipe): Promise<void>;
+    /**
+     * Play a sampled path: touch down on the first point, follow the rest with their own timing,
+     * lift on the last. Two points make a plain drag; a dozen make a thumb's arc.
+     */
+    gesture(path: TimedPoint[]): Promise<void>;
     /** Types into whatever currently has focus. */
     type(text: string): Promise<void>;
     pressKey(key: Key): Promise<void>;

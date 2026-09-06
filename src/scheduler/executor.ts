@@ -10,6 +10,8 @@ import { bridgePingUrl } from '../drivers/a11y-bridge.js';
 import { driverForDevice, driverKindOf, platformOf } from '../drivers/select.js';
 import type { DeviceDriver } from '../drivers/types.js';
 import type { ExecutionRow } from '../database/schema.js';
+import { motionProfileFor } from '../motion/profile.js';
+import { createRng, seedForExecution } from '../motion/rng.js';
 import { farmEntryArgs } from '../runtime/farm-entry.js';
 import type { PluginRegistry } from '../registry.js';
 import type { TaskExecutionResult } from '../types.js';
@@ -63,6 +65,51 @@ export async function readinessProblem(
     }
 }
 
+/**
+ * `RUN_START_JITTER_MINUTES`: either `4` (meaning 0–4) or `1-6`. Two phones on the same schedule
+ * are claimed within the same tick and would otherwise start their runs in the same second, which
+ * is the one thing no two people ever do.
+ */
+export const DEFAULT_START_JITTER_MINUTES = { min: 0, max: 4 } as const;
+
+export function parseStartJitterMinutes(raw: string | undefined): { min: number; max: number } {
+    if (raw === undefined || raw.trim() === '') return { ...DEFAULT_START_JITTER_MINUTES };
+    const parts = raw.split('-').map((part) => Number(part.trim()));
+    const [first, second] = parts.length === 1 ? [0, parts[0]!] : parts;
+    if (parts.length > 2 || !Number.isFinite(first) || !Number.isFinite(second!) || first! < 0 || second! < first!) {
+        throw new Error(`RUN_START_JITTER_MINUTES must be a number of minutes or a "min-max" range; received ${raw}`);
+    }
+    return { min: first!, max: second! };
+}
+
+/**
+ * How long this execution waits before it starts. Seeded from the execution id, so a run that
+ * misbehaved can be replayed exactly, and capped at half the time left in the run window: a
+ * jitter that ran to the deadline would guarantee the run never happened.
+ */
+export function startJitterMs(
+    executionId: string,
+    nowMs: number,
+    deadlineMs: number,
+    raw = process.env.RUN_START_JITTER_MINUTES,
+): number {
+    const { min, max } = parseStartJitterMinutes(raw);
+    if (max <= 0) return 0;
+    const drawn = (min + createRng(`${executionId}:start-jitter`)() * (max - min)) * 60_000;
+    const remaining = Math.max(0, deadlineMs - nowMs);
+    return Math.max(0, Math.round(Math.min(drawn, remaining / 2)));
+}
+
+/** A sleep that ends early on a stop, without turning the stop into a failure. */
+function waitOut(milliseconds: number, signal: AbortSignal): Promise<void> {
+    if (milliseconds <= 0 || signal.aborted) return Promise.resolve();
+    return new Promise((resolve) => {
+        const done = () => { clearTimeout(timer); signal.removeEventListener('abort', done); resolve(); };
+        const timer = setTimeout(done, milliseconds);
+        signal.addEventListener('abort', done, { once: true });
+    });
+}
+
 /** What a plugin sees as the device when it is reachable only through the bridge and not through adb. */
 function identityFromRegistration(registered: RegisteredDevice): Device {
     return { name: registered.name, udid: registered.udid, osVersion: 'unknown', platform: platformOf(registered) };
@@ -99,9 +146,19 @@ export function automationFromDriver(driver: DeviceDriver): DeviceAutomation {
  * Variables handed to the plugin child process. DEVICE_* are platform-neutral; IOS_UDID and
  * WDA_URL stay for the existing iOS routines, ANDROID_SERIAL is honoured by adb itself.
  */
-export function pluginEnvironment(registered: RegisteredDevice, passcode: string | undefined): Record<string, string> {
+export function pluginEnvironment(
+    registered: RegisteredDevice,
+    passcode: string | undefined,
+    motionSeed?: string,
+): Record<string, string> {
     const platform = platformOf(registered);
-    const base = { DEVICE_UDID: registered.udid, DEVICE_PLATFORM: platform, DEVICE_DRIVER: driverKindOf(registered) };
+    const profile = motionProfileFor(registered.udid, registered.motion);
+    const base = {
+        DEVICE_UDID: registered.udid, DEVICE_PLATFORM: platform, DEVICE_DRIVER: driverKindOf(registered),
+        // The routine's own gestures and pauses come from this seed, so a run replays from its id.
+        ...(motionSeed ? { MOTION_SEED: motionSeed } : {}),
+        MOTION_HAND: profile.hand, MOTION_SPEED: profile.speed,
+    };
     if (platform === 'ios') {
         return { ...base, IOS_UDID: registered.udid, WDA_URL: wdaUrlFor(registered), ...(passcode ? { IOS_PASSCODE: passcode } : {}) };
     }
@@ -202,8 +259,15 @@ export async function executeAutomation(
     const stopPoll = setInterval(() => void repository.stopRequested(execution.id).then((requested) => {
         if (requested) controller.abort(new Error('Stop requested'));
     }).catch(console.error), 1_000);
+    const motionSeed = String(seedForExecution(execution.id));
+    const jitterMs = startJitterMs(execution.id, Date.now(), execution.deadlineAt.getTime());
     let device: Device;
     try {
+        await repository.appendLogs(execution.id, attempt, [
+            `Motion seed ${motionSeed} (${motionProfileFor(registered.udid, registered.motion).hand}-handed, `
+            + `${motionProfileFor(registered.udid, registered.motion).speed}); start jitter ${(jitterMs / 1000).toFixed(1)}s`,
+        ]);
+        await waitOut(jitterMs, controller.signal);
         device = await waitForDevice(execution, registered, controller.signal);
     } catch (error) {
         clearInterval(stopPoll);
@@ -215,9 +279,9 @@ export async function executeAutomation(
     try {
         const definition = plugins.task(task);
         const passcode = platformOf(registered) === 'ios' ? await passcodeForDevice(device.udid) : undefined;
-        const driver = driverForDevice(registered, { passcode });
+        const driver = driverForDevice(registered, { passcode, motionSeed });
         const redact = createLogRedactor([passcode, registered.android?.bridgeToken]);
-        const environment: NodeJS.ProcessEnv = { ...process.env, ...pluginEnvironment(registered, passcode) };
+        const environment: NodeJS.ProcessEnv = { ...process.env, ...pluginEnvironment(registered, passcode, motionSeed) };
         const context: TaskExecutionContext = {
             executionId: execution.id,
             attempt,

@@ -2,10 +2,14 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { WdaRemoteControl } from '../devices/wda-remote.js';
+import type { MotionSettings } from '../motion/profile.js';
+import type { Seed } from '../motion/rng.js';
+import { driverMotion, straightPath, type MotionSource } from '../motion/source.js';
 import { pause } from './common.js';
 import {
     DriverError, UnsupportedOperationError,
-    type DeviceDriver, type Key, type MediaFile, type Point, type ScreenGeometry, type Swipe, type UiNode,
+    type DeviceDriver, type Key, type MediaFile, type Point, type ScreenGeometry, type Swipe,
+    type TimedPoint, type UiNode,
 } from './types.js';
 
 export interface WdaDriverOptions {
@@ -13,6 +17,10 @@ export interface WdaDriverOptions {
     wdaUrl: string;
     passcode?: string;
     fetchImpl?: typeof fetch;
+    /** Handedness and pace for the generated swipe arcs; defaults to the udid's stable profile. */
+    motion?: MotionSettings;
+    /** One seed per run, so a replay draws the same paths. Defaults to `MOTION_SEED` or the clock. */
+    motionSeed?: Seed;
     /** Override how media reaches the camera roll; defaults to the fork's `/wda/import-media` endpoint. */
     pushMedia?: (file: MediaFile) => Promise<void>;
 }
@@ -32,6 +40,9 @@ export function createWdaDriver(options: WdaDriverOptions): DeviceDriver {
         body: JSON.stringify(body),
     });
     const pushMedia = options.pushMedia ?? ((file: MediaFile) => pushMediaViaWda(file, post));
+    let hand: MotionSource | undefined;
+    const motion = () => (hand ??= driverMotion(udid, options.motion, options.motionSeed));
+    const gesture = (path: TimedPoint[]) => remote.performAction(udid, { type: 'gesture', path });
 
     return {
         kind: 'wda',
@@ -40,9 +51,10 @@ export function createWdaDriver(options: WdaDriverOptions): DeviceDriver {
         launchApp: async (bundleId) => { await post('/wda/apps/launch', { bundleId }); },
         terminateApp: async (bundleId) => { await post('/wda/apps/terminate', { bundleId }); },
         tap: ({ x, y }: Point) => remote.performAction(udid, { type: 'tap', x, y }),
-        swipe: ({ from, to, durationMs }: Swipe) => remote.performAction(udid, {
-            type: 'swipe', startX: from.x, startY: from.y, endX: to.x, endY: to.y, durationMs,
-        }),
+        swipe: ({ from, to, durationMs, straight }: Swipe) => gesture(
+            straight ? straightPath(from, to, durationMs) : motion().path(from, to, durationMs),
+        ),
+        gesture,
         type: async (text) => { await post('/wda/keys', { value: [...text] }); },
         pressKey: (key) => pressWdaKey(key, remote, udid, post),
         screenshot: () => remote.getScreenshot(udid),

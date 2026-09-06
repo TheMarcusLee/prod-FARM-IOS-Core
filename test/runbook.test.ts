@@ -68,6 +68,7 @@ function fakeDriver(recorded: DriverCalls, root: UiNode | undefined = tree, over
         async terminateApp() {},
         async tap(point) { recorded.taps.push(point); },
         async swipe(swipe) { recorded.swipes.push(swipe); },
+        async gesture() {},
         async type(text) { recorded.typed.push(text); },
         async pressKey(key) { recorded.keys.push(key); },
         async screenshot() { return PNG; },
@@ -149,7 +150,8 @@ test('replay drives every step type through the driver', async () => {
     assert.deepEqual(result, { stepsRun: 7, stepsSkipped: 0, stopped: false });
     assert.deepEqual(recorded.launched, ['com.app']);
     assert.deepEqual(recorded.taps, [{ x: 540, y: 1100 }]);
-    assert.deepEqual(recorded.swipes, [{ from: { x: 540, y: 1920 }, to: { x: 540, y: 480 }, durationMs: 300 }]);
+    // A replayed swipe keeps the straight line it was recorded as; see src/motion/gesture.ts.
+    assert.deepEqual(recorded.swipes, [{ from: { x: 540, y: 1920 }, to: { x: 540, y: 480 }, durationMs: 300, straight: true }]);
     assert.deepEqual(recorded.typed, ['hello farm']);
     assert.deepEqual(recorded.keys, ['back']);
     assert.ok(logs.some((line) => line.includes('resolved by id')));

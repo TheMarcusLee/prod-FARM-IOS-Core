@@ -44,6 +44,7 @@ function fakeDriver(calls: DriverCalls): DeviceDriver {
         async launchApp() {}, async terminateApp() {},
         async tap(point) { calls.taps.push(point); },
         async swipe(swipe) { calls.swipes.push(swipe); },
+        async gesture() {},
         async type(text) { calls.typed.push(text); },
         async pressKey(key) { calls.keys.push(key); },
         async screenshot() { return PNG; },

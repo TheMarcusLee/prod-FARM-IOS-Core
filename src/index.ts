@@ -31,3 +31,4 @@ export {
 } from './devices/registration.js';
 export * from './devices/wda-remote.js';
 export * from './drivers/index.js';
+export * from './motion/index.js';
