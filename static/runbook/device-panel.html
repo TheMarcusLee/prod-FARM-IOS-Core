@@ -6,6 +6,12 @@
 (function () {
     var mount = document.getElementById('runbook-panel-mount');
     if (!mount) return;
+    // The themed device template already carries the panel and loads the same fragment. Two of
+    // them would poll twice, share an id, and offer two Record buttons for one phone.
+    if (document.getElementById('runbook-panel')) {
+        mount.remove();
+        return;
+    }
     var udid = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '');
     mount.setAttribute('hx-get', '/plugins/com.farm.runbook/devices/' + encodeURIComponent(udid) + '/panel');
     mount.setAttribute('hx-trigger', 'load');
