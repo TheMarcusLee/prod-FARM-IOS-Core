@@ -895,22 +895,37 @@ test('a failed runbook execution offers the operator somewhere to fix it', async
 
 /* ---- the starter library ----------------------------------------------- */
 
+/** The ten shipped flows. Each one exists twice: `<slug>` for Android, `<slug>-ios` for iPhone. */
+const STARTER_SLUGS = [
+    'warm-up-scroll', 'post-from-recents', 'save-to-drafts', 'follow-back-sweep', 'search-a-niche',
+    'clear-notifications', 'switch-account', 'like-a-hashtag-feed', 'login-check', 'repost-from-feed',
+] as const;
+
 test('every starter runbook validates and reads back as sentences', async () => {
     const starters = await loadStarterRunbooks();
-    assert.ok(starters.length >= 10, `expected the whole starter library, got ${starters.length}`);
+    assert.equal(starters.length, STARTER_SLUGS.length * 2, `expected ten per platform, got ${starters.length}`);
 
-    // One template name per file, and the iPhone versions of the three flows that have them.
+    // One template name per file: exactly the ten flows, on Android and on the iPhone.
     const names = starters.map((starter) => starter.template!);
     assert.equal(new Set(names).size, names.length, 'template names are unique');
-    for (const wanted of ['warm-up-scroll', 'post-from-recents', 'save-to-drafts', 'follow-back-sweep',
-        'search-a-niche', 'clear-notifications', 'switch-account',
-        'warm-up-scroll-ios', 'post-from-recents-ios', 'save-to-drafts-ios']) {
-        assert.ok(names.includes(wanted), `${wanted} is missing from the starter library`);
+    const templatesFor = (platform: string): string[] =>
+        starters.filter((starter) => starter.platform === platform).map((starter) => starter.template!).sort();
+    assert.deepEqual(templatesFor('android'), [...STARTER_SLUGS].sort());
+    assert.deepEqual(templatesFor('ios'), STARTER_SLUGS.map((slug) => `${slug}-ios`).sort());
+
+    // Every Android flow has its iPhone twin, and the twin asks the operator the same questions —
+    // a blank that exists on one platform only is a runbook somebody forgot to finish.
+    const byTemplate = new Map(starters.map((starter) => [starter.template!, starter]));
+    for (const slug of STARTER_SLUGS) {
+        const android = byTemplate.get(slug);
+        const iphone = byTemplate.get(`${slug}-ios`);
+        assert.ok(android, `${slug} is missing from the starter library`);
+        assert.ok(iphone, `${slug} has no iPhone twin`);
+        assert.deepEqual(
+            variableNames(iphone), variableNames(android),
+            `${slug} and its iPhone twin do not ask for the same blanks`,
+        );
     }
-    assert.deepEqual(
-        starters.filter((starter) => starter.platform === 'ios').map((starter) => starter.template),
-        ['post-from-recents-ios', 'save-to-drafts-ios', 'warm-up-scroll-ios'],
-    );
 
     for (const starter of starters) {
         assert.ok(starter.steps.length > 0, `${starter.template} has no steps`);
@@ -993,7 +1008,7 @@ test('the Runbooks page badges the starters, groups them first, and restores the
     const restored = await inject(app, { method: 'POST', url: '/api/runbooks/templates/install' });
     assert.equal(restored.statusCode, 200);
     const count = (restored.json() as { installed: string[] }).installed.length;
-    assert.ok(count >= 10);
+    assert.equal(count, (await loadStarterRunbooks()).length, 'all twenty starters are seeded');
     const again = (await inject(app, { method: 'POST', url: '/api/runbooks/templates/install' }))
         .json() as { installed: string[]; kept: string[]; message: string };
     assert.deepEqual(again.installed, [], 'restoring twice installs nothing twice');
