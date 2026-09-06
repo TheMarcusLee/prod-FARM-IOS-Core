@@ -16,6 +16,7 @@ export async function createSchedulerRuntime(plugins: PluginRegistry) {
         return {
             repository: new SchedulerRepository(connection, boss, plugins, schedulerEventHook(
                 createEventRecorder(createEventStore(connection), { notifications: notificationConfigFromEnv() }),
+                undefined, plugins,
             )),
             async close() {
                 await boss.stop({ graceful: true, timeout: 10_000 });

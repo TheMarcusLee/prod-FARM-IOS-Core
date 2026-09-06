@@ -9,29 +9,16 @@ import type { RegisteredDevice } from '../devices/registry.js';
 import { icon } from '../ui/icons.js';
 import type { ShellPage } from '../ui/context.js';
 import {
-    KEYS, STEP_TYPES, summarizeStep, variableNames,
-    type Runbook, type Step, type StepType,
+    KEYS, STEP_TYPES, type Runbook, type Step, type StepType,
 } from './model.js';
 import type { RecordingSession } from './recorder.js';
+import { escapeHtml, ROUTE_PREFIX, scriptLiteral } from './markup.js';
+import { describeStep, platformFact, stepConfidence } from './narrate.js';
+import {
+    blankFields, namePrompt, needsName, recordingBar, runPanelFragment, storyFragment, type LiveRun,
+} from './story.js';
 
-/**
- * HTML escaping is the wrong escape inside a `<script>` block: `&#39;` is not a
- * quote to the JS parser, and `</script>` in a string still closes the element.
- * A JSON literal with the three markup characters escaped is safe in both.
- */
-export function scriptLiteral(value: unknown): string {
-    return JSON.stringify(String(value ?? ''))
-        .replaceAll('<', '\\u003c').replaceAll('>', '\\u003e').replaceAll('&', '\\u0026')
-        .replaceAll('\u2028', '\\u2028').replaceAll('\u2029', '\\u2029');
-}
-
-export function escapeHtml(value: unknown): string {
-    return String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
-}
-
-/** Every runbook surface hangs off the plugin's own route prefix. */
-export const ROUTE_PREFIX = '/plugins/com.farm.runbook';
+export { escapeHtml, scriptLiteral, ROUTE_PREFIX } from './markup.js';
 
 /**
  * Runbook pages are the shell's page slots; the chrome comes from `createShellContext`'s `shell`,
@@ -71,6 +58,10 @@ function stamp(iso: string): string {
  * when it last did. "Updated" only ever said when someone edited the steps.
  */
 function lastRun(runbook: Runbook): string {
+    if (runbook.lastFailure) {
+        return `<a class="bl-state error" href="/runbooks/${escapeHtml(runbook.id)}#runbook-story">`
+            + '<span class="bl-dot error"></span>Needs fixing</a>';
+    }
     if (!runbook.lastRunAt) return '<span class="bl-faint">Never run</span>';
     const word = runbook.lastRunStatus === 'failed' ? 'error'
         : runbook.lastRunStatus === 'stopped' ? 'warn' : 'ok';
@@ -85,8 +76,7 @@ function lastRun(runbook: Runbook): string {
  */
 function runDialog(runbook: Runbook, devices: readonly RegisteredDevice[], view: 'list' | 'editor'): string {
     const id = `run-${runbook.id}`;
-    const vars = variableNames(runbook).map((name) => `<label class="bl-field"><span>${escapeHtml(name)}</span>`
-        + `<input class="bl-input" name="vars.${escapeHtml(name)}" required></label>`).join('');
+    const vars = blankFields(runbook);
     return `<dialog class="bl-dialog" id="${escapeHtml(id)}">
 <div class="bl-dialog-head"><strong>Run ${escapeHtml(runbook.name)}</strong>
 <button type="button" class="bl-btn bl-btn-icon" data-dialog-close aria-label="Close">${icon('x')}</button></div>
@@ -94,7 +84,7 @@ function runDialog(runbook: Runbook, devices: readonly RegisteredDevice[], view:
 <input type="hidden" name="view" value="${view}">
 <div class="bl-dialog-body"><label class="bl-field"><span>Phone</span>
 <select class="bl-select" name="udid">${deviceOptions(devices, runbook.createdFor.udid)}</select></label>${vars}
-<p class="bl-faint">The run is queued on that phone straight away.</p></div>
+<p class="bl-faint">${vars ? 'Fill the blanks in; last time\u2019s answers are already there.' : 'The run is queued on that phone straight away.'}</p></div>
 <div class="bl-dialog-foot"><button type="button" class="bl-btn" data-dialog-close>Cancel</button>
 <button class="bl-btn bl-btn-primary" type="submit">Run now</button></div></form></dialog>`;
 }
@@ -109,12 +99,13 @@ export function runbookListFragment(runbooks: readonly Runbook[], devices: reado
 <div class="bl-rb-col">${lastRun(runbook)}</div>
 <div class="bl-rb-actions">
 <button type="button" class="bl-btn bl-btn-sm" data-dialog="run-${escapeHtml(runbook.id)}">Run on device</button>
+<a class="bl-btn bl-btn-sm" href="${ROUTE_PREFIX}/runbooks/${escapeHtml(runbook.id)}/export" download>Export</a>
 <form hx-post="${ROUTE_PREFIX}/runbooks/${escapeHtml(runbook.id)}/duplicate" hx-target="#runbook-list" hx-swap="outerHTML">
 <button class="bl-btn bl-btn-sm" type="submit">Duplicate</button></form>
 <form hx-post="${ROUTE_PREFIX}/runbooks/${escapeHtml(runbook.id)}/delete" hx-target="#runbook-list" hx-swap="outerHTML" hx-confirm="Delete this runbook?">
 <button class="bl-btn bl-btn-sm" type="submit">Delete</button></form>
 </div>${runDialog(runbook, devices, 'list')}</div>`).join('');
-    const empty = '<div class="bl-empty">No runbooks yet. Create one, then record on it from a phone\'s page.</div>';
+    const empty = '<div class="bl-empty">No runbooks yet. Open a phone and press “Record what I do next”.</div>';
     return `<section id="runbook-list" class="bl-panel">${notice(message)}
 <div class="bl-rb-row bl-section-title"><div class="bl-rb-name">Runbook</div><div class="bl-rb-col">Platform</div>
 <div class="bl-rb-col">Steps</div><div class="bl-rb-col">Last run</div><div class="bl-rb-actions" style="width:250px"></div></div>
@@ -138,8 +129,11 @@ export function runbooksPage(
     runbooks: readonly Runbook[], devices: readonly RegisteredDevice[], assetVersion = '',
 ): ShellPage {
     return layout('Runbooks',
-        `<button type="button" class="bl-btn bl-btn-primary" data-dialog="new-runbook">${icon('plus')}New runbook</button>`,
-        `<p class="bl-muted">Record a sequence once on one phone, replay it on the fleet.</p>`
+        `<form class="bl-rb-import" hx-post="${ROUTE_PREFIX}/runbooks/import" hx-target="#runbook-list" hx-swap="outerHTML" hx-encoding="multipart/form-data">`
+        + `<label class="bl-btn"><input type="file" name="runbook" accept="application/json,.json" hidden data-import>Import a file</label>`
+        + '</form>'
+        + `<button type="button" class="bl-btn bl-btn-primary" data-dialog="new-runbook">${icon('plus')}New runbook</button>`,
+        `<p class="bl-muted">Press record on a phone, do the thing once, name it. It replays on the fleet.</p>`
         + `${runbookListFragment(runbooks, devices)}`
         + `<dialog class="bl-dialog" id="new-runbook"><div class="bl-dialog-head"><strong>New runbook</strong>`
         + `<button type="button" class="bl-btn bl-btn-icon" data-dialog-close aria-label="Close">${icon('x')}</button></div>`
@@ -199,24 +193,19 @@ function stepRow(step: Step | undefined, index: number): string {
 
 /** Recording is the loudest state a runbook has, so it gets a banner rather than a checkbox. */
 function recordControl(runbook: Runbook, devices: readonly RegisteredDevice[], recordingOn?: string): string {
-    if (recordingOn) {
-        const device = devices.find(({ udid }) => udid === recordingOn);
-        return `<div class="bl-rb-banner"><span class="bl-rec-dot"></span>
-<span>Recording on ${escapeHtml(device?.name ?? recordingOn)}. Every tap, swipe and typed line on that phone's page becomes a step.</span>
-<form hx-post="${ROUTE_PREFIX}/runbooks/${escapeHtml(runbook.id)}/record/stop-form" hx-target="#runbook-editor" hx-swap="outerHTML">
-<button class="bl-btn bl-btn-danger bl-btn-sm" type="submit">Stop recording</button></form></div>`;
-    }
-    return `<section class="bl-panel bl-rb-record"><div class="bl-panel-head">Recording</div><div class="bl-panel-body">
+    if (recordingOn) return recordingBar(runbook, devices, recordingOn);
+    return `<section class="bl-panel bl-rb-record"><div class="bl-panel-body">
 <form class="bl-inline-form" hx-post="${ROUTE_PREFIX}/runbooks/${escapeHtml(runbook.id)}/record/start-form" hx-target="#runbook-editor" hx-swap="outerHTML">
-<label class="bl-field"><span>Record on</span><select class="bl-select" name="udid">${deviceOptions(devices, runbook.createdFor.udid)}</select></label>
-<button class="bl-btn" type="submit"${devices.length ? '' : ' disabled'}>${icon('play')}Start recording</button>
-<span class="bl-faint">Open that phone's page and drive it; each action is appended here.</span></form></div></section>`;
+<label class="bl-field"><span>Phone</span><select class="bl-select" name="udid">${deviceOptions(devices, runbook.createdFor.udid)}</select></label>
+<button class="bl-btn" type="submit"${devices.length ? '' : ' disabled'}>${icon('play')}Record what I do next</button>
+<button class="bl-btn bl-btn-primary" type="button"
+ hx-post="${ROUTE_PREFIX}/runbooks/${escapeHtml(runbook.id)}/try" hx-target="#runbook-run" hx-swap="outerHTML"${runbook.steps.length ? '' : ' disabled'}>Run it on this phone now</button>
+<a class="bl-btn" href="${ROUTE_PREFIX}/runbooks/${escapeHtml(runbook.id)}/export">Export</a>
+</form></div></section>`;
 }
 
-/** The editor is one form: every row is `step.<index>.<field>`, and the last row is always blank. */
-export function runbookEditorFragment(
-    runbook: Runbook, devices: readonly RegisteredDevice[], message?: string, recordingOn?: string,
-): string {
+/** The step table, folded away: the engine is all still there for whoever wants it. */
+function powerTools(runbook: Runbook, devices: readonly RegisteredDevice[]): string {
     const rows = [...runbook.steps.map((step, index) => stepRow(step, index)), stepRow(undefined, runbook.steps.length)].join('');
     const meta = `<form class="bl-form-grid" hx-post="${ROUTE_PREFIX}/runbooks/${escapeHtml(runbook.id)}/meta" hx-target="#runbook-editor" hx-swap="outerHTML">
 <label class="bl-field"><span>Name</span><input class="bl-input" name="name" value="${escapeHtml(runbook.name)}" required maxlength="80"></label>
@@ -232,28 +221,52 @@ export function runbookEditorFragment(
 <th>x / y</th><th>x2 / y2</th><th>ms</th><th>Expect</th><th>Retries / delay</th><th>Opt.</th><th>Del.</th></tr></thead>
 <tbody>${rows}</tbody></table></div>
 <div class="bl-form-actions"><button class="bl-btn bl-btn-primary" type="submit">Save steps</button></div></form>`;
-    return `<section id="runbook-editor">${notice(message)}
-${recordControl(runbook, devices, recordingOn)}
-<section class="bl-panel" style="margin-top:16px"><div class="bl-panel-head">Details
-<span class="bl-muted" style="margin-left:auto;font-weight:400">Recorded on ${escapeHtml(runbook.createdFor.udid)} ·
-${runbook.createdFor.screen.width} × ${runbook.createdFor.screen.height}</span></div>
-<div class="bl-panel-body">${meta}</div></section>
-<section class="bl-panel" style="margin-top:16px"><div class="bl-panel-head">Steps
-<span class="bl-muted" style="margin-left:auto;font-weight:400">${runbook.steps.length} of 200</span></div>
-<div class="bl-panel-body">${steps}</div></section>
+    return `<details class="bl-panel bl-rb-power" style="margin-top:16px"><summary>The raw steps</summary>
+<div class="bl-panel-body">${meta}${steps}${devices.length ? '' : ''}</div></details>`;
+}
+
+export interface EditorOptions {
+    message?: string;
+    /** The phone this runbook is recording on right now. */
+    recordingOn?: string;
+    /** The in-process run being watched, when there is one. */
+    run?: LiveRun;
+}
+
+/**
+ * The runbook, front to back: the recording bar or the record button, the sentences, the try
+ * panel, and the raw steps folded away underneath.
+ */
+export function runbookEditorFragment(
+    runbook: Runbook, devices: readonly RegisteredDevice[], options: EditorOptions = {},
+): string {
+    const naming = !options.recordingOn && needsName(runbook) ? namePrompt(runbook, devices) : '';
+    return `<section id="runbook-editor">${notice(options.message)}
+${options.recordingOn ? recordingBar(runbook, devices, options.recordingOn) : naming || recordControl(runbook, devices)}
+<p class="bl-muted" style="margin:12px 0">${escapeHtml(platformFact(devices.find(({ udid }) => udid === runbook.createdFor.udid)?.name ?? runbook.createdFor.udid, runbook.platform))}${runbook.description ? ` · ${escapeHtml(runbook.description)}` : ''}</p>
+${storyFragment(runbook, {
+        devices,
+        ...(options.recordingOn ? { recordingOn: options.recordingOn } : {}),
+        ...(options.run ? { run: options.run } : {}),
+    })}
+${runPanelFragment(runbook, devices, options.run)}
+${powerTools(runbook, devices)}
 ${runDialog(runbook, devices, 'editor')}</section>`;
 }
 
 export function runbookPage(
-    runbook: Runbook, devices: readonly RegisteredDevice[], assetVersion = '', recordingOn?: string,
+    runbook: Runbook, devices: readonly RegisteredDevice[], assetVersion = '', options: EditorOptions = {},
 ): ShellPage {
     return layout(runbook.name,
         `<a class="bl-btn" href="/runbooks">${icon('chevronLeft')}All runbooks</a>`
         + `<button type="button" class="bl-btn bl-btn-primary" data-dialog="run-${escapeHtml(runbook.id)}">${icon('play')}Run on device</button>`,
-        runbookEditorFragment(runbook, devices, undefined, recordingOn), assetVersion);
+        runbookEditorFragment(runbook, devices, options), assetVersion);
 }
 
-/** The device-page panel: pick a runbook, toggle recording, watch the steps arrive. */
+/**
+ * The device-page panel. One button starts a recording — the runbook is created for you and named
+ * afterwards — and while it records, the sentences arrive here as you drive the phone.
+ */
 export function devicePanelFragment(
     udid: string,
     runbooks: readonly Runbook[],
@@ -265,13 +278,20 @@ export function devicePanelFragment(
     const poll = session ? ` hx-get="${ROUTE_PREFIX}/devices/${encodeURIComponent(udid)}/panel" hx-trigger="every 2s" hx-swap="outerHTML"` : '';
     const body = session && recording
         ? `<div class="bl-rb-banner"><span class="bl-rec-dot"></span>
-<span>Recording into <a href="/runbooks/${escapeHtml(recording.id)}">${escapeHtml(recording.name)}</a> — every tap, swipe and typed line on this page becomes a step.</span>
-<form hx-post="${prefix}/stop" hx-target="#runbook-panel" hx-swap="outerHTML"><button class="bl-btn bl-btn-danger bl-btn-sm" type="submit">Stop recording</button></form></div>
-<ul class="bl-rb-live">${recording.steps.map((step) => `<li>${escapeHtml(summarizeStep(step))}</li>`).join('') || '<li class="bl-muted">No steps yet.</li>'}</ul>`
-        : `<form class="bl-inline-form" hx-post="${prefix}/start" hx-target="#runbook-panel" hx-swap="outerHTML">
-<label class="bl-field"><span>Record into</span><select class="bl-select" name="runbookId">${runbooks.map((runbook) => `<option value="${escapeHtml(runbook.id)}">${escapeHtml(runbook.name)}</option>`).join('')}</select></label>
-<button class="bl-btn" type="submit"${runbooks.length ? '' : ' disabled'}>${icon('play')}Start recording</button></form>`
-            + (runbooks.length ? '' : '<p class="bl-muted">Create a runbook on the <a href="/runbooks">Runbooks</a> page first.</p>');
+<span>Recording. Everything you do on this phone is written down.</span>
+<form hx-post="${prefix}/stop" hx-target="#runbook-panel" hx-swap="outerHTML"><button class="bl-btn bl-btn-danger bl-btn-sm" type="submit">Done</button></form></div>
+<ol class="bl-rb-story">${recording.steps.map((step) => `<li class="bl-rb-line"><span class="bl-dot ${stepConfidence(step) === 'sure' ? 'ok' : 'warn'}"></span>`
+            + `<div class="bl-rb-line-body"><span class="bl-rb-sentence">${escapeHtml(describeStep(step))}</span></div></li>`).join('')
+            || '<li class="bl-rb-line"><span class="bl-dot"></span><div class="bl-rb-line-body"><span class="bl-rb-sentence bl-faint">Drive the phone. What you do turns up here.</span></div></li>'}</ol>
+<p class="bl-faint">Press Done when you are finished, then give it a name on <a href="/runbooks/${escapeHtml(recording.id)}">its page</a>.</p>`
+        : `<form class="bl-inline-form" hx-post="${prefix}/quick" hx-target="#runbook-panel" hx-swap="outerHTML">
+<button class="bl-btn bl-btn-primary" type="submit">${icon('play')}Record what I do next</button>
+<span class="bl-faint">Taps, swipes and typing on this page become a runbook you can replay on the fleet.</span></form>`
+            + (runbooks.length
+                ? `<form class="bl-inline-form" style="margin-top:10px" hx-post="${prefix}/start" hx-target="#runbook-panel" hx-swap="outerHTML">
+<label class="bl-field"><span>Or add to</span><select class="bl-select" name="runbookId">${runbooks.map((runbook) => `<option value="${escapeHtml(runbook.id)}">${escapeHtml(runbook.name)}</option>`).join('')}</select></label>
+<button class="bl-btn" type="submit">Start recording</button></form>`
+                : '');
     // The recorder hook in the device page reads this flag; the panel is what keeps it current.
     const flag = `<script>document.documentElement.dataset.runbookRecording = ${scriptLiteral(session?.runbookId ?? '')};</script>`;
     return `<section id="runbook-panel"${poll}>${notice(message)}${body}${flag}</section>`;

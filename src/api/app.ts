@@ -30,6 +30,7 @@ import type { PluginRegistry } from '../registry.js';
 import type { CreateTaskInput, JsonObject, ScheduleTiming } from '../types.js';
 import { ScheduleTransitionError, type SchedulerRepository } from '../scheduler/repository.js';
 import { createEventStore, type EventStore, type FarmEvent } from '../fleet/events.js';
+import { safeFixUrl } from '../fleet/scheduler-events.js';
 import { acknowledgedMark } from '../push/acks.js';
 import { wdaServiceStatuses } from '../fleet/connectivity.js';
 import {
@@ -458,7 +459,11 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         const detail = await partial.execution?.(execution.id) ?? null;
         // A plugin (or task version) can be uninstalled while old executions
         // still reference it — degrade instead of throwing out of the fragment.
-        let definition: { summarize(payload: JsonObject): string; supportsStop(payload: JsonObject): boolean } | undefined;
+        let definition: {
+            summarize(payload: JsonObject): string;
+            supportsStop(payload: JsonObject): boolean;
+            fixUrl?(payload: JsonObject): string | undefined;
+        } | undefined;
         try {
             definition = options.plugins.task({
                 pluginId: execution.pluginId, taskType: execution.taskType,
@@ -472,6 +477,11 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
             || (execution.status === 'running' && (definition?.supportsStop(execution.payload) ?? true));
         const stop = canStop
             ? `<form hx-post="/api/executions/${execution.id}/stop" hx-target="#device-activity" hx-swap="outerHTML"><button class="bl-btn bl-btn-sm" type="submit">Stop</button></form>` : '';
+        // A failed task that knows where it can be repaired says so, right beside the log that
+        // shows it failing. The path is the plugin's; it is checked before it becomes an anchor.
+        const fix = execution.status === 'failed'
+            ? safeFixUrl(definition?.fixUrl?.(execution.payload)) : undefined;
+        const fixButton = fix ? `<a class="bl-btn bl-btn-sm" href="${escapeHtml(fix)}">Fix it</a>` : '';
         const lines = (detail?.logs.length ? detail.logs.slice(-12) : [execution.error ?? 'Waiting for the worker'])
             .map((line) => parseLogLine(line));
         const log = lines.map((line, index) => `<div${index === lines.length - 1 ? ' class="is-current"' : ''}>`
@@ -479,7 +489,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         return `<section id="device-activity" hx-get="/api/devices/${encodeURIComponent(deviceUdid)}/fragments/activity" hx-trigger="every 2s" hx-swap="outerHTML">`
             + `<div class="bl-activity-head"><span class="bl-state ${execution.status === 'running' ? 'busy' : execution.status === 'failed' ? 'error' : ''}">`
             + `<span class="bl-dot ${execution.status === 'running' ? 'busy' : execution.status === 'failed' ? 'error' : ''}"></span>${escapeHtml(execution.status)}</span>`
-            + `<span class="bl-muted">${escapeHtml(summary)}</span><span class="bl-spacer"></span>${stop}</div>`
+            + `<span class="bl-muted">${escapeHtml(summary)}</span><span class="bl-spacer"></span>${fixButton}${stop}</div>`
             + `${problem}<div class="bl-log">${log}</div></section>`;
     };
 
@@ -1068,7 +1078,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
             body: renderControlCenter(data),
             toolbar: wallToolbar(),
             toolbarRight: `${wallToolbarRight()}${AVATAR}`,
-            head: scriptTag('wall.js'),
+            head: `${scriptTag('wall.js')}<link rel="stylesheet" href="/assets/pages.css">`,
         }, data.read));
     });
 
@@ -1125,7 +1135,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
                 title: `${number} ${device.name}`.trim(), active: 'devices', body,
                 toolbar: `<a class="bl-btn" href="/">${icon('chevronLeft')}Control Center</a>`,
                 toolbarRight: wall ? stateBadge(wall.state) : '',
-                head: scriptTag('device.js'),
+                head: `${scriptTag('device.js')}<link rel="stylesheet" href="/assets/pages.css">`,
             }, read));
         }
         return reply.type('text/html').send(renderPage(device.name,

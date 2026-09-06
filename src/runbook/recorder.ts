@@ -9,8 +9,10 @@
 
 import type { Point, ScreenGeometry, UiNode } from '../drivers/types.js';
 import type { DeviceDriver } from '../drivers/types.js';
+import { visibleTexts } from '../drivers/verify.js';
 import type { JsonValue } from '../types.js';
-import type { Step, TapTarget } from './model.js';
+import { MAX_SEEN_TEXTS, type Step, type TapTarget } from './model.js';
+import { autoWaitStep } from './narrate.js';
 
 /** The remote actions a recording can represent. Everything else is refused by name. */
 export type RecordableAction =
@@ -123,6 +125,13 @@ export interface RecordingSession {
     screen: ScreenGeometry;
     /** The tree as it was before the next action lands. */
     tree?: UiNode;
+    /** The visible texts of that tree, kept on every step so "pick the label" can offer them. */
+    texts: string[];
+    /**
+     * A wait the recorder owes the next step: the screen changed materially after the last action,
+     * so the replay has to wait for the new screen rather than tap into the old one.
+     */
+    pendingWait?: Step;
     startedAt: string;
     steps: number;
 }
@@ -130,21 +139,33 @@ export interface RecordingSession {
 /** In-process recording state. A restart ends any recording, which is the honest behaviour. */
 export function createRecorder() {
     const sessions = new Map<string, RecordingSession>();
-    const capture = async (session: RecordingSession, driver: DeviceDriver): Promise<void> => {
+    /**
+     * Re-reads the screen after an action. Anything materially new on it is what the operator sat
+     * and waited for, so it becomes the wait in front of whatever they do next.
+     */
+    const capture = async (session: RecordingSession, driver: DeviceDriver, compare: boolean): Promise<void> => {
+        let tree: UiNode | undefined;
         try {
-            session.tree = await driver.uiTree();
+            tree = await driver.uiTree();
         } catch {
             // A driver without a tree still records fractions; the panel says so.
-            session.tree = undefined;
+            tree = undefined;
         }
+        const texts = tree ? visibleTexts(tree).slice(0, MAX_SEEN_TEXTS) : [];
+        if (compare && session.texts.length && texts.length) {
+            session.pendingWait = autoWaitStep(session.texts, texts);
+        }
+        session.tree = tree;
+        session.texts = texts;
     };
     return {
         async start(udid: string, runbookId: string, driver: DeviceDriver): Promise<RecordingSession> {
             for (const [key, session] of sessions) if (session.runbookId === runbookId) sessions.delete(key);
             const session: RecordingSession = {
-                runbookId, udid, screen: await driver.screen(), startedAt: new Date().toISOString(), steps: 0,
+                runbookId, udid, screen: await driver.screen(), texts: [],
+                startedAt: new Date().toISOString(), steps: 0,
             };
-            await capture(session, driver);
+            await capture(session, driver, false);
             sessions.set(udid, session);
             return session;
         },
@@ -159,12 +180,19 @@ export function createRecorder() {
         forRunbook(runbookId: string): RecordingSession | undefined {
             return [...sessions.values()].find((session) => session.runbookId === runbookId);
         },
-        /** Enrich an action with the pre-action tree, then re-capture for the next one. */
-        async record(session: RecordingSession, action: RecordableAction, driver: DeviceDriver): Promise<Step> {
-            const step = stepFromAction(action, session.screen, session.tree);
-            session.steps += 1;
-            await capture(session, driver);
-            return step;
+        /**
+         * Enrich an action with the pre-action tree, then re-capture for the next one. One action
+         * can produce two steps: the wait the previous action earned, and the action itself.
+         */
+        async record(session: RecordingSession, action: RecordableAction, driver: DeviceDriver): Promise<Step[]> {
+            const step: Step = { ...stepFromAction(action, session.screen, session.tree) };
+            if (session.texts.length) step.seen = [...new Set(session.texts)];
+            const wait = session.pendingWait;
+            session.pendingWait = undefined;
+            const steps = wait ? [wait, step] : [step];
+            session.steps += steps.length;
+            await capture(session, driver, true);
+            return steps;
         },
     };
 }

@@ -34,6 +34,13 @@ export interface StepOptions {
     retryDelayMs?: number;
     /** A failing optional step is logged and skipped instead of failing the run. */
     optional?: boolean;
+    /**
+     * The visible texts on the phone when this step was recorded. Kept so the narration panel can
+     * offer "pick the label" without going back to the device, which by then shows another screen.
+     */
+    seen?: string[];
+    /** A `type` step the operator has confirmed is the same every run — asked once, never again. */
+    fixed?: boolean;
 }
 
 export type Step = StepOptions & (
@@ -80,6 +87,23 @@ export interface Runbook {
     /** When the plugin's task last replayed this runbook, and how it went. Absent until it has. */
     lastRunAt?: string;
     lastRunStatus?: RunbookRunStatus;
+    /** What the operator last filled the blanks in with; the run form offers these again. */
+    lastValues?: Record<string, string>;
+    /** Where the last failure happened, so the runbook page can open at that sentence. */
+    lastFailure?: RunbookFailure;
+}
+
+/** Everything the "fix it" flow needs, captured when a replay gives up on a step. */
+export interface RunbookFailure {
+    stepIndex: number;
+    reason: string;
+    /** What the phone showed at that moment — the list "Pick the right button" offers. */
+    visibleTexts: string[];
+    at: string;
+    /** File name of the screenshot beside the runbook, when one could be taken. */
+    screenshot?: string;
+    executionId?: string;
+    deviceUdid?: string;
 }
 
 /** `stopped` is the operator pressing Stop; `failed` is anything the replay could not do. */
@@ -90,9 +114,13 @@ export function validateRunStatus(value: JsonValue | undefined): RunbookRunStatu
 }
 
 export const MAX_STEPS = 200;
+export const MAX_SEEN_TEXTS = 40;
+const MAX_SEEN_LENGTH = 200;
 const APP_ID_PATTERN = /^[A-Za-z0-9._-]{3,255}$/;
 const ID_PATTERN = /^[a-z0-9][a-z0-9-]{7,63}$/;
 const VARIABLE_PATTERN = /\{\{\s*([A-Za-z][A-Za-z0-9_]{0,63})\s*\}\}/g;
+export const BLANK_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+const SCREENSHOT_PATTERN = /^[a-z0-9][a-z0-9.-]{0,127}$/;
 
 function object(value: JsonValue | undefined, label: string): Record<string, JsonValue> {
     if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error(`${label} must be an object`);
@@ -141,7 +169,26 @@ function stepOptions(input: Record<string, JsonValue>): StepOptions {
         if (typeof input.optional !== 'boolean') throw new Error('optional must be true or false');
         if (input.optional) options.optional = true;
     }
+    if (input.fixed !== undefined && input.fixed !== null) {
+        if (typeof input.fixed !== 'boolean') throw new Error('fixed must be true or false');
+        if (input.fixed) options.fixed = true;
+    }
+    const seen = validateSeen(input.seen);
+    if (seen.length) options.seen = seen;
     return options;
+}
+
+/** The screen's visible texts, as recorded. Bounded on both axes: it is stored on every step. */
+export function validateSeen(value: JsonValue | undefined): string[] {
+    if (value === undefined || value === null) return [];
+    if (!Array.isArray(value)) throw new Error('seen must be an array of the texts on screen');
+    const texts: string[] = [];
+    for (const entry of value.slice(0, MAX_SEEN_TEXTS)) {
+        if (typeof entry !== 'string') throw new Error('seen must hold only strings');
+        const trimmed = entry.trim().slice(0, MAX_SEEN_LENGTH);
+        if (trimmed && !texts.includes(trimmed)) texts.push(trimmed);
+    }
+    return texts;
 }
 
 /** A `waitForText` / `assert` needs one of the two selectors, never neither. */
@@ -256,6 +303,37 @@ export function validateRunbook(value: JsonValue | undefined): Runbook {
         updatedAt: now,
         ...(typeof input.lastRunAt === 'string' ? { lastRunAt: input.lastRunAt } : {}),
         ...(validateRunStatus(input.lastRunStatus) ? { lastRunStatus: validateRunStatus(input.lastRunStatus) } : {}),
+        ...(Object.keys(validateValues(input.lastValues)).length ? { lastValues: validateValues(input.lastValues) } : {}),
+        ...(validateFailure(input.lastFailure) ? { lastFailure: validateFailure(input.lastFailure)! } : {}),
+    };
+}
+
+export const MAX_VALUES = 32;
+
+export function validateValues(value: JsonValue | undefined): Record<string, string> {
+    if (value === undefined || value === null) return {};
+    const input = object(value, 'values');
+    const values: Record<string, string> = {};
+    for (const [name, entry] of Object.entries(input).slice(0, MAX_VALUES)) {
+        if (!BLANK_NAME_PATTERN.test(name)) throw new Error(`"${name}" is not a valid name for a blank`);
+        if (typeof entry !== 'string') throw new Error(`values.${name} must be a string`);
+        values[name] = entry.slice(0, 500);
+    }
+    return values;
+}
+
+export function validateFailure(value: JsonValue | undefined): RunbookFailure | undefined {
+    if (value === undefined || value === null) return undefined;
+    const input = object(value, 'lastFailure');
+    return {
+        stepIndex: integer(input.stepIndex, 'lastFailure stepIndex', 0, MAX_STEPS),
+        reason: text(input.reason, 'lastFailure reason', 500, 0),
+        visibleTexts: validateSeen(input.visibleTexts),
+        at: typeof input.at === 'string' ? input.at : new Date().toISOString(),
+        ...(optionalText(input.screenshot, 'lastFailure screenshot', 128) && SCREENSHOT_PATTERN.test(String(input.screenshot))
+            ? { screenshot: String(input.screenshot) } : {}),
+        ...(optionalText(input.executionId, 'lastFailure executionId', 128) ? { executionId: String(input.executionId) } : {}),
+        ...(optionalText(input.deviceUdid, 'lastFailure deviceUdid', 128) ? { deviceUdid: String(input.deviceUdid) } : {}),
     };
 }
 
@@ -268,6 +346,7 @@ export function platformCompatible(runbook: Pick<Runbook, 'platform'>, platform:
     return runbook.platform === 'any' || runbook.platform === platform;
 }
 
+/** The blanks a runbook asks for. `{{name}}` is only the storage format; the UI says "blank". */
 export function variableNames(runbook: Pick<Runbook, 'steps'>): string[] {
     const names = new Set<string>();
     for (const step of runbook.steps) {

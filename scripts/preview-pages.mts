@@ -189,20 +189,50 @@ await registerScheduleRoutes(app, {
 });
 await registerContentRoutes(app, { scheduler: scheduler as never, store: store as never, plannerIntervalMinutes: 0, shell });
 
-for (const [index, name] of ['Warm up the feed', 'Follow back', 'Clear notifications'].entries()) {
+// Three runbooks, one of them recorded the way the recorder actually records: taps carrying the
+// texts that were on screen, an auto-inserted wait, a typed line still waiting for its answer,
+// one tap that only caught a position, and a failure to repair.
+const RECORDED = [
+    { type: 'launchApp', appId: 'com.zhiliaoapp.musically' },
+    { type: 'waitForText', text: 'For You', timeoutMs: 15_000, seen: ['For You', 'Following', 'Create'] },
+    { type: 'tap', target: { text: 'Create', fraction: { x: 0.5, y: 0.94 } }, seen: ['For You', 'Following', 'Create'] },
+    { type: 'waitForText', text: 'Upload a video', timeoutMs: 15_000, seen: ['Upload a video', 'Choose from gallery'] },
+    { type: 'tap', target: { fraction: { x: 0.5, y: 0.62 } }, seen: ['Upload a video', 'Choose from gallery', 'Camera roll', 'Next'] },
+    { type: 'type', text: 'gym pov day 14' },
+    { type: 'swipe', from: { x: 0.5, y: 0.8 }, to: { x: 0.5, y: 0.2 }, durationMs: 300 },
+    { type: 'key', key: 'back' },
+];
+
+for (const [index, name] of ['Warm up the feed', 'Post a clip', 'Clear notifications'].entries()) {
     await writeRunbook({
-        id: `preview-runbook-${index}`, name, description: 'Recorded on Pixel 7',
-        platform: index === 1 ? 'android' : 'any', createdAt: now.toISOString(), updatedAt: now.toISOString(),
+        id: `preview-runbook-${index}`, name, description: index === 1 ? 'Opens TikTok and uploads the day\u2019s clip' : '',
+        platform: 'android', createdAt: now.toISOString(), updatedAt: now.toISOString(),
         createdFor: { udid: devices[1]!.udid, screen: { width: 1080, height: 2400, scale: 1 } },
-        steps: [
+        steps: index === 1 ? RECORDED : [
             { type: 'launchApp', appId: 'com.zhiliaoapp.musically' },
             { type: 'wait', ms: 2_000 },
             { type: 'tap', target: { id: 'com.app:id/feed', fraction: { x: 0.5, y: 0.6 } } },
             { type: 'swipe', from: { x: 0.5, y: 0.8 }, to: { x: 0.5, y: 0.2 }, durationMs: 300 },
-            { type: 'screenshot', label: 'after scroll' },
-        ], version: 1,
+        ],
+        ...(index === 2 ? {
+            lastRunAt: now.toISOString(), lastRunStatus: 'failed',
+            lastFailure: {
+                stepIndex: 2, reason: 'the control was not on screen',
+                visibleTexts: ['Notifications', 'All activity', 'Clear all', 'Settings'],
+                at: now.toISOString(), screenshot: 'preview-runbook-2-failure.png', deviceUdid: devices[1]!.udid,
+            },
+        } : {}),
+        version: 1,
     } as never, workspace);
 }
+
+// The picture the replay would have taken when it gave up.
+const { default: sharp } = await import('sharp');
+await writeFile(path.join(workspace, 'preview-runbook-2-failure.png'), await sharp(Buffer.from(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="270" height="570"><rect width="270" height="570" fill="#d8d0e8"/>'
+    + '<text x="135" y="60" text-anchor="middle" font-family="Helvetica" font-size="20" fill="#ffffffcc">Notifications</text>'
+    + '<rect x="16" y="100" width="238" height="44" rx="8" fill="#ffffff99"/>'
+    + '<rect x="16" y="156" width="238" height="44" rx="8" fill="#ffffff99"/></svg>')).png().toBuffer());
 
 await registerRunbookRoutes({
     app, routePrefix: '/plugins/com.farm.runbook', scheduler: scheduler as never,

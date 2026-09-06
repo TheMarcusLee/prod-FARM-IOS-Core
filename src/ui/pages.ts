@@ -3,6 +3,7 @@
  * for `renderShell` — simple, honest, and empty-stated. See docs/design/backline.md.
  */
 import type { FarmEvent } from '../fleet/events.js';
+import { safeFixUrl } from '../fleet/scheduler-events.js';
 import type { WallDevice } from '../fleet/page.js';
 import { icon } from './icons.js';
 import type { RigService } from './rig.js';
@@ -83,6 +84,15 @@ the page that explains how to start it.</p></div>`;
 
 const SEVERITY_DOT: Record<string, string> = { error: 'bad', warning: 'warn', info: '' };
 
+/**
+ * Where the operator goes to repair this failure, when the plugin that failed offers somewhere.
+ * The path is checked again here: an event's detail is data, and this renders as an anchor.
+ */
+function fixLink(event: FarmEvent): string {
+    const url = safeFixUrl(typeof event.detail?.fixUrl === 'string' ? event.detail.fixUrl : undefined);
+    return url ? `<a class="bl-btn bl-btn-sm" href="${escapeHtml(url)}">Fix it</a>` : '';
+}
+
 export function renderAlertsPage(events: readonly FarmEvent[], unread: number): string {
     if (!events.length) {
         return `<div class="bl-page">${panel('Alerts', empty('Nothing has gone wrong yet. Alerts appear here when a phone drops off or a task fails.'))}</div>`;
@@ -93,7 +103,7 @@ export function renderAlertsPage(events: readonly FarmEvent[], unread: number): 
 <div class="bl-alert-meta"><span class="bl-chip bl-chip-sm">${escapeHtml(event.kind)}</span>
 <span class="bl-chip bl-chip-sm">${escapeHtml(event.severity)}</span>
 ${event.deviceUdid ? `<a href="/devices/${encodeURIComponent(event.deviceUdid)}">${escapeHtml(event.deviceUdid)}</a>` : ''}
-<time>${escapeHtml(event.createdAt.toISOString())}</time></div></div></li>`).join('');
+<time>${escapeHtml(event.createdAt.toISOString())}</time></div></div>${fixLink(event)}</li>`).join('');
     return `<div class="bl-page">
 <p class="bl-muted" id="alerts-unread">${unread} unread</p>
 <ul class="bl-alerts" id="alerts-list" data-newest="${events[0]?.id ?? 0}">${rows}</ul></div>`;

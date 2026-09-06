@@ -44,6 +44,7 @@ await writeFile(process.env.DEVICES_CONFIG_PATH, JSON.stringify(PHONES.map(([nam
 const { createApp } = await import('../src/api/app.js');
 const { defaultDashboardTheme } = await import('../src/dashboard-theme.js');
 const { PluginRegistry } = await import('../src/registry.js');
+const { createRunbookPlugin } = await import('../src/runbook-plugin.js');
 
 const devices = JSON.parse(await import('node:fs/promises').then((fs) => fs.readFile(process.env.DEVICES_CONFIG_PATH!, 'utf8')));
 // Every phone but 03 and 07 answers; that is what makes the wall interesting.
@@ -150,8 +151,30 @@ const registrations = {
     async cancel() {},
 };
 
+// The runbook plugin is registered so the inspector's "Record what I do next" works against the
+// fake phones, and /runbooks is the real page.
 const app = await createApp({
-    plugins: new PluginRegistry([]),
+    plugins: new PluginRegistry([createRunbookPlugin({
+        directory: path.join(workspace, 'runbooks'),
+        createDriver: (device) => ({
+            kind: 'adb', platform: 'android', udid: device.udid,
+            async launchApp() {}, async terminateApp() {}, async tap() {}, async swipe() {}, async type() {},
+            async pressKey() {}, async pushMedia() {}, async pause() {},
+            async uiTree() {
+                return {
+                    id: '', type: 'View', text: '', description: '',
+                    bounds: { left: 0, top: 0, right: 1080, bottom: 2400 },
+                    clickable: false, enabled: true,
+                    children: [
+                        { id: 'com.app:id/create', type: 'Button', text: 'Create', description: '', bounds: { left: 440, top: 2200, right: 640, bottom: 2360 }, clickable: true, enabled: true, children: [] },
+                        { id: '', type: 'Text', text: 'For You', description: '', bounds: { left: 380, top: 90, right: 560, bottom: 150 }, clickable: false, enabled: true, children: [] },
+                    ],
+                };
+            },
+            async screenshot() { return frames.get(device.udid) ?? frames.values().next().value!; },
+            async screen() { return { width: 1080, height: 2400, scale: 1 }; },
+        }) as never,
+    })]),
     registrations: registrations as never,
     scheduler: scheduler as never,
     dashboardTheme: defaultDashboardTheme,

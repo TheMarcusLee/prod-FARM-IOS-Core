@@ -79,6 +79,32 @@ export async function deleteRunbook(id: string, directory?: string): Promise<boo
     }
 }
 
+/**
+ * The picture a failed run took, beside the runbook it belongs to. One per runbook: the useful
+ * screenshot is the latest one, and a farm that runs a runbook nightly must not fill a disk.
+ */
+export function failureScreenshotName(id: string): string {
+    return `${validateRunbookId(id)}-failure.png`;
+}
+
+export async function writeFailureScreenshot(id: string, png: Buffer, directory?: string): Promise<string> {
+    const name = failureScreenshotName(id);
+    const target = path.join(runbookDirectory(directory), name);
+    await mkdir(path.dirname(target), { recursive: true });
+    const temporaryPath = `${target}.${process.pid}.tmp`;
+    await writeFile(temporaryPath, png, { mode: 0o600 });
+    await rename(temporaryPath, target);
+    return name;
+}
+
+export async function readFailureScreenshot(id: string, directory?: string): Promise<Buffer | undefined> {
+    try {
+        return await readFile(path.join(runbookDirectory(directory), failureScreenshotName(id)));
+    } catch {
+        return undefined;
+    }
+}
+
 // Recording appends one step at a time from concurrent HTTP requests; two overlapping
 // read-modify-writes would each read the same file and the second would drop a step.
 let mutation: Promise<unknown> = Promise.resolve();

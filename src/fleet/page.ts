@@ -254,7 +254,9 @@ export function renderInspector(device: WallDevice | undefined, log: readonly Wa
 <a class="bl-btn bl-btn-icon" href="/devices/${encodeURIComponent(device.udid)}" title="Open device">${icon('expand')}</a></div>
 <div class="bl-viewer">${viewer(device, 'live')}${hardwareColumn(device.platform)}</div>
 <div class="bl-inspector-foot">
-<div class="bl-btn-row">${stop}<a class="bl-btn" href="/devices/${encodeURIComponent(device.udid)}">Open device</a></div>
+<div class="bl-btn-row">${stop}<a class="bl-btn" href="/devices/${encodeURIComponent(device.udid)}">Open device</a>
+<button type="button" class="bl-btn" data-record-runbook="${escapeHtml(device.udid)}">Record what I do next</button></div>
+<div id="inspector-recording" hidden></div>
 <div id="inspector-run" hx-get="/api/fragments/inspector/${encodeURIComponent(device.udid)}/run" hx-trigger="every 3s" hx-swap="outerHTML">
 ${logBlock(log)}
 <div class="bl-rows"><div><span>Next post</span><span>${escapeHtml(next)}</span></div>

@@ -60,6 +60,12 @@ export interface TaskDefinition<TPayload extends JsonObject = JsonObject> {
     retryPolicy(payload: TPayload): TaskRetryPolicy;
     supportsStop(payload: TPayload): boolean;
     execute(context: TaskExecutionContext, payload: TPayload): Promise<TaskExecutionResult>;
+    /**
+     * Where an operator goes to repair a failure of this task — a same-site path, e.g. the runbook
+     * page opened at the step that gave up. Alerts and the device's activity block offer it as
+     * "Fix it"; a task with nothing to fix omits it.
+     */
+    fixUrl?(payload: TPayload): string | undefined;
 }
 
 export interface RegistrationCheckResult {
