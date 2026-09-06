@@ -19,8 +19,21 @@ export interface ReplayOptions {
     signal?: AbortSignal;
     log?: (line: string) => void | Promise<void>;
     onScreenshot?: (label: string, png: Buffer) => void | Promise<void>;
+    /**
+     * Called as each step starts and ends, so a page watching a run can light up the sentence it is
+     * on. Purely informational: anything it throws is the caller's problem, never the run's.
+     */
+    onStep?: (event: StepEvent) => void | Promise<void>;
     /** Tree polling interval for waitForText. */
     intervalMs?: number;
+}
+
+export interface StepEvent {
+    index: number;
+    step: Step;
+    status: 'running' | 'done' | 'skipped' | 'failed';
+    /** Set on `failed`: why, in the replay's own words. */
+    reason?: string;
 }
 
 export interface ReplayResult {
@@ -33,6 +46,9 @@ export type ResolvedVia = 'id' | 'text' | 'description' | 'ocr' | 'fraction';
 
 /** Carries the step index and what was on screen — the two things an operator needs to fix a run. */
 export class RunbookStepError extends Error {
+    /** The screen at the moment it gave up, when the driver could still be asked for one. */
+    screenshot?: Buffer;
+
     constructor(
         readonly stepIndex: number,
         readonly step: Step,
@@ -162,6 +178,13 @@ export async function replayRunbook(
     options: ReplayOptions = {},
 ): Promise<ReplayResult> {
     const log = async (line: string): Promise<void> => { await options.log?.(line); };
+    const announce = async (event: StepEvent): Promise<void> => {
+        try {
+            await options.onStep?.(event);
+        } catch {
+            // Watching a run must never be able to fail it.
+        }
+    };
     const result: ReplayResult = { stepsRun: 0, stepsSkipped: 0, stopped: false };
     await log(`Replaying "${runbook.name}" (${runbook.steps.length} steps) on ${driver.platform} ${driver.udid}`);
     for (const [index, step] of runbook.steps.entries()) {
@@ -171,6 +194,7 @@ export async function replayRunbook(
             return result;
         }
         const attempts = 1 + (step.retries ?? 0);
+        await announce({ index, step, status: 'running' });
         let failure: unknown;
         for (let attempt = 1; attempt <= attempts; attempt += 1) {
             try {
@@ -190,14 +214,25 @@ export async function replayRunbook(
         }
         if (failure === undefined) {
             result.stepsRun += 1;
+            await announce({ index, step, status: 'done' });
             continue;
         }
         if (step.optional) {
             result.stepsSkipped += 1;
             await log(`Step ${index + 1} is optional — skipping after ${message(failure)}`);
+            await announce({ index, step, status: 'skipped' });
             continue;
         }
-        throw new RunbookStepError(index, step, message(failure), await screenTexts(driver));
+        // A failure is the one moment a picture is worth having, and the one moment nobody is
+        // watching the phone: take it here rather than hope the runbook had a screenshot step.
+        const error = new RunbookStepError(index, step, message(failure), await screenTexts(driver));
+        const png = await driver.screenshot().catch(() => undefined);
+        if (png) {
+            error.screenshot = png;
+            await options.onScreenshot?.('failure', png);
+        }
+        await announce({ index, step, status: 'failed', reason: message(failure) });
+        throw error;
     }
     await log(`Finished: ${result.stepsRun} steps run, ${result.stepsSkipped} skipped`);
     return result;
