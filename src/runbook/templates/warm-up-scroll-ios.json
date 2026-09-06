@@ -1,0 +1,70 @@
+{
+  "id": "rb-starter-warm-up-scroll-ios",
+  "name": "Warm-up scroll (iPhone)",
+  "description": "Opens TikTok on an iPhone, taps Home, and scrolls the feed as many times as you ask for.",
+  "platform": "ios",
+  "appId": "com.zhiliaoapp.musically",
+  "createdFor": {
+    "udid": "starter-template-iphone8",
+    "screen": {
+      "width": 375,
+      "height": 667,
+      "scale": 2
+    }
+  },
+  "template": "warm-up-scroll-ios",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.zhiliaoapp.musically"
+    },
+    {
+      "type": "wait",
+      "ms": 7000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.10133,
+          "y": 0.97901
+        }
+      },
+      "seen": [
+        "For You",
+        "Following",
+        "Home",
+        "Friends",
+        "Inbox",
+        "Profile",
+        "Search"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 3000
+    },
+    {
+      "type": "swipe",
+      "from": {
+        "x": 0.49867,
+        "y": 0.82459
+      },
+      "to": {
+        "x": 0.49867,
+        "y": 0.22489
+      },
+      "durationMs": 450,
+      "repeat": "{{scrolls}}",
+      "repeatDelayMs": 4500
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "scrolls": "12"
+  }
+}

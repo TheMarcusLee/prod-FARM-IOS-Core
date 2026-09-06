@@ -1,0 +1,230 @@
+{
+  "id": "rb-starter-post-from-recents",
+  "name": "Post from Recents",
+  "description": "Posts the newest clip in the phone gallery, with a caption you fill in each run.",
+  "platform": "android",
+  "appId": "com.zhiliaoapp.musically",
+  "createdFor": {
+    "udid": "starter-template",
+    "screen": {
+      "width": 1080,
+      "height": 2400,
+      "scale": 1
+    }
+  },
+  "template": "post-from-recents",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.zhiliaoapp.musically"
+    },
+    {
+      "type": "wait",
+      "ms": 4000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "create_tab",
+        "text": "Create",
+        "fraction": {
+          "x": 0.5,
+          "y": 0.965
+        }
+      },
+      "seen": [
+        "Home",
+        "Friends",
+        "Inbox",
+        "Profile",
+        "Create",
+        "Add"
+      ]
+    },
+    {
+      "type": "waitForText",
+      "text": "Upload",
+      "timeoutMs": 30000,
+      "seen": [
+        "Upload",
+        "Gallery",
+        "Templates",
+        "Effects"
+      ],
+      "guess": true
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "upload",
+        "text": "Upload",
+        "fraction": {
+          "x": 0.88,
+          "y": 0.9
+        }
+      },
+      "seen": [
+        "Upload",
+        "Gallery"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 3000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.16,
+          "y": 0.28
+        }
+      },
+      "seen": [
+        "Recents",
+        "All photos",
+        "Videos",
+        "Photos",
+        "Next",
+        "Camera roll"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "btn_next",
+        "text": "Next",
+        "fraction": {
+          "x": 0.86,
+          "y": 0.94
+        }
+      },
+      "seen": [
+        "Recents",
+        "All photos",
+        "Videos",
+        "Photos",
+        "Next",
+        "Camera roll"
+      ]
+    },
+    {
+      "type": "wait",
+      "ms": 3000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "btn_next",
+        "text": "Next",
+        "fraction": {
+          "x": 0.86,
+          "y": 0.94
+        }
+      },
+      "seen": [
+        "Next",
+        "Sounds",
+        "Text",
+        "Effects"
+      ],
+      "optional": true
+    },
+    {
+      "type": "waitForText",
+      "text": "Post",
+      "timeoutMs": 60000,
+      "seen": [
+        "Add a caption",
+        "Add description",
+        "Post",
+        "Drafts",
+        "Who can watch this video",
+        "Cover"
+      ],
+      "guess": true
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "caption_edit_view",
+        "text": "Add a caption",
+        "fraction": {
+          "x": 0.5,
+          "y": 0.16
+        }
+      },
+      "seen": [
+        "Add a caption",
+        "Add description",
+        "Post",
+        "Drafts",
+        "Who can watch this video",
+        "Cover"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 1200
+    },
+    {
+      "type": "type",
+      "text": "{{caption}}"
+    },
+    {
+      "type": "key",
+      "key": "back"
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "btn_post",
+        "text": "Post",
+        "fraction": {
+          "x": 0.78,
+          "y": 0.95
+        }
+      },
+      "seen": [
+        "Add a caption",
+        "Add description",
+        "Post",
+        "Drafts",
+        "Who can watch this video",
+        "Cover"
+      ]
+    },
+    {
+      "type": "waitForText",
+      "text": "being uploaded",
+      "timeoutMs": 180000,
+      "seen": [
+        "Your video is being uploaded",
+        "Posted",
+        "Uploading"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 10000
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "caption": "new one today"
+  }
+}

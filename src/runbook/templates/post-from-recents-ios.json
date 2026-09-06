@@ -1,0 +1,210 @@
+{
+  "id": "rb-starter-post-from-recents-ios",
+  "name": "Post from Recents (iPhone)",
+  "description": "Posts the newest clip in the camera roll from an iPhone, with a caption you fill in each run.",
+  "platform": "ios",
+  "appId": "com.zhiliaoapp.musically",
+  "createdFor": {
+    "udid": "starter-template-iphone8",
+    "screen": {
+      "width": 375,
+      "height": 667,
+      "scale": 2
+    }
+  },
+  "template": "post-from-recents-ios",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.zhiliaoapp.musically"
+    },
+    {
+      "type": "wait",
+      "ms": 7000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.49867,
+          "y": 0.95952
+        }
+      },
+      "seen": [
+        "Home",
+        "Friends",
+        "Inbox",
+        "Profile",
+        "Create",
+        "Add"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 5000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.08,
+          "y": 0.95202
+        }
+      },
+      "seen": [
+        "Upload",
+        "Camera roll"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 4000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.16533,
+          "y": 0.78861
+        }
+      },
+      "seen": [
+        "Recents",
+        "All photos",
+        "Videos",
+        "Photos",
+        "Next",
+        "Camera roll"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 2000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.73867,
+          "y": 0.92504
+        }
+      },
+      "seen": [
+        "Recents",
+        "All photos",
+        "Videos",
+        "Photos",
+        "Next",
+        "Camera roll"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 5000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.73867,
+          "y": 0.95502
+        }
+      },
+      "seen": [
+        "Next",
+        "Sounds",
+        "Text",
+        "Effects"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 5000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.32,
+          "y": 0.35382
+        }
+      },
+      "seen": [
+        "Add a caption",
+        "Add description",
+        "Post",
+        "Drafts",
+        "Who can watch this video",
+        "Cover"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    },
+    {
+      "type": "type",
+      "text": "{{caption}}"
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.05867,
+          "y": 0.06297
+        }
+      },
+      "seen": [
+        "Add a caption",
+        "Add description",
+        "Post",
+        "Drafts",
+        "Who can watch this video",
+        "Cover"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.73867,
+          "y": 0.94453
+        }
+      },
+      "seen": [
+        "Add a caption",
+        "Add description",
+        "Post",
+        "Drafts",
+        "Who can watch this video",
+        "Cover"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 20000
+    },
+    {
+      "type": "screenshot",
+      "label": "after-the-post"
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "caption": "new one today"
+  }
+}

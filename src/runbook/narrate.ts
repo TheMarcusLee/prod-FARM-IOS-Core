@@ -45,6 +45,11 @@ const KEY_WORDS: Record<string, string> = {
 /** How a tap target reads in a sentence: its label, or an honest description of a position. */
 export function targetWords(target: TapTarget): string {
     const label = target.text ?? target.description ?? idLabel(target.id);
+    // A label that is only a blank reads as the thing it stands for, never as braces.
+    if (label && target.text) {
+        const blanks = blanksIn(target.text);
+        if (blanks.length === 1 && target.text.trim() === `{{${blanks[0]!}}}`) return `the ${blanks[0]!}`;
+    }
     if (label) return label;
     return `the screen ${percent(target.fraction.x)} across, ${percent(target.fraction.y)} down`;
 }
@@ -93,8 +98,28 @@ function selectorWords(step: { text?: string; id?: string }): string {
     return step.text ? quote(step.text) : idLabel(step.id) ?? 'the control';
 }
 
-/** One recorded step, as the sentence the recorder's side panel shows. */
+/**
+ * How many times over, in words. A count reads as "three times"; a blank reads as the question the
+ * run will ask, because nobody has answered it yet.
+ */
+function repeatWords(step: Step): string {
+    if (step.repeat === undefined) return '';
+    if (typeof step.repeat === 'string') {
+        const name = blanksIn(step.repeat)[0];
+        return name ? `, as many times as the ${name} says` : '';
+    }
+    return step.repeat > 1 ? `, ${step.repeat} times` : '';
+}
+
+/**
+ * One recorded step, as the sentence the recorder's side panel shows. A step marked `guess` — the
+ * starter runbooks mark every label nobody has held a phone up to — says so, in one word.
+ */
 export function describeStep(step: Step): string {
+    return `${describeAction(step)}${repeatWords(step)}${step.guess ? ' (unverified)' : ''}`;
+}
+
+function describeAction(step: Step): string {
     switch (step.type) {
         case 'launchApp':
             return `Opened ${appName(step.appId)}`;

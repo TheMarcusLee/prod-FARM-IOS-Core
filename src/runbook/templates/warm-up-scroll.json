@@ -1,0 +1,68 @@
+{
+  "id": "rb-starter-warm-up-scroll",
+  "name": "Warm-up scroll",
+  "description": "Opens TikTok, waits for the feed, and scrolls it as many times as you ask for.",
+  "platform": "android",
+  "appId": "com.zhiliaoapp.musically",
+  "createdFor": {
+    "udid": "starter-template",
+    "screen": {
+      "width": 1080,
+      "height": 2400,
+      "scale": 1
+    }
+  },
+  "template": "warm-up-scroll",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.zhiliaoapp.musically"
+    },
+    {
+      "type": "waitForText",
+      "text": "For You",
+      "timeoutMs": 45000,
+      "seen": [
+        "For You",
+        "Following",
+        "Home",
+        "Friends",
+        "Inbox",
+        "Profile",
+        "Search"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 3000
+    },
+    {
+      "type": "swipe",
+      "from": {
+        "x": 0.5,
+        "y": 0.78
+      },
+      "to": {
+        "x": 0.5,
+        "y": 0.24
+      },
+      "durationMs": 380,
+      "repeat": "{{scrolls}}",
+      "repeatDelayMs": 4500
+    },
+    {
+      "type": "assert",
+      "text": "For You",
+      "expect": "present",
+      "optional": true,
+      "guess": true
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "scrolls": "12"
+  }
+}
