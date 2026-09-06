@@ -17,6 +17,12 @@ import {
     isPersonality,
     pickWatchDurationMs,
 } from './doomscroll-profile.js';
+import { decideForVideo, decideSearch } from '../persona/decide.js';
+import { personaFor } from '../persona/model.js';
+import { readMemory, writeMemory } from '../persona/memory.js';
+import { findWordBounds, readVideo } from '../persona/observe.js';
+import { beginSession, describeSession, finishSession, noteDecision, noteSearch } from '../persona/session.js';
+import type { Recognize } from '../drivers/verify.js';
 
 function positiveInteger(name: string, fallback: number): number {
     const rawValue = process.env[name] ?? String(fallback);
@@ -55,10 +61,29 @@ if (!isPersonality(personalityRaw)) {
 const personality = personalityRaw;
 const profile = PROFILES[personality];
 
-const durationMinutes = boundedInteger('DOOMSCROLL_DURATION_MINUTES', 5, 1, 180);
+const explicitDurationMinutes = process.env.DOOMSCROLL_DURATION_MINUTES === undefined
+    ? undefined : boundedInteger('DOOMSCROLL_DURATION_MINUTES', 5, 1, 180);
 const likeEnabled = booleanEnv('DOOMSCROLL_LIKE_ENABLED', true);
 const saveEnabled = booleanEnv('DOOMSCROLL_SAVE_ENABLED', true);
 const switchAccountName = process.env.TIKTOK_SWITCH_ACCOUNT?.trim() || undefined;
+const followEnabled = booleanEnv('DOOMSCROLL_FOLLOW_ENABLED', true);
+const searchEnabled = booleanEnv('DOOMSCROLL_SEARCH_ENABLED', true);
+
+/**
+ * The persona replaces the three personality profiles when the account has one. A persona is keyed
+ * by handle, so a run that does not switch accounts has no persona to be and keeps the old model.
+ * Session length, budgets and active hours all come from `sessionPlan`; an explicit
+ * DOOMSCROLL_DURATION_MINUTES still wins, and is also how an operator overrides the sleep window.
+ */
+const persona = booleanEnv('DOOMSCROLL_PERSONA', false) && switchAccountName
+    ? await personaFor(switchAccountName) : undefined;
+const personaMemory = persona ? await readMemory(persona.handle) : undefined;
+const session = persona && personaMemory ? beginSession(persona, personaMemory, Math.random, new Date()) : undefined;
+if (session && !session.plan.active && explicitDurationMinutes === undefined) {
+    console.log(`Not scrolling as ${persona!.handle}: ${session.plan.reason}`);
+    process.exit(0);
+}
+const durationMinutes = explicitDurationMinutes ?? session?.plan.minutes ?? 5;
 const registeredDevice = (await loadRegisteredDevices()).find((device) => device.udid === udid);
 const coordinates = resolveDeviceCoordinates(coordinateProfile(registeredDevice), registeredDevice?.coordinates);
 const tiktokCoordinates = coordinates.tiktok;
@@ -185,15 +210,18 @@ let videosViewed = 0;
 let swipes = 0;
 let likes = 0;
 let saves = 0;
+let follows = 0;
+let searches = 0;
 const runStartedAt = Date.now();
 
 // ±15%: nobody puts the phone down after exactly the number of minutes they meant to.
 const sessionMinutes = durationMinutes * (0.85 + motion.random() * 0.3);
 
 console.log(
-    `Starting doomscroll: seed=${motionSeed} hand=${motion.profile.hand} speed=${motion.profile.speed} `
-    + `profile=${personality} requestedDurationMinutes=${durationMinutes} `
-    + `sessionMinutes=${sessionMinutes.toFixed(1)} likeEnabled=${likeEnabled} saveEnabled=${saveEnabled}`,
+    `Starting doomscroll${session ? ` as ${persona!.handle}` : ''}: seed=${motionSeed} hand=${motion.profile.hand} speed=${motion.profile.speed} `
+    + (session ? `plan=${session.plan.reason} ` : `profile=${personality} `)
+    + `requestedDurationMinutes=${durationMinutes} sessionMinutes=${sessionMinutes.toFixed(1)} `
+    + `likeEnabled=${likeEnabled} saveEnabled=${saveEnabled}`,
 );
 
 try {
@@ -245,14 +273,50 @@ try {
         console.log(`Engagement control detection failed; using profile coordinates: ${error instanceof Error ? error.message : String(error)}`);
     }
 
+    /**
+     * XCUITest cannot see into TikTok's feed, so on iOS everything the persona reads — the caption,
+     * the hashtags, the creator, and the Follow button it might tap — comes from OCR over a
+     * screenshot. One screenshot per video is the price of behaving like a person rather than a
+     * coin flip. The recognizer is imported lazily so a run with no persona never loads it.
+     */
+    const recognize: Recognize = async (png) => {
+        const { recognizeWords } = await import('./ocr.js');
+        return (await recognizeWords(png)).map((word) => ({
+            text: word.text,
+            bounds: { left: word.x, top: word.y, right: word.x + word.width, bottom: word.y + word.height },
+        }));
+    };
+    const videoSource = { screenshot: () => remoteControl.getScreenshot(udid) };
+    const screenScale = (await remoteControl.getScreenInfo(udid).catch(() => undefined))?.scale ?? 1;
+    /** Taps a word OCR can see. A control that is not on screen is skipped, never fatal. */
+    const tapWord = async (browser: Browser, word: string, label: string): Promise<boolean> => {
+        let bounds;
+        try {
+            bounds = findWordBounds(await recognize(await remoteControl.getScreenshot(udid)), word);
+        } catch { bounds = undefined; }
+        if (!bounds) {
+            console.log(`Skipped ${label}: not on screen`);
+            return false;
+        }
+        // OCR reads the PNG's pixel grid; iOS taps are in points.
+        await tapCoordinate(browser, (bounds.left + bounds.right) / 2 / screenScale, (bounds.top + bounds.bottom) / 2 / screenScale, label);
+        return true;
+    };
+
     const deadline = Date.now() + sessionMinutes * 60_000;
 
     while (!stopRequested && hasTimeRemaining(Date.now(), deadline)) {
-        await cancellableDelay(clampToDeadline(Date.now(), deadline, pickWatchDurationMs(profile)));
+        // One decision model or the other. With a persona the video on screen is read first and
+        // every choice below comes out of `decideForVideo`; without one it is the old coin flips.
+        const video = session ? await readVideo(videoSource, recognize) : undefined;
+        const decision = session && persona && video ? decideForVideo(persona, video, session.state, Math.random) : undefined;
+        if (decision) console.log(decision.reason);
+
+        await cancellableDelay(clampToDeadline(Date.now(), deadline, decision ? decision.watchMs : pickWatchDurationMs(profile)));
         videosViewed += 1;
         if (stopRequested || !hasTimeRemaining(Date.now(), deadline)) break;
 
-        if (likeEnabled && decideLike(profile)) {
+        if (likeEnabled && (decision ? decision.like : decideLike(profile))) {
             await cancellableDelay(clampToDeadline(Date.now(), deadline, motion.pause('beforeLike')));
             if (stopRequested || !hasTimeRemaining(Date.now(), deadline)) break;
             await doubleTapCoordinate(driver, likeX, likeY, 'Like');
@@ -260,7 +324,7 @@ try {
         }
         if (stopRequested || !hasTimeRemaining(Date.now(), deadline)) break;
 
-        if (saveEnabled && decideSave(profile)) {
+        if (saveEnabled && (decision ? decision.save : decideSave(profile))) {
             await cancellableDelay(clampToDeadline(Date.now(), deadline, motion.pause('afterLike')));
             if (stopRequested || !hasTimeRemaining(Date.now(), deadline)) break;
             await tapCoordinate(driver, saveX, saveY, 'Save');
@@ -268,9 +332,41 @@ try {
         }
         if (stopRequested || !hasTimeRemaining(Date.now(), deadline)) break;
 
-        const { linger, extraMs } = decideLinger(profile);
-        if (linger) {
-            await cancellableDelay(clampToDeadline(Date.now(), deadline, extraMs));
+        if (decision?.follow && followEnabled) {
+            await cancellableDelay(clampToDeadline(Date.now(), deadline, motion.pause('reaction')));
+            if (stopRequested || !hasTimeRemaining(Date.now(), deadline)) break;
+            if (await tapWord(driver, 'Follow', 'Follow')) follows += 1;
+        }
+        if (stopRequested || !hasTimeRemaining(Date.now(), deadline)) break;
+
+        if (session && video && decision) {
+            noteDecision(session, video, decision);
+        } else {
+            // The persona folds its curiosity into the watch time; only the profile model lingers.
+            const { linger, extraMs } = decideLinger(profile);
+            if (linger) {
+                await cancellableDelay(clampToDeadline(Date.now(), deadline, extraMs));
+            }
+        }
+        if (stopRequested || !hasTimeRemaining(Date.now(), deadline)) break;
+
+        // Occasionally the account goes looking for its own niche instead of taking the feed's
+        // word for it. There is no Back button on iOS, so the return trip is the Home tab.
+        const search = session && persona && searchEnabled ? decideSearch(persona, session.state, Math.random) : undefined;
+        if (search && session) {
+            console.log(search.reason);
+            if (await tapWord(driver, 'Search', 'Search')) {
+                await cancellableDelay(1_500);
+                await driver.keys(search.term);
+                await driver.keys(['Enter']);
+                await cancellableDelay(4_000);
+                // Dwell on the results the way somebody reading them would, then go home.
+                await cancellableDelay(clampToDeadline(Date.now(), deadline, 4_000 + Math.round(Math.random() * 6_000)));
+                await tapCoordinate(driver, homeTabX, homeTabY, 'Home tab');
+                await cancellableDelay(1_500);
+                noteSearch(session, search);
+                searches += 1;
+            }
         }
         if (stopRequested || !hasTimeRemaining(Date.now(), deadline)) break;
 
@@ -283,7 +379,13 @@ try {
 
     const elapsedMs = Date.now() - runStartedAt;
     const reason = stopRequested ? 'stopped' : 'completed';
-    console.log(`Finished doomscroll: videosViewed=${videosViewed} swipes=${swipes} likes=${likes} saves=${saves} elapsedMs=${elapsedMs} reason=${reason}`);
+    if (session && persona) {
+        finishSession(session, { minutes: elapsedMs / 60_000, ending: reason });
+        console.log(`Finished doomscroll as ${persona.handle}: ${describeSession(session)} · ${reason}`);
+        await writeMemory(session.memory);
+    } else {
+        console.log(`Finished doomscroll: videosViewed=${videosViewed} swipes=${swipes} likes=${likes} saves=${saves} elapsedMs=${elapsedMs} reason=${reason}`);
+    }
 } finally {
     if (driver) {
         await driver.deleteSession();

@@ -20,11 +20,19 @@ export interface TikTokPluginConfiguration {
 }
 
 type DoomscrollPayload = JsonObject & {
-    durationMinutes: number;
+    /** Absent means "let the persona decide how long it feels like scrolling". */
+    durationMinutes?: number;
+    /** The fallback model, kept for runs that predate personas or deliberately ask for it. */
     personality: 'skimmer' | 'casual' | 'engaged';
     likeEnabled: boolean;
     saveEnabled: boolean;
     account?: string;
+    /**
+     * Scroll as the account's persona (src/persona/**) rather than the personality coin flips.
+     * Defaults on whenever the task names an account, because every handle has a persona — a stored
+     * one, or the default derived from the handle.
+     */
+    persona?: boolean;
 };
 
 type PostMedia = JsonObject & {
@@ -81,7 +89,8 @@ function createDoomscrollTask(configuration: TikTokPluginConfiguration): TaskDef
             const input = objectPayload(value);
             const durationMinutes = input.durationMinutes;
             const personality = input.personality;
-            if (!Number.isInteger(durationMinutes) || typeof durationMinutes !== 'number' || durationMinutes < 1 || durationMinutes > 180) {
+            if (durationMinutes !== undefined && durationMinutes !== null
+                && (!Number.isInteger(durationMinutes) || typeof durationMinutes !== 'number' || durationMinutes < 1 || durationMinutes > 180)) {
                 throw new Error('durationMinutes must be between 1 and 180');
             }
             if (personality !== 'skimmer' && personality !== 'casual' && personality !== 'engaged') {
@@ -90,14 +99,27 @@ function createDoomscrollTask(configuration: TikTokPluginConfiguration): TaskDef
             if (typeof input.likeEnabled !== 'boolean' || typeof input.saveEnabled !== 'boolean') {
                 throw new Error('Engagement settings must be boolean');
             }
+            if (input.persona !== undefined && typeof input.persona !== 'boolean') {
+                throw new Error('persona must be true or false');
+            }
             const account = optionalString(input.account, 'account');
+            // No account means no handle, and a persona is a handle's — so the old model stands.
+            const persona = input.persona ?? Boolean(account);
+            if (persona && !account) throw new Error('Scrolling as a persona needs an account');
+            if (!persona && durationMinutes === undefined) {
+                throw new Error('durationMinutes is required unless the run scrolls as a persona');
+            }
             return {
-                durationMinutes, personality, likeEnabled: input.likeEnabled, saveEnabled: input.saveEnabled,
+                personality, likeEnabled: input.likeEnabled, saveEnabled: input.saveEnabled, persona,
+                ...(typeof durationMinutes === 'number' ? { durationMinutes } : {}),
                 ...(account ? { account } : {}),
             };
         },
-        summarize: (payload) => `Doomscroll · ${payload.personality} · ${payload.durationMinutes} min`,
-        estimateDurationMs: (payload) => payload.durationMinutes * 60_000,
+        summarize: (payload) => `Doomscroll · ${payload.persona ? `as ${payload.account}` : payload.personality} · `
+            + `${payload.durationMinutes ? `${payload.durationMinutes} min` : 'its own session length'}`,
+        // A persona picks its own length at run time; the scheduler still needs a slot to book, so
+        // an unstated duration is estimated at the middle of the default session band.
+        estimateDurationMs: (payload) => (payload.durationMinutes ?? 15) * 60_000,
         retryPolicy: () => ({ retryLimit: 2, retryDelaySeconds: 60, retryBackoff: true }),
         supportsStop: () => true,
         execute: async (context, payload) => context.runProcess({
@@ -106,8 +128,9 @@ function createDoomscrollTask(configuration: TikTokPluginConfiguration): TaskDef
                 ...(isAndroid(context)
                     ? { TIKTOK_PACKAGE: configuration.bundleId ?? 'com.zhiliaoapp.musically' }
                     : { IOS_UDID: context.device.udid, TIKTOK_BUNDLE_ID: configuration.bundleId ?? 'com.zhiliaoapp.musically' }),
-                DOOMSCROLL_DURATION_MINUTES: String(payload.durationMinutes),
+                ...(payload.durationMinutes ? { DOOMSCROLL_DURATION_MINUTES: String(payload.durationMinutes) } : {}),
                 DOOMSCROLL_PERSONALITY: payload.personality,
+                DOOMSCROLL_PERSONA: String(payload.persona ?? false),
                 DOOMSCROLL_LIKE_ENABLED: String(payload.likeEnabled),
                 DOOMSCROLL_SAVE_ENABLED: String(payload.saveEnabled),
                 ...(payload.account ? { TIKTOK_SWITCH_ACCOUNT: payload.account } : {}),
@@ -224,9 +247,12 @@ export function createTikTokPlugin(configuration: TikTokPluginConfiguration = {}
                             task: {
                                 pluginId: 'com.git-agni.tiktok', taskType: 'doomscroll', taskVersion: 1,
                                 payload: {
-                                    durationMinutes: Number(body.durationMinutes), personality: body.personality,
+                                    personality: body.personality,
                                     likeEnabled: body.likeEnabled === 'on', saveEnabled: body.saveEnabled === 'on',
+                                    // Blank duration on the panel means "let the persona decide".
+                                    ...(body.durationMinutes?.trim() ? { durationMinutes: Number(body.durationMinutes) } : {}),
                                     ...(body.account?.trim() ? { account: body.account.trim() } : {}),
+                                    ...(body.persona === undefined ? {} : { persona: body.persona === 'on' }),
                                 },
                             },
                             timing,
