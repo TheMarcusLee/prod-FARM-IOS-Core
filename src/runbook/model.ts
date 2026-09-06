@@ -54,7 +54,7 @@ export const STEP_TYPES: readonly StepType[] = [
     'launchApp', 'tap', 'swipe', 'type', 'key', 'wait', 'waitForText', 'assert', 'screenshot',
 ];
 
-export const KEYS: readonly Key[] = ['home', 'back', 'enter', 'delete'];
+export const KEYS: readonly Key[] = ['home', 'back', 'recents', 'power', 'enter', 'delete'];
 
 export type RunbookPlatform = 'ios' | 'android' | 'any';
 
