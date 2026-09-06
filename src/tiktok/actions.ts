@@ -3,22 +3,42 @@ import path from 'node:path';
 import type { Browser } from 'webdriverio';
 
 import type { WdaRemoteControl } from '@git-agni/backline';
+import { driverMotion, type MotionSource } from '../motion/source.js';
 import { findHandleMatch, pointFromWord, recognizeWords, type OcrWord } from './ocr.js';
 
-export async function tapCoordinate(driver: Browser, x: number, y: number, label: string): Promise<void> {
+/**
+ * The fallback hand, for the callers that do not hold the run's own source. Built once per process
+ * and continued between taps: `defaultMotionSeed` folds in `MOTION_SEED`, which the executor
+ * exports per run, so even a fallback tap belongs to the run it happened in.
+ */
+let fallbackHand: MotionSource | undefined;
+
+function handFor(motion?: MotionSource): MotionSource {
+    return motion ?? (fallbackHand ??= driverMotion(process.env.IOS_UDID ?? 'wda'));
+}
+
+/**
+ * A tap that came off a finger: a few pixels either side of the coordinate, held for 40–120 ms
+ * rather than a flat 100. `motion` is the run's own seeded hand where the caller has one; without
+ * it the tap still jitters, out of the process's own seeded source.
+ */
+export async function tapCoordinate(
+    driver: Browser, x: number, y: number, label: string, motion?: MotionSource,
+): Promise<void> {
+    const { point, pressMs } = handFor(motion).tap({ x, y });
     await driver.performActions([{
         type: 'pointer',
         id: 'finger',
         parameters: { pointerType: 'touch' },
         actions: [
-            { type: 'pointerMove', duration: 0, x, y },
+            { type: 'pointerMove', duration: 0, x: point.x, y: point.y },
             { type: 'pointerDown', button: 0 },
-            { type: 'pause', duration: 100 },
+            { type: 'pause', duration: pressMs },
             { type: 'pointerUp', button: 0 },
         ],
     }]);
     await driver.releaseActions();
-    console.log(`Tapped ${label} at (${x}, ${y})`);
+    console.log(`Tapped ${label} at (${point.x}, ${point.y})`);
 }
 
 export interface AccountSwitchCoords {
@@ -45,8 +65,9 @@ export async function switchTikTokAccount(
     udid: string,
     targetHandle: string,
     coords: AccountSwitchCoords,
+    motion?: MotionSource,
 ): Promise<void> {
-    await tapCoordinate(driver, coords.profileTabX, coords.profileTabY, 'Profile tab');
+    await tapCoordinate(driver, coords.profileTabX, coords.profileTabY, 'Profile tab', motion);
     // Longer than the other settle pauses here: a fresh app launch can pop
     // up a transient tooltip/announcement bubble over the profile header
     // (seen live — different text each time, e.g. "What's good?", a
@@ -66,7 +87,7 @@ export async function switchTikTokAccount(
     let switcherWords: OcrWord[] = [];
     let opened = false;
     for (let attempt = 1; attempt <= MAX_SWITCHER_OPEN_ATTEMPTS && !opened; attempt += 1) {
-        await tapCoordinate(driver, coords.switcherTriggerX, coords.switcherTriggerY, `Account switcher (attempt ${attempt})`);
+        await tapCoordinate(driver, coords.switcherTriggerX, coords.switcherTriggerY, `Account switcher (attempt ${attempt})`, motion);
         await driver.pause(1500);
         switcherWords = await recognizeWords(await remote.getScreenshot(udid));
         opened = switcherIsOpen(switcherWords);
@@ -82,11 +103,11 @@ export async function switchTikTokAccount(
         throw new Error(`Could not find TikTok account "${targetHandle}" in the account switcher. OCR saw: ${seen}`);
     }
     const targetPoint = pointFromWord(targetMatch, scale);
-    await tapCoordinate(driver, targetPoint.x, targetPoint.y, `Account row for ${targetHandle}`);
+    await tapCoordinate(driver, targetPoint.x, targetPoint.y, `Account row for ${targetHandle}`, motion);
     // TikTok fully reloads app state after switching accounts.
     await driver.pause(4000);
 
-    await tapCoordinate(driver, coords.profileTabX, coords.profileTabY, 'Profile tab (verify)');
+    await tapCoordinate(driver, coords.profileTabX, coords.profileTabY, 'Profile tab (verify)', motion);
     await driver.pause(1000);
 
     const verifyWords = await recognizeWords(await remote.getScreenshot(udid));

@@ -9,7 +9,7 @@ import { createApp } from '../src/api/app.js';
 import { defaultDashboardTheme } from '../src/dashboard-theme.js';
 import { PluginRegistry } from '../src/registry.js';
 import type { SchedulerRepository } from '../src/scheduler/repository.js';
-import type { DeviceDriver, MediaFile, Point, Rect, UiNode } from '../src/drivers/types.js';
+import type { DeviceDriver, MediaFile, Point, Rect, TimedPoint, UiNode } from '../src/drivers/types.js';
 import type { OcrWord } from '../src/drivers/verify.js';
 import {
     LANGUAGES, defaultPersona, deletePersona, loadPersonas, personaFor, savePersona, validatePersona,
@@ -425,16 +425,23 @@ function fakeDriver(root: UiNode): FakeDriver {
     const state: FakeDriver = { taps: [], swipes: 0, driver: undefined as unknown as DeviceDriver };
     const contains = ({ bounds }: UiNode, { x, y }: Point) =>
         x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom;
+    const press = (point: Point): void => {
+        const hit = root.children.filter((child) => contains(child, point)).at(-1);
+        state.taps.push(hit ? (hit.text || hit.description || hit.id) : '(nothing)');
+    };
     state.driver = {
         kind: 'adb', platform: 'android', udid: 'R58N1ABCDE',
         launchApp: async () => {}, terminateApp: async () => {},
-        tap: async (point: Point) => {
-            const hit = root.children.filter((child) => contains(child, point)).at(-1);
-            state.taps.push(hit ? (hit.text || hit.description || hit.id) : '(nothing)');
-        },
+        tap: async (point: Point) => { press(point); },
         swipe: async () => { state.swipes += 1; },
-        // Swipes now play a generated arc through gesture(); count them the same way.
-        gesture: async () => { state.swipes += 1; },
+        // Swipes play a generated arc through gesture(), and a tap plays a two-sample path that
+        // does not move — a press. The phone cannot tell them apart either, so nor does this.
+        gesture: async (path: TimedPoint[]) => {
+            const first = path[0]!;
+            const last = path[path.length - 1]!;
+            if (first.x === last.x && first.y === last.y) press(first);
+            else state.swipes += 1;
+        },
         type: async () => {}, pressKey: async () => {},
         screenshot: async () => Buffer.alloc(0),
         uiTree: async () => root,
@@ -465,7 +472,9 @@ async function scrollAs(root: UiNode, persona: Persona): Promise<{ fake: FakeDri
     let clock = 0;
     const summary = await doomscrollOnAndroid(fake.driver, {
         durationMinutes: 1, personality: 'casual', likeEnabled: true, saveEnabled: true,
-        searchEnabled: false, persona,
+        // One seed for the run: the swipe arcs and the tap jitter both come out of it, so the
+        // pixels a tap lands on are the same on every run of this test.
+        searchEnabled: false, persona, seed: 'persona-routine-test',
         // Every draw at zero: the persona still refuses to engage with content it does not care about.
         random: () => 0,
         now: () => (clock += 2_000),
@@ -497,7 +506,7 @@ test('a persona asleep does not scroll at all', async () => {
     const fake = fakeDriver(feed('liftdaily', 'kettlebell swings'));
     const midnight = new Date(2026, 0, 5, 3, 0).getTime();
     const summary = await doomscrollOnAndroid(fake.driver, {
-        personality: 'casual', likeEnabled: true, saveEnabled: true,
+        personality: 'casual', likeEnabled: true, saveEnabled: true, seed: 'persona-routine-test',
         persona: GYM, random: () => 0.5, now: () => midnight,
     });
     assert.equal(summary.reason, 'asleep');
@@ -512,6 +521,7 @@ test('the run hands its memory back so the next session knows more than this one
     let saved: Awaited<ReturnType<typeof readMemory>> | undefined;
     await doomscrollOnAndroid(fake.driver, {
         durationMinutes: 1, personality: 'casual', likeEnabled: true, saveEnabled: true, searchEnabled: false,
+        seed: 'persona-routine-test',
         persona: { ...GYM, watch: { match: { min: 1, max: 2 }, other: { min: 1, max: 1 } } },
         memory: emptyMemory('@homegym.dan'),
         saveMemory: async (memory) => { saved = memory; },
