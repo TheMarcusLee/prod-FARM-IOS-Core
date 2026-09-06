@@ -1,0 +1,106 @@
+{
+  "id": "rb-starter-login-check",
+  "name": "Login check",
+  "description": "Opens TikTok, goes to the profile and checks the handle is on screen, with a picture of it either way. Schedule it daily: it is how a logged-out phone announces itself.",
+  "platform": "android",
+  "appId": "com.zhiliaoapp.musically",
+  "createdFor": {
+    "udid": "starter-template",
+    "screen": {
+      "width": 1080,
+      "height": 2400,
+      "scale": 1
+    }
+  },
+  "template": "login-check",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.zhiliaoapp.musically"
+    },
+    {
+      "type": "wait",
+      "ms": 4000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "profile_tab",
+        "text": "Profile",
+        "fraction": {
+          "x": 0.9,
+          "y": 0.965
+        }
+      },
+      "seen": [
+        "Home",
+        "Friends",
+        "Inbox",
+        "Profile",
+        "Create",
+        "Add"
+      ]
+    },
+    {
+      "type": "waitForText",
+      "text": "Edit profile",
+      "timeoutMs": 25000,
+      "seen": [
+        "Edit profile",
+        "Following",
+        "Followers",
+        "Likes",
+        "Posts",
+        "Videos",
+        "Liked"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 2500
+    },
+    {
+      "type": "assert",
+      "text": "{{handle}}",
+      "expect": "present",
+      "guess": true
+    },
+    {
+      "type": "screenshot",
+      "label": "profile"
+    },
+    {
+      "type": "tap",
+      "target": {
+        "id": "home_tab",
+        "text": "Home",
+        "fraction": {
+          "x": 0.1,
+          "y": 0.965
+        }
+      },
+      "seen": [
+        "Home",
+        "Friends",
+        "Inbox",
+        "Profile",
+        "Create",
+        "Add"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "handle": "@your.handle"
+  }
+}

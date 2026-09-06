@@ -1,0 +1,106 @@
+{
+  "id": "rb-starter-clear-notifications-ios",
+  "name": "Clear notifications (iPhone)",
+  "description": "Opens the inbox on an iPhone, scrolls the activity list so it is all seen, and goes back to the feed.",
+  "platform": "ios",
+  "appId": "com.zhiliaoapp.musically",
+  "createdFor": {
+    "udid": "starter-template-iphone8",
+    "screen": {
+      "width": 375,
+      "height": 667,
+      "scale": 2
+    }
+  },
+  "template": "clear-notifications-ios",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.zhiliaoapp.musically"
+    },
+    {
+      "type": "wait",
+      "ms": 7000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Inbox",
+        "fraction": {
+          "x": 0.69867,
+          "y": 0.98201
+        }
+      },
+      "seen": [
+        "Home",
+        "Friends",
+        "Inbox",
+        "Profile",
+        "Create",
+        "Add"
+      ],
+      "guess": true
+    },
+    {
+      "type": "waitForText",
+      "text": "All activity",
+      "timeoutMs": 25000,
+      "seen": [
+        "All activity",
+        "Followers",
+        "Likes",
+        "Comments",
+        "Mentions and tags",
+        "followed you",
+        "Follow back"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 2500
+    },
+    {
+      "type": "swipe",
+      "from": {
+        "x": 0.5,
+        "y": 0.75
+      },
+      "to": {
+        "x": 0.5,
+        "y": 0.3
+      },
+      "durationMs": 420,
+      "repeat": 6,
+      "repeatDelayMs": 1500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Home",
+        "fraction": {
+          "x": 0.10133,
+          "y": 0.97901
+        }
+      },
+      "seen": [
+        "Home",
+        "Friends",
+        "Inbox",
+        "Profile",
+        "Create",
+        "Add"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z"
+}

@@ -1,0 +1,123 @@
+{
+  "id": "rb-starter-switch-account-ios",
+  "name": "Switch account (iPhone)",
+  "description": "Opens the profile on an iPhone, opens the account switcher, and moves to the handle you name.",
+  "platform": "ios",
+  "appId": "com.zhiliaoapp.musically",
+  "createdFor": {
+    "udid": "starter-template-iphone8",
+    "screen": {
+      "width": 375,
+      "height": 667,
+      "scale": 2
+    }
+  },
+  "template": "switch-account-ios",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.zhiliaoapp.musically"
+    },
+    {
+      "type": "wait",
+      "ms": 7000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Profile",
+        "fraction": {
+          "x": 0.90133,
+          "y": 0.98351
+        }
+      },
+      "seen": [
+        "Home",
+        "Friends",
+        "Inbox",
+        "Profile",
+        "Create",
+        "Add"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 3000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.49333,
+          "y": 0.23688
+        }
+      },
+      "seen": [
+        "Switch account",
+        "Add account",
+        "Manage accounts",
+        "Log out"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 2500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "{{handle}}",
+        "fraction": {
+          "x": 0.5,
+          "y": 0.45
+        }
+      },
+      "seen": [
+        "Switch account",
+        "Add account",
+        "Manage accounts",
+        "Log out"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 8000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Profile",
+        "fraction": {
+          "x": 0.90133,
+          "y": 0.98351
+        }
+      },
+      "seen": [
+        "Home",
+        "Friends",
+        "Inbox",
+        "Profile",
+        "Create",
+        "Add"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 2500
+    },
+    {
+      "type": "screenshot",
+      "label": "after-the-switch"
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "handle": "@your.handle"
+  }
+}

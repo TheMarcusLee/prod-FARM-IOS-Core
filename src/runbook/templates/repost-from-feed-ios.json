@@ -1,0 +1,157 @@
+{
+  "id": "rb-starter-repost-from-feed-ios",
+  "name": "Repost from the feed (iPhone)",
+  "description": "Watches a couple of videos on an iPhone's For You feed, then opens Share on the one it lands on and reposts it.",
+  "platform": "ios",
+  "appId": "com.zhiliaoapp.musically",
+  "createdFor": {
+    "udid": "starter-template-iphone8",
+    "screen": {
+      "width": 375,
+      "height": 667,
+      "scale": 2
+    }
+  },
+  "template": "repost-from-feed-ios",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.zhiliaoapp.musically"
+    },
+    {
+      "type": "wait",
+      "ms": 7000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Home",
+        "fraction": {
+          "x": 0.10133,
+          "y": 0.97901
+        }
+      },
+      "seen": [
+        "For You",
+        "Following",
+        "Home",
+        "Friends",
+        "Inbox",
+        "Profile",
+        "Search"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 3000
+    },
+    {
+      "type": "swipe",
+      "from": {
+        "x": 0.49867,
+        "y": 0.82459
+      },
+      "to": {
+        "x": 0.49867,
+        "y": 0.22489
+      },
+      "durationMs": 450,
+      "repeat": "{{swipes}}",
+      "repeatDelayMs": 4500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Share",
+        "fraction": {
+          "x": 0.92,
+          "y": 0.83958
+        }
+      },
+      "seen": [
+        "Like",
+        "Liked",
+        "Add to Favorites",
+        "Favorites",
+        "Share",
+        "Comment",
+        "Follow"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 2500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Repost",
+        "fraction": {
+          "x": 0.2,
+          "y": 0.62
+        }
+      },
+      "seen": [
+        "Repost",
+        "Share to",
+        "Add to Story",
+        "Copy link",
+        "Send to",
+        "Report",
+        "Not interested"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 2500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Confirm",
+        "fraction": {
+          "x": 0.5,
+          "y": 0.6
+        }
+      },
+      "seen": [
+        "Repost",
+        "Confirm",
+        "Cancel",
+        "Add a comment"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    },
+    {
+      "type": "swipe",
+      "from": {
+        "x": 0.01333,
+        "y": 0.5
+      },
+      "to": {
+        "x": 0.6,
+        "y": 0.5
+      },
+      "durationMs": 350
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "swipes": "2"
+  }
+}
