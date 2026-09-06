@@ -123,6 +123,18 @@
 }
 .bl-drop.is-over { border-color: var(--bl-accent); background: var(--bl-accent-soft); color: var(--bl-accent); }
 .bl-drop strong { font-size: 13.5px; font-weight: 600; color: var(--bl-text); }
+/* One row per file in flight: name, size, percent, speed, and the three
+   buttons that are the whole point of a resumable upload. */
+.bl-uploads { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.bl-uploads:empty { display: none; }
+.bl-upload { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--bl-line); background: var(--bl-panel-2); }
+.bl-upload.is-failed { border-color: var(--bl-bad); }
+.bl-upload-head { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }
+.bl-upload-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bl-upload-meta { margin-left: auto; color: var(--bl-text-3); font-size: 11.5px; white-space: nowrap; }
+.bl-upload-bar { height: 5px; border-radius: 999px; background: var(--bl-line); overflow: hidden; }
+.bl-upload-fill { height: 100%; width: 0; border-radius: 999px; background: var(--bl-accent); transition: width .2s linear; }
+.bl-upload-actions { display: flex; gap: 6px; }
 .bl-ingest-more { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
 .bl-ingest-more form { display: flex; flex-direction: column; gap: 8px; }
 .bl-inline-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
