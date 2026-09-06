@@ -250,9 +250,15 @@ function osLabel(device: Pick<Device, 'platform' | 'osVersion'>): string {
 
 
 /** The Android remote verbs the dashboard can send; the rest are iOS/WDA-only. */
-type AndroidRemoteAction = RemoteAction | { type: 'back' } | { type: 'text'; text: string };
+type AndroidRemoteAction = RemoteAction | { type: 'back' } | { type: 'recents' } | { type: 'text'; text: string };
 
-const REMOTE_VERBS = ['tap', 'home', 'lock', 'wake', 'unlock', 'volumeUp', 'volumeDown', 'swipe', 'back', 'text'];
+const REMOTE_VERBS = [
+    'tap', 'home', 'lock', 'power', 'wake', 'unlock', 'volumeUp', 'volumeDown', 'swipe',
+    'back', 'recents', 'text',
+];
+
+/** Verbs only an Android phone has. iOS gets a 400 rather than a WDA error it cannot read. */
+const ANDROID_ONLY_VERBS = ['back', 'recents', 'text'];
 
 /** Coordinates and durations reach `adb input` and WDA as numbers; NaN there taps nothing, slowly. */
 function finiteNumber(value: unknown): boolean {
@@ -295,6 +301,8 @@ async function performAndroidAction(driver: DeviceDriver, action: AndroidRemoteA
         });
         case 'home': return driver.pressKey('home');
         case 'back': return driver.pressKey('back');
+        case 'recents': return driver.pressKey('recents');
+        case 'power': return driver.pressKey('power');
         case 'text': return driver.type(action.text);
         default: throw httpError(400, `"${action.type}" is an iOS-only remote action`);
     }
@@ -701,6 +709,9 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
             return reply.code(409).send({ error: 'Remote input is disabled while automation is running' });
         }
         const android = await androidDevice(request.params.udid);
+        if (!android && ANDROID_ONLY_VERBS.includes(request.body.type)) {
+            return reply.code(400).send({ error: `"${request.body.type}" is an Android-only remote action` });
+        }
         if (android) await performAndroidAction(createDriver(android), request.body);
         else await remote.performAction(request.params.udid, request.body as RemoteAction);
         return { ok: true };

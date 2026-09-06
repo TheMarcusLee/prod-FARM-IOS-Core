@@ -50,7 +50,11 @@ export interface UiNode {
     children: UiNode[];
 }
 
-export type Key = 'home' | 'back' | 'enter' | 'delete';
+/**
+ * `recents` opens the app switcher and `power` is the side button. iOS has no recents key, so the
+ * WDA driver refuses it; `power` there is the lock the remote already speaks.
+ */
+export type Key = 'home' | 'back' | 'enter' | 'delete' | 'recents' | 'power';
 
 /** A file to place where the platform's gallery / TikTok picker will find it. */
 export interface MediaFile {

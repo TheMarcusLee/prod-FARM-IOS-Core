@@ -482,7 +482,8 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
             if (activeExecutionFor(udid)) {
                 fail('conflict', 'Remote input is disabled while automation is running', 409);
             }
-            if ((action.type === 'back' || action.type === 'text') && (device.platform ?? 'ios') === 'ios') {
+            const androidOnly = action.type === 'back' || action.type === 'recents' || action.type === 'text';
+            if (androidOnly && (device.platform ?? 'ios') === 'ios') {
                 fail('validation', `"${action.type}" is an Android-only remote action`, 400);
             }
             // A new frame, so the operator sees the tap did something.

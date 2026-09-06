@@ -24,7 +24,7 @@ export interface A11yBridgeDriverOptions {
     fallback?: Pick<DeviceDriver, 'launchApp' | 'terminateApp' | 'pushMedia'>;
 }
 
-const ANDROID_KEYCODES: Record<Key, number> = { home: 3, back: 4, enter: 66, delete: 67 };
+const ANDROID_KEYCODES: Record<Key, number> = { home: 3, back: 4, enter: 66, delete: 67, recents: 187, power: 26 };
 
 /**
  * The bridge answers `503 {"status":"error","code":"server_busy"}` when its on-device handler

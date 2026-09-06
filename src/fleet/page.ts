@@ -196,7 +196,7 @@ const HARDWARE: ReadonlyArray<{ key: string; label: string; glyph: Parameters<ty
     { key: 'recents', label: 'Recent apps', glyph: 'recents', android: true },
     { key: 'volumeUp', label: 'Volume up', glyph: 'plus' },
     { key: 'volumeDown', label: 'Volume down', glyph: 'minus' },
-    { key: 'lock', label: 'Power and lock', glyph: 'power' },
+    { key: 'power', label: 'Power', glyph: 'power' },
     { key: 'screenshot', label: 'Screenshot', glyph: 'camera' },
     { key: 'text', label: 'Type text', glyph: 'keyboard' },
 ];

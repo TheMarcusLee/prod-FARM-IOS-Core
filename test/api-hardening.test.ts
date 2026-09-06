@@ -269,6 +269,17 @@ test('a remote action is validated against the verb union before it reaches a de
         });
         assert.equal(refused.statusCode, 400, JSON.stringify(payload));
     }
+
+    // phone-1 is an iPhone. `recents` has no iOS equivalent, so it is refused here
+    // rather than falling through to WebDriverAgent and failing opaquely.
+    for (const type of ['recents', 'back', 'text']) {
+        const refused = await inject(app, {
+            method: 'POST', url: '/api/devices/phone-1/remote/action', headers: json,
+            payload: type === 'text' ? { type, text: 'hi' } : { type },
+        });
+        assert.equal(refused.statusCode, 400, type);
+        assert.match(refused.json().error, /Android-only remote action/);
+    }
 });
 
 // ---- CSRF ------------------------------------------------------------------

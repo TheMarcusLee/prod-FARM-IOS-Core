@@ -17,6 +17,8 @@ export type RemoteAction =
     | { type: 'tap'; x: number; y: number }
     | { type: 'home' }
     | { type: 'lock' }
+    /** The side button. On iOS that is the lock, which is what WDA's /wda/lock does. */
+    | { type: 'power' }
     | { type: 'wake' }
     | { type: 'unlock' }
     | { type: 'volumeUp' }
@@ -232,8 +234,8 @@ export class WdaRemoteControl {
             await this.unlock(udid);
             return;
         }
-        if (action.type === 'lock' || action.type === 'wake') {
-            await this.request(action.type === 'lock' ? '/wda/lock' : '/wda/unlock', { method: 'POST' });
+        if (action.type === 'lock' || action.type === 'power' || action.type === 'wake') {
+            await this.request(action.type === 'wake' ? '/wda/unlock' : '/wda/lock', { method: 'POST' });
             return;
         }
         if (action.type === 'volumeUp' || action.type === 'volumeDown') {

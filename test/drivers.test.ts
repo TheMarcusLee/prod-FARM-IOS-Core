@@ -5,6 +5,7 @@ import {
     BRIDGE_RETRY_BACKOFF_MS, bridgePingUrl, createA11yBridgeDriver, decodeScreenshot, normaliseBridgeNode, screenFromTree,
 } from '../src/drivers/a11y-bridge.js';
 import { createAdbDriver, discoverAdbDevices, escapeForInputText, parseAdbDevices, parseWmSize } from '../src/drivers/adb.js';
+import { createWdaDriver } from '../src/drivers/wda.js';
 import { driverForDevice, driverKindOf, platformOf } from '../src/drivers/select.js';
 import { parseUiautomatorXml } from '../src/drivers/uiautomator-xml.js';
 import { findById, findByText, locateText, tappableBounds, waitForText } from '../src/drivers/verify.js';
@@ -347,4 +348,41 @@ test('waitForText polls until the element appears and reports what it saw on tim
     const node = await waitForText(driver, { text: 'posted' }, { intervalMs: 1 });
     assert.equal(node.text, 'Posted');
     await assert.rejects(waitForText(driver, { text: 'nope' }, { timeoutMs: 5, intervalMs: 1 }), /Screen showed: Posted/);
+});
+
+test('recents and power are keyevents on Android and the lock button on iOS', async () => {
+    const calls: string[][] = [];
+    const run: CommandRunner = async (command, args) => {
+        calls.push([command, ...args]);
+        return { stdout: '', stderr: '' };
+    };
+    const adb = createAdbDriver({ serial: 'R58N1', run });
+    await adb.pressKey('recents');
+    await adb.pressKey('power');
+    assert.deepEqual(calls, [
+        ['adb', '-s', 'R58N1', 'shell', 'input', 'keyevent', '187'],
+        ['adb', '-s', 'R58N1', 'shell', 'input', 'keyevent', '26'],
+    ]);
+
+    // The bridge sends the same two codes over its own keyboard endpoint.
+    const bodies: string[] = [];
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+        bodies.push(String(init?.body ?? ''));
+        return new Response(JSON.stringify({ status: 'success', result: 'ok' }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const bridge = createA11yBridgeDriver({ serial: 'R58N1', baseUrl: 'http://127.0.0.1:18300', token: 't', fetchImpl });
+    await bridge.pressKey('recents');
+    await bridge.pressKey('power');
+    assert.deepEqual(bodies, ['key_code=187', 'key_code=26']);
+
+    // iOS: power is the lock WDA already speaks; recents is refused rather than faked.
+    const urls: string[] = [];
+    const wdaFetch = (async (url: string) => {
+        urls.push(String(url));
+        return new Response(JSON.stringify({ value: null }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const wda = createWdaDriver({ udid: 'ios-udid', wdaUrl: 'http://127.0.0.1:8100', fetchImpl: wdaFetch });
+    await wda.pressKey('power');
+    assert.deepEqual(urls, ['http://127.0.0.1:8100/wda/lock']);
+    await assert.rejects(wda.pressKey('recents'), /does not support pressKey\(recents\)/);
 });

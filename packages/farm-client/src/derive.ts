@@ -116,7 +116,8 @@ export function gestureToAction(
 
 /** `back` and `text` are Android-only; the farm answers 400 otherwise. */
 export function isActionSupported(action: RemoteAction['type'], platform: Platform): boolean {
-    if (action === 'back' || action === 'text') return platform === 'android';
+    // `power` works on both: keyevent 26 on Android, the WDA lock on iOS.
+    if (action === 'back' || action === 'recents' || action === 'text') return platform === 'android';
     return true;
 }
 

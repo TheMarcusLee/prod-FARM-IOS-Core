@@ -283,15 +283,15 @@ export function DeviceScreen({ udid }: { udid: string }) {
                     icon="recents"
                     label="Recents"
                     testID="device-key-recents"
-                    disabled
-                    onPress={() => Alert.alert('Not on the remote API', 'The farm has no recents action yet.')}
+                    disabled={!unlocked || platformOf(fleetDevice ?? {}) !== 'android'}
+                    onPress={() => void sendAction({ type: 'recents' })}
                 />
                 <HardwareKey
                     icon="power"
                     label="Power"
                     testID="device-key-power"
-                    disabled
-                    onPress={() => Alert.alert('Not on the remote API', 'The farm has no power action yet.')}
+                    disabled={!unlocked}
+                    onPress={() => void sendAction({ type: 'power' })}
                 />
                 <HardwareKey
                     icon="camera"

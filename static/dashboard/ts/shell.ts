@@ -167,7 +167,7 @@ export function devicePoint(image: HTMLElement, screen: ScreenInfo, event: Point
 export type RemoteAction =
     | { type: 'tap'; x: number; y: number }
     | { type: 'swipe'; startX: number; startY: number; endX: number; endY: number; durationMs: number }
-    | { type: 'home' | 'back' | 'lock' | 'wake' | 'unlock' | 'volumeUp' | 'volumeDown' }
+    | { type: 'home' | 'back' | 'recents' | 'lock' | 'power' | 'wake' | 'unlock' | 'volumeUp' | 'volumeDown' }
     | { type: 'text'; text: string };
 
 export function remoteAction(udid: string, action: RemoteAction): Promise<unknown> {

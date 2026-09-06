@@ -237,11 +237,15 @@ function useDeviceSummary(summary) {
     if (name)
         document.title = `${name} · ${platform} Automation`;
     elements.screen.alt = `Live screen from the connected ${platform} device`;
-    // Lock, wake, unlock and the volume keys are WebDriverAgent verbs with no adb equivalent.
-    if (platform === 'Android') {
-        for (const button of elements.remoteButtons) {
-            const action = button.dataset.remoteAction ?? '';
-            button.hidden = !['up', 'down', 'left', 'right', 'home'].includes(action);
+    // Wake, unlock and the volume keys are WebDriverAgent verbs with no adb equivalent;
+    // recents is the other way round, an Android keyevent iOS has no button for.
+    for (const button of elements.remoteButtons) {
+        const action = button.dataset.remoteAction ?? '';
+        if (platform === 'Android') {
+            button.hidden = !['up', 'down', 'left', 'right', 'home', 'recents', 'power'].includes(action);
+        }
+        else {
+            button.hidden = action === 'recents';
         }
     }
     void connectRemote();
@@ -323,7 +327,7 @@ function directionalSwipe(direction) {
 elements.remoteButtons.forEach((button) => {
     button.addEventListener('click', () => {
         const action = button.dataset.remoteAction;
-        if (action === 'home' || action === 'lock' || action === 'wake'
+        if (action === 'home' || action === 'recents' || action === 'power' || action === 'wake'
             || action === 'unlock' || action === 'volumeUp' || action === 'volumeDown') {
             void sendAction({ type: action });
             return;

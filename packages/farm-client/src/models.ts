@@ -80,6 +80,10 @@ export type RemoteAction =
     | { type: 'swipe'; startX: number; startY: number; endX: number; endY: number; durationMs: number }
     | { type: 'home' }
     | { type: 'back' }
+    /** The app switcher. Android only — iOS has no recents key. */
+    | { type: 'recents' }
+    /** The side button: `adb` keyevent 26 on Android, the WDA lock on iOS. */
+    | { type: 'power' }
     | { type: 'text'; text: string };
 
 export interface ReconnectResult {

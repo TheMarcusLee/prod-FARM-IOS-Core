@@ -260,19 +260,25 @@ Needed to map a tap in the app's image view back to device coordinates.
 | `swipe` | `startX`, `startY`, `endX`, `endY`, `durationMs` | iOS, Android |
 | `home` | — | iOS, Android |
 | `back` | — | Android only |
+| `recents` | — | Android only |
+| `power` | — | iOS, Android |
 | `text` | `text` | Android only |
 | `lock`, `wake`, `unlock` | — | iOS only |
 | `volumeUp`, `volumeDown` | — | iOS only |
+
+`recents` is `adb` keyevent 187 (the app switcher); iOS has no such key.
+`power` is the side button: keyevent 26 on Android, WDA's `/wda/lock` on iOS,
+so one button works on both platforms. `lock` is the older iOS-only spelling of
+`power` and still works.
 
 Returns `{ "ok": true }`. `409` — `"Remote input is disabled while automation
 is running"` — whenever the device has a queued or running execution. This
 guard is server-side and non-negotiable; the app's safety toggle is a second
 lock, not the first.
 
-An unsupported verb on **Android** is a clean `400` naming it. Sending an
-Android-only verb (`back`, `text`) to an **iOS** device is not currently
-validated — it falls through to WDA and fails opaquely. Send only what the
-table allows for the device's platform.
+An unsupported verb on **Android** is a clean `400` naming it, and so is an
+Android-only verb (`back`, `recents`, `text`) sent to an **iOS** device:
+`{ "error": "\"recents\" is an Android-only remote action" }`.
 
 `GET /api/devices/:udid/remote/stream` (MJPEG) exists but the app should not
 use it — see the plan's §5 note on battery and background limits.
