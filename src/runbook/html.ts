@@ -67,6 +67,18 @@ function stamp(iso: string): string {
 }
 
 /**
+ * What the operator actually wants from the last column: whether this runbook still works, and
+ * when it last did. "Updated" only ever said when someone edited the steps.
+ */
+function lastRun(runbook: Runbook): string {
+    if (!runbook.lastRunAt) return '<span class="bl-faint">Never run</span>';
+    const word = runbook.lastRunStatus === 'failed' ? 'error'
+        : runbook.lastRunStatus === 'stopped' ? 'warn' : 'ok';
+    return `<span class="bl-state ${word}"><span class="bl-dot ${word}"></span>`
+        + `${escapeHtml(stamp(runbook.lastRunAt))}</span>`;
+}
+
+/**
  * One dialog per row rather than one shared dialog, so "Run on device" is a plain form post with no
  * state to keep in the client — the button that opens it names the dialog it opens, and that is all
  * the page script does.
@@ -94,7 +106,7 @@ export function runbookListFragment(runbooks: readonly Runbook[], devices: reado
 <p>${escapeHtml(runbook.description || runbook.id)}</p></div>
 <div class="bl-rb-col">${escapeHtml(runbook.platform)}</div>
 <div class="bl-rb-col">${runbook.steps.length} ${runbook.steps.length === 1 ? 'step' : 'steps'}</div>
-<div class="bl-rb-col">${escapeHtml(stamp(runbook.updatedAt))}</div>
+<div class="bl-rb-col">${lastRun(runbook)}</div>
 <div class="bl-rb-actions">
 <button type="button" class="bl-btn bl-btn-sm" data-dialog="run-${escapeHtml(runbook.id)}">Run on device</button>
 <form hx-post="${ROUTE_PREFIX}/runbooks/${escapeHtml(runbook.id)}/duplicate" hx-target="#runbook-list" hx-swap="outerHTML">
@@ -105,7 +117,7 @@ export function runbookListFragment(runbooks: readonly Runbook[], devices: reado
     const empty = '<div class="bl-empty">No runbooks yet. Create one, then record on it from a phone\'s page.</div>';
     return `<section id="runbook-list" class="bl-panel">${notice(message)}
 <div class="bl-rb-row bl-section-title"><div class="bl-rb-name">Runbook</div><div class="bl-rb-col">Platform</div>
-<div class="bl-rb-col">Steps</div><div class="bl-rb-col">Updated</div><div class="bl-rb-actions" style="width:250px"></div></div>
+<div class="bl-rb-col">Steps</div><div class="bl-rb-col">Last run</div><div class="bl-rb-actions" style="width:250px"></div></div>
 ${rows || empty}</section>`;
 }
 
