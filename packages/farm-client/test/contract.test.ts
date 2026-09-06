@@ -8,7 +8,7 @@
  * one of them, these fail before a screen has a chance to render `undefined`.
  */
 
-import { createFarmClient, eventText, type FarmEvent } from '../src';
+import { composeTimeline, createFarmClient, eventText, type FarmEvent } from '../src';
 
 /** The fixture the farm's `keysetPage()` produces for a paginated list. */
 function response(body: unknown, init: ResponseInit = {}): Response {
@@ -280,5 +280,95 @@ describe('GET /api/events', () => {
         );
         const [event] = (await client.listEvents()).events;
         expect(eventText(event!)).toEqual({ title: 'Schedule paused', body: '' });
+    });
+});
+
+/**
+ * The timeline wire, in the shape `src/schedule/timeline.ts` actually sends: `account` and
+ * `accountColor` per clip, `deviceUdid`/`slot` per track. The names are the farm's own, so
+ * nothing is renamed in transit and a field the farm drops fails here rather than on screen.
+ */
+describe('the schedule timeline', () => {
+    it('reads the farm\'s own clip fields, account colour included', async () => {
+        const { client } = clientReturning(() =>
+            response({
+                from: '2026-09-05T17:00:00.000Z',
+                to: '2026-09-05T23:00:00.000Z',
+                now: '2026-09-05T18:03:00.000Z',
+                range: 'today',
+                heading: 'Tonight',
+                ticks: [],
+                accounts: [{ account: '@farm.one', colour: { name: 'sage', fill: '#a3c497', line: '#7fa66a', ink: '#24391c' } }],
+                tracks: [{
+                    deviceUdid: 'R58N12ABCDE',
+                    name: 'Pixel 7',
+                    slot: '02',
+                    state: 'online',
+                    accounts: ['@farm.one'],
+                    clips: [{
+                        id: 'exe_1',
+                        deviceUdid: 'R58N12ABCDE',
+                        kind: 'execution',
+                        status: 'running',
+                        account: '@farm.one',
+                        colour: { name: 'sage', fill: '#a3c497', line: '#7fa66a', ink: '#24391c' },
+                        accountColor: 'sage',
+                        startsAt: '2026-09-05T18:00:00.000Z',
+                        endsAt: '2026-09-05T18:30:00.000Z',
+                        time: '19:00',
+                        title: 'posting',
+                        summary: 'Posting now',
+                        scheduleId: 'sch_1',
+                        schedulePaused: false,
+                        taskLabel: 'Post a clip',
+                    }],
+                }],
+                counts: { posts: 1, accounts: 1, needsYou: 0 },
+                recent: [],
+                planner: null,
+            }),
+        );
+
+        const timeline = await client.getScheduleTimeline({
+            from: '2026-09-05T17:00:00.000Z', to: '2026-09-05T23:00:00.000Z',
+        });
+        const track = timeline.tracks[0]!;
+        expect(track.deviceUdid).toBe('R58N12ABCDE');
+        expect(track.slot).toBe('02');
+        const clip = track.clips[0]!;
+        expect(clip.account).toBe('@farm.one');
+        expect(clip.accountColor).toBe('sage');
+        expect(clip.startsAt).toBe('2026-09-05T18:00:00.000Z');
+        expect(clip.title).toBe('posting');
+    });
+
+    it('colours the local fallback by account in registration order, not by phone', () => {
+        const at = (minutes: number) => new Date(Date.now() + minutes * 60_000).toISOString();
+        const execution = (id: string, deviceUdid: string) => ({
+            id, deviceUdid, scheduleId: null, pluginId: 'p', taskType: 'post', taskVersion: 1,
+            status: 'queued', payload: {}, scheduledFor: at(10), deadlineAt: at(40),
+            startedAt: null, finishedAt: null, error: null, attempt: 1, createdAt: at(0),
+        }) as never;
+
+        const timeline = composeTimeline({
+            // Two phones posting the same handle, and a third on its own.
+            devices: [
+                { udid: 'a', name: 'Pixel 7', accounts: ['@farm.one'] },
+                { udid: 'b', name: 'Pixel 8', accounts: ['@farm.one'] },
+                { udid: 'c', name: 'Moto G54', accounts: ['@farm.two'] },
+            ],
+            schedules: [],
+            executions: [execution('e1', 'a'), execution('e2', 'b'), execution('e3', 'c')],
+            from: at(-60),
+            to: at(120),
+        });
+
+        const colourOf = (udid: string) =>
+            timeline.tracks.find((track) => track.deviceUdid === udid)!.clips[0]!.accountColor;
+        // One handle, one colour — even though it is two phones two slots apart.
+        expect(colourOf('a')).toBe(colourOf('b'));
+        // And the palette is walked in the order the accounts were registered.
+        expect(colourOf('a')).toBe('sage');
+        expect(colourOf('c')).toBe('lilac');
     });
 });

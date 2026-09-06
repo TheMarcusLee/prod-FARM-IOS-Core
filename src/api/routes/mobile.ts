@@ -19,6 +19,7 @@ import { platformOf } from '../../drivers/select.js';
 import { createEventStore, serializeEvent, type EventStore, type FarmEvent } from '../../fleet/events.js';
 import { derivedDeviceState, type DerivedDeviceState } from '../../fleet/summary.js';
 import { acknowledgedMark } from '../../push/acks.js';
+import { deviceAccounts } from '../../schedule/accounts.js';
 import type { PluginRegistry } from '../../registry.js';
 import { ScheduleTransitionError, type KeysetCursor, type SchedulerRepository } from '../../scheduler/repository.js';
 import type { JsonObject } from '../../types.js';
@@ -302,6 +303,8 @@ interface BootstrapDevice {
     name: string;
     platform: string;
     tags: string[];
+    /** Handles signed in on this phone; the app colours its timeline clips by account order. */
+    accounts: string[];
     state: DerivedDeviceState;
     connection: { connected: boolean };
     currentExecution: JsonObject | null;
@@ -421,6 +424,7 @@ export async function registerMobileRoutes(app: FastifyInstance, options: Mobile
                 name: device.name,
                 platform: platformOf(device),
                 tags: device.tags ?? [],
+                accounts: deviceAccounts(device),
                 state: derivedDeviceState({
                     disabled: device.disabled, connected: online.has(device.udid),
                     busy: busy.has(device.udid), errored,

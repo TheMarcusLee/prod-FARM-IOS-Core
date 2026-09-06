@@ -345,6 +345,15 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
 
     /* ---------------------------------------------------------- reading */
 
+    /** The handles a phone's plugin data lists — the farm's `deviceAccounts`, in miniature. */
+    function accountsOf(device: RegisteredDevice): string[] {
+        return Object.values(device.pluginData ?? {}).flatMap((data) => {
+            const value = data as { accounts?: unknown; handle?: unknown };
+            if (Array.isArray(value.accounts)) return value.accounts.filter((entry): entry is string => typeof entry === 'string');
+            return typeof value.handle === 'string' ? [value.handle] : [];
+        });
+    }
+
     function fleetDevices(): FleetDevice[] {
         return devices.map((device) => {
             const state = states.get(device.udid) ?? 'online';
@@ -361,6 +370,7 @@ export function createMockFarm(options: MockFarmOptions = {}): MockFarm {
                 state,
                 // Bootstrap sends only this; the full record is `getDeviceConnection`.
                 connection: { connected: state !== 'offline' && state !== 'disabled' },
+                accounts: accountsOf(device),
                 currentExecution: active
                     ? {
                           id: active.id,

@@ -248,3 +248,41 @@ test('the retired /tasks page redirects to Schedule', async (context) => {
     // And the sidebar carries the real rig block rather than "Rig status unknown".
     assert.doesNotMatch(page.body, /Rig status unknown/);
 });
+
+/**
+ * The wire the phone app reads. `packages/farm-client/src/models.ts` names these exact fields,
+ * and `accountColor` is what colours a clip there — the palette entry's name, not its hex.
+ */
+test('the timeline endpoint names an account and its palette entry on every clip', async (context) => {
+    const started = new Date(2026, 8, 5, 19, 20);
+    const app = await scheduleApi([
+        execution({
+            id: 'running', deviceUdid: 'device-1', scheduledFor: started, startedAt: started,
+            deadlineAt: new Date(2026, 8, 5, 19, 40), status: 'running',
+            payload: { account: '@one', caption: 'gym pov #3' },
+        }),
+        execution({ id: 'warmup', deviceUdid: 'device-2', scheduledFor: new Date(2026, 8, 5, 20, 0) }),
+    ]);
+    context.after(() => app.close());
+
+    const payload = await timeline(app);
+    const clips = payload.tracks.flatMap((track) => track.clips);
+    assert.ok(clips.length);
+    for (const clip of clips) {
+        assert.ok('account' in clip, 'every clip names its account, even as null');
+        assert.equal(clip.accountColor, clip.colour.name);
+        assert.ok(ACCOUNT_PALETTE.some(({ name }) => name === clip.accountColor) || clip.accountColor === 'neutral');
+    }
+
+    // The colour a clip carries is the one the shared rule assigns to its account.
+    const colours = assignAccountColours(collectAccounts(DEVICES));
+    for (const clip of clips.filter(({ account }) => account)) {
+        assert.equal(clip.accountColor, colours.get(clip.account as string)?.name);
+    }
+
+    // And the tracks are named the way the app's TimelineTrack is.
+    for (const track of payload.tracks) {
+        assert.equal(typeof track.deviceUdid, 'string');
+        assert.match(track.slot, /^\d{2}$/);
+    }
+});

@@ -31,6 +31,11 @@ export interface TimelineClip {
     account: string | null;
     /** Palette entry, so the client never re-derives identity colours. */
     colour: AccountColour;
+    /**
+     * The palette entry's name — 'sage', 'lilac', … — for a client that keeps its own copy of the
+     * palette rather than painting with hex from the wire. The phone app reads this one.
+     */
+    accountColor: string;
     startsAt: string;
     endsAt: string;
     /** Local wall clock of `startsAt`, HH:MM — the first half of a clip's label. */
@@ -283,6 +288,7 @@ export function buildTimeline(input: TimelineInput): TimelinePayload {
             status,
             account,
             colour: colourFor(colours, account),
+            accountColor: colourFor(colours, account).name,
             startsAt: start.toISOString(),
             endsAt: end.toISOString(),
             time: hhmm(start),
@@ -317,6 +323,7 @@ export function buildTimeline(input: TimelineInput): TimelinePayload {
             status: 'planned',
             account: plan.account,
             colour: colourFor(colours, plan.account),
+            accountColor: colourFor(colours, plan.account).name,
             startsAt: start.toISOString(),
             endsAt: end.toISOString(),
             time: hhmm(start),
