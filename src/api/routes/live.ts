@@ -87,6 +87,9 @@ export async function registerLiveRoutes(app: FastifyInstance, options: LiveRout
             const sessions = options.sessions;
             const id = crypto.randomUUID();
             let dropped = 0;
+            // A delta frame that was dropped leaves everything after it undecodable until the next
+            // keyframe, so once one is skipped the rest are too, and the farm is asked for an IDR.
+            let awaitingKeyframe = false;
             const subscriber = {
                 id,
                 quality: qualityProfile(request.query.profile),
@@ -95,8 +98,14 @@ export async function registerLiveRoutes(app: FastifyInstance, options: LiveRout
                 },
                 frame(frame: LiveFrame) {
                     if (socket.readyState !== socket.OPEN) return;
-                    if (!shouldSendFrame(socket.bufferedAmount, frame.keyframe || frame.config, limit)) {
+                    const anchor = frame.keyframe || frame.config;
+                    if (anchor) awaitingKeyframe = false;
+                    if (awaitingKeyframe || !shouldSendFrame(socket.bufferedAmount, anchor, limit)) {
                         dropped += 1;
+                        if (!awaitingKeyframe) {
+                            awaitingKeyframe = true;
+                            void sessions.requestKeyframe(udid).catch(() => undefined);
+                        }
                         return;
                     }
                     socket.send(encodeFrame(frame));

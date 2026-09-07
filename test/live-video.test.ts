@@ -160,7 +160,7 @@ interface FakeStream {
     stopped: boolean;
 }
 
-function fakeRunner(rigOptions: { now?: () => number; freshKeyframeMs?: number } = {}) {
+function fakeRunner(rigOptions: { now?: () => number; freshKeyframeMs?: number; keyframeCooldownMs?: number } = {}) {
     const started: FakeStream[] = [];
     const timers: Array<{ run: () => void; ms: number }> = [];
     const manager = (options: { maxStreams?: number } = {}) => createSessionManager({
@@ -263,9 +263,11 @@ test('the stream is restarted at the size the largest watcher needs, and shrinks
 });
 
 test('asking for a keyframe restarts the stream, which is how scrcpy sends an IDR', async () => {
-    const rig = fakeRunner();
+    let clock = 0;
+    const rig = fakeRunner({ now: () => clock });
     const sessions = rig.manager();
     await sessions.subscribe('udid-a', watcher('one').subscriber);
+    clock = 10_000;
     await sessions.requestKeyframe('udid-a');
     assert.equal(rig.started.length, 2);
     assert.equal(rig.started[0]!.stopped, true);
@@ -302,6 +304,20 @@ test('a watcher joining a stream that has gone quiet gets it restarted, so it ha
     assert.equal(rig.started.length, 2, 'a stream quiet for seconds is restarted for the newcomer');
     assert.equal(rig.started[0]!.stopped, true);
     assert.deepEqual(rig.started[1]!.quality, WALL_QUALITY, 'at the quality the watchers already had');
+});
+
+test('keyframe requests in quick succession share one restart', async () => {
+    let clock = 0;
+    const rig = fakeRunner({ now: () => clock, keyframeCooldownMs: 3_000 });
+    const sessions = rig.manager();
+    await sessions.subscribe('udid-a', watcher('one').subscriber);
+    clock = 5_000;
+    await sessions.requestKeyframe('udid-a');
+    await sessions.requestKeyframe('udid-a');
+    assert.equal(rig.started.length, 2, 'the second request rides on a restart a moment old');
+    clock = 9_000;
+    await sessions.requestKeyframe('udid-a');
+    assert.equal(rig.started.length, 3, 'once the cooldown has passed a request restarts again');
 });
 
 test('a stream that ends tells its watchers, and the session is forgotten', async () => {

@@ -13,9 +13,13 @@ export interface LiveQuality {
     maxFps: number;
 }
 
-/** A tile on the wall is small and does not need to be smooth; a viewer is the opposite. */
-export const WALL_QUALITY: LiveQuality = { maxSize: 400, maxFps: 10 };
-export const VIEWER_QUALITY: LiveQuality = { maxSize: 720, maxFps: 24 };
+/**
+ * A tile on the wall is small and does not need to be smooth; a viewer is the opposite. scrcpy's
+ * frame cap delivers about half of what it is asked for on a fast phone (24 asked → 11 seen,
+ * 60 asked → 30 seen), so these are set for the picture wanted, not the number on the wire.
+ */
+export const WALL_QUALITY: LiveQuality = { maxSize: 400, maxFps: 30 };
+export const VIEWER_QUALITY: LiveQuality = { maxSize: 720, maxFps: 60 };
 
 export const QUALITY_PROFILES = { wall: WALL_QUALITY, viewer: VIEWER_QUALITY } as const;
 export type QualityProfile = keyof typeof QUALITY_PROFILES;
@@ -90,6 +94,8 @@ export interface SessionManagerOptions {
     now?: () => number;
     /** A watcher joining a stream whose last keyframe is older than this gets the stream restarted. */
     freshKeyframeMs?: number;
+    /** Keyframe requests closer together than this are answered by the restart already under way. */
+    keyframeCooldownMs?: number;
     /** Where the parameter sets become a WebCodecs codec string. */
     decoderCodec?: (sps: Uint8Array | undefined) => string | undefined;
     parameterSets?: (data: Uint8Array) => { sps?: Uint8Array; pps?: Uint8Array };
@@ -136,6 +142,7 @@ export function createSessionManager(options: SessionManagerOptions): LiveSessio
     const clearTimer = options.clearTimer ?? ((handle) => clearTimeout(handle as NodeJS.Timeout));
     const now = options.now ?? (() => Date.now());
     const freshKeyframeMs = options.freshKeyframeMs ?? 1_500;
+    const keyframeCooldownMs = options.keyframeCooldownMs ?? 3_000;
     const sessions = new Map<string, Session>();
 
     const cancelStop = (session: Session) => {
@@ -261,6 +268,10 @@ export function createSessionManager(options: SessionManagerOptions): LiveSessio
         async requestKeyframe(udid) {
             const session = sessions.get(udid);
             if (!session || !session.subscribers.size) return;
+            // A restart costs every watcher a moment of picture, so one lagging watcher asking
+            // over and over gets the restart that is already fresh rather than a new one each time.
+            if (session.starting) return session.starting.catch(() => undefined);
+            if (now() - session.startedAt < keyframeCooldownMs) return;
             // scrcpy has no "send me an IDR" message; a fresh stream begins with one.
             const quality = session.quality;
             session.quality = { maxSize: 0, maxFps: 0 };
