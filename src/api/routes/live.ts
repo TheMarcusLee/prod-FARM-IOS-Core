@@ -87,6 +87,7 @@ export async function registerLiveRoutes(app: FastifyInstance, options: LiveRout
             const sessions = options.sessions;
             const id = crypto.randomUUID();
             let dropped = 0;
+            let sent = 0;
             // A delta frame that was dropped leaves everything after it undecodable until the next
             // keyframe, so once one is skipped the rest are too, and the farm is asked for an IDR.
             let awaitingKeyframe = false;
@@ -109,6 +110,7 @@ export async function registerLiveRoutes(app: FastifyInstance, options: LiveRout
                         return;
                     }
                     socket.send(encodeFrame(frame));
+                    sent += 1;
                 },
                 ended(reason: string) {
                     send(socket, { type: 'ended', message: reason });
@@ -122,7 +124,21 @@ export async function registerLiveRoutes(app: FastifyInstance, options: LiveRout
                 // The browser could not decode what it was sent; a fresh stream begins with an IDR.
                 if (message.type === 'keyframe') void sessions.requestKeyframe(udid).catch(() => undefined);
             });
-            socket.on('close', () => sessions.unsubscribe(udid, id));
+            // A watcher that keeps falling behind is worth a line in the log: it is the one thing
+            // that separates "the phone is slow" from "this window cannot keep up".
+            let reported = 0;
+            const lagTimer = setInterval(() => {
+                request.log?.debug?.({ udid, profile: request.query.profile, sent, dropped, bufferedAmount: socket.bufferedAmount },
+                    'live video watcher');
+                if (dropped === reported) return;
+                request.log?.info?.({ udid, profile: request.query.profile, dropped, bufferedAmount: socket.bufferedAmount },
+                    'live video watcher fell behind');
+                reported = dropped;
+            }, 5_000);
+            socket.on('close', () => {
+                clearInterval(lagTimer);
+                sessions.unsubscribe(udid, id);
+            });
 
             try {
                 await sessions.subscribe(udid, subscriber);
