@@ -132,7 +132,7 @@ so an agent's tool loop is bounded without being throttled. See the table in
 | `screenshot` | `udid` | Returns PNG image content |
 | `list_schedules` | `deviceUdid?`, `limit?` (≤200, default 50) | Newest first |
 | `create_schedule` | `deviceUdid`, `task {pluginId, taskType, taskVersion, payload}`, `timing`, `runWindowMinutes?`, `assetIds?` | Any plugin task; the plugin validates the payload |
-| `create_tiktok_post` | `deviceUdid`, `account`, `assetIds` (1–3), `caption?`, `musicUrl?`, `destination`, `timing`, `runWindowMinutes?` | Friendly wrapper over `create_schedule` |
+| `create_tiktok_post` | `deviceUdid`, `account`, `assetIds` (1–35, in slide order), `format?`, `cover?`, `caption?`, `musicUrl?`, `destination`, `timing`, `runWindowMinutes?` | Friendly wrapper over `create_schedule` |
 | `create_doomscroll` | `deviceUdid`, `durationMinutes` (1–180), `personality` (`skimmer`\|`casual`\|`engaged`), `likeEnabled`, `saveEnabled`, `account?`, `timing`, `runWindowMinutes?` | |
 | `set_schedule_status` | `id`, `status` (`active`\|`paused`\|`cancelled`) | Mirrors `POST /api/schedules/:id/status`; a completed or cancelled schedule can only be cancelled |
 | `list_executions` | `deviceUdid?`, `limit?` (1–200, default 50) | |
@@ -237,5 +237,6 @@ See `SECURITY.md` and `docs/auth.md`.
 | `400 No MCP session` | A non-`initialize` request without `Mcp-Session-Id`; reconnect |
 | stdio client shows a parse error at startup | Something wrote to stdout — check for a missing `--silent` |
 | `Asset … does not exist` | `create_tiktok_post` takes ids from `upload_asset` / `list_assets`, not file paths |
+| `A post is one video or a set of images, never both` | One `create_tiktok_post` call is one format — see [post formats](content-queue.md#post-formats) |
 | `This device is disabled` | Re-enable the device in the dashboard first |
 | Scheduling fails with "within N minutes of another schedule" | `SCHEDULER_MIN_TASK_GAP_MINUTES`; call `list_schedules` first |

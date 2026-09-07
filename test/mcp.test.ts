@@ -162,11 +162,13 @@ test('create_tiktok_post builds exactly the payload the TikTok plugin validates'
         });
         assert.deepEqual(call.assetIds, ['asset-1']);
 
-        // The plugin is the real authority — validate() must accept the payload untouched.
+        // The plugin is the real authority — validate() must accept the payload.
         const post = createTikTokPlugin().tasks.find(({ type }) => type === 'post');
         assert.ok(post);
         const validated = post.validate(call.input.task.payload, { timingKind: 'now', devicePluginData: {} });
-        assert.deepEqual(validated, call.input.task.payload);
+        // The one thing it adds is the format it read off the media: an agent that
+        // does not mention a format still schedules a video, as it always did.
+        assert.deepEqual(validated, { ...call.input.task.payload, format: 'video' });
     } finally { await close(); }
 });
 

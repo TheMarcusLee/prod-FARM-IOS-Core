@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { ContentItemRow, DripPlanRow, DripRuleRow } from '../src/database/schema.js';
-import { chooseTimes, orderCandidates, planDripRules, type PlannedPost, type PlannerPorts } from '../src/content/planner.js';
+import {
+    chooseTimes, groupFormat, matchesFormat, orderCandidates, planDripRules, type PlannedPost, type PlannerPorts,
+} from '../src/content/planner.js';
 import { localDate, windowForDate, zonedTimeToUtc } from '../src/content/time.js';
 
 /** A tiny seeded generator so every assertion below is reproducible. */
@@ -20,7 +22,7 @@ function rule(overrides: Partial<DripRuleRow> = {}): DripRuleRow {
     return {
         id: 'rule-1', deviceUdid: 'device-1', account: '@handle', enabled: true,
         postsPerDay: 3, windowStart: '09:00', windowEnd: '21:00', timezone: 'UTC',
-        minGapMinutes: 120, destination: 'draft', source: 'tag', setId: null, tag: 'fitness',
+        minGapMinutes: 120, destination: 'draft', source: 'tag', format: 'any', setId: null, tag: 'fitness',
         captionTemplateId: null, pickOrder: 'random', avoidReuseDays: 30, lastPlannedDate: null,
         createdAt: new Date('2026-01-01T00:00:00Z'), updatedAt: new Date('2026-01-01T00:00:00Z'),
         ...overrides,
@@ -310,4 +312,81 @@ test('running out of media mid-day reports the shortfall instead of silently und
     assert.match(report.skipped.join(' '), /ran out of unused content on .* after 2 of 3 posts/);
     // The day it did manage is still recorded, so the next tick does not double it.
     assert.equal(context.markedDates.length, 1);
+});
+
+// ---- post formats ----------------------------------------------------------
+
+function picture(id: string, overrides: Partial<ContentItemRow> = {}): ContentItemRow {
+    return item(id, { kind: 'image', durationMs: null, ...overrides });
+}
+
+test('a group posts as the format its items are, not as the format a rule asked for', () => {
+    assert.equal(groupFormat([item('clip')]), 'video');
+    assert.equal(groupFormat([picture('one')]), 'photo');
+    assert.equal(groupFormat([picture('one'), picture('two'), picture('three')]), 'slideshow');
+    assert.equal(groupFormat([]), null);
+    // Two clips are not a post, and neither is a clip beside a picture.
+    assert.equal(groupFormat([item('a'), item('b')]), null);
+    assert.equal(groupFormat([item('clip'), picture('one')]), null);
+});
+
+test('a rule set to one format only draws that format from its pool', () => {
+    const slides = [picture('one'), picture('two')];
+    assert.equal(matchesFormat([item('clip')], 'any'), true);
+    assert.equal(matchesFormat([item('clip')], 'video'), true);
+    assert.equal(matchesFormat([item('clip')], 'photo'), false);
+    assert.equal(matchesFormat([picture('solo')], 'photo'), true);
+    assert.equal(matchesFormat(slides, 'slideshow'), true);
+    assert.equal(matchesFormat(slides, 'photo'), false);
+    // A group with no format is never planned, whatever the filter says.
+    assert.equal(matchesFormat([item('clip'), picture('one')], 'any'), false);
+});
+
+test('the planner stamps each post with its format and filters the pool by the rule', async () => {
+    const mixed = [item('clip-a'), picture('shot-a'), item('clip-b'), picture('shot-b')];
+    const photosOnly = ports({
+        rules: async () => [rule({ postsPerDay: 2, format: 'photo' })],
+        async candidates() { return mixed.map((entry) => [entry]); },
+    });
+    const report = await planDripRules({ ...photosOnly.ports, horizonDays: 1 });
+    assert.equal(report.planned, 2);
+    assert.deepEqual(photosOnly.created.map(({ post }) => post.format), ['photo', 'photo']);
+    assert.deepEqual(
+        photosOnly.created.map(({ post }) => post.items.map(({ id }) => id)).flat().sort(),
+        ['shot-a', 'shot-b'],
+    );
+
+    // The same pool with no filter plans videos and photos alike, each labelled.
+    const anything = ports({
+        rules: async () => [rule({ postsPerDay: 4, format: 'any', minGapMinutes: 60 })],
+        async candidates() { return mixed.map((entry) => [entry]); },
+    });
+    await planDripRules({ ...anything.ports, horizonDays: 1 });
+    assert.deepEqual(
+        anything.created.map(({ post }) => post.format).sort(),
+        ['photo', 'photo', 'video', 'video'],
+    );
+});
+
+test('a slideshow set is planned as one post carrying every slide in order', async () => {
+    const slides = [picture('slide-1'), picture('slide-2'), picture('slide-3')];
+    const built = ports({
+        rules: async () => [rule({ postsPerDay: 1, source: 'set', setId: 'set-1', tag: null, format: 'slideshow' })],
+        async candidates() { return [slides]; },
+    });
+    const report = await planDripRules({ ...built.ports, horizonDays: 1 });
+    assert.equal(report.planned, 1, 'three slides are one post, not three');
+    const [only] = built.created;
+    assert.equal(only?.post.format, 'slideshow');
+    assert.deepEqual(only?.post.items.map(({ id }) => id), ['slide-1', 'slide-2', 'slide-3']);
+});
+
+test('a format filter that matches nothing says so instead of planning the wrong thing', async () => {
+    const videosOnly = ports({
+        rules: async () => [rule({ format: 'slideshow' })],
+        async candidates() { return [[item('clip-a')], [item('clip-b')]]; },
+    });
+    const report = await planDripRules({ ...videosOnly.ports, horizonDays: 1 });
+    assert.equal(report.planned, 0);
+    assert.match(report.skipped.join(' '), /no unused slideshow content matches this rule/);
 });

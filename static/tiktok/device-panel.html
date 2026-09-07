@@ -9,7 +9,8 @@
 </form>
 <form id="tiktok-post-form" class="tiktok-form">
   <h3>Post media</h3>
-  <label>Media (1–3 files)<input name="media" type="file" accept="image/*,video/*" multiple required></label>
+  <label>Media<input name="media" type="file" accept="image/*,video/*" multiple required></label>
+  <label>Format<select name="format"><option value="">Match the files</option><option value="video">One video</option><option value="photo">One photo</option><option value="slideshow">Slideshow (2–35 images)</option></select></label>
   <div class="timing"><label>Account<input name="account" required autocomplete="off"></label><label>Destination<select name="destination"><option value="draft">Draft</option><option value="publish">Publish</option></select></label><label>Music URL<input name="musicUrl" type="url"></label></div>
   <label>Caption<textarea name="caption" maxlength="2200"></textarea></label>
   <label><input name="recurringPublishConfirmed" type="checkbox"> I explicitly approve recurring public posts</label>
@@ -53,6 +54,7 @@
       if (!uploadResponse.ok) throw new Error((await uploadResponse.json()).error || 'Upload failed');
       assets = await uploadResponse.json();
       var payload = {media: assets.map(function (asset) { return {assetId: asset.id, name: asset.name, mimeType: asset.mimeType}; }), destination: form.get('destination'), account: form.get('account')};
+      if (form.get('format')) payload.format = form.get('format');
       if (form.get('caption')) payload.caption = form.get('caption'); if (form.get('musicUrl')) payload.musicUrl = form.get('musicUrl'); if (form.has('recurringPublishConfirmed')) payload.recurringPublishConfirmed = true;
       await schedule('post', payload, timing(form), assets.map(function (asset) { return asset.id; }));
     } catch (error) { if (assets.length) await fetch('/api/assets', {method: 'DELETE', headers: {'content-type': 'application/json'}, body: JSON.stringify({assetIds: assets.map(function (asset) { return asset.id; })})}); result.textContent = error.message; }

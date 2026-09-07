@@ -649,13 +649,20 @@ const ACTIONS: Record<string, (chosen: string[]) => Promise<void>> = {
     async 'schedule-post'(chosen) {
         const answers = await ask('Schedule a post', [
             { name: 'media', label: 'Media', type: 'file', accept: 'video/*,image/*', multiple: true },
+            {
+                // Left blank the farm reads the format off the files: one video is a
+                // video, one image a photo, several images a slideshow in the order
+                // they were chosen. Naming it turns a wrong upload into an error.
+                name: 'format', label: 'Format', type: 'select',
+                options: [['', 'Match the files'], ['video', 'One video'], ['photo', 'One photo'], ['slideshow', 'Slideshow']],
+            },
             { name: 'runAt', label: 'Start', type: 'datetime-local' },
             { name: 'destination', label: 'Finish as', type: 'select', options: [['draft', 'Save to drafts'], ['publish', 'Post publicly']] },
             { name: 'caption', label: 'Caption', type: 'text' },
             { name: 'stagger', label: 'Stagger between phones, minutes', type: 'number', value: '5', min: '0' },
         ], 'Schedule on the selection');
         if (!answers) return;
-        if (!answers.files.length) return report('Choose at least one clip.');
+        if (!answers.files.length) return report('Choose a clip, or the images for a slideshow.');
         if (!answers.values.runAt) return report('Choose when the post should go out.');
         report('Uploading media');
         const uploaded = await uploadFiles(answers.files);
@@ -666,6 +673,7 @@ const ACTIONS: Record<string, (chosen: string[]) => Promise<void>> = {
                 payload: {
                     media: uploaded.map((asset) => ({ assetId: asset.id, name: asset.name, mimeType: asset.mimeType })),
                     destination: answers.values.destination, account: '',
+                    ...(answers.values.format ? { format: answers.values.format } : {}),
                     ...(answers.values.caption ? { caption: answers.values.caption } : {}),
                 },
             },

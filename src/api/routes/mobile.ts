@@ -281,6 +281,9 @@ function queueItem(plan: QueuePlanRow): JsonObject {
         status: queueStatus(plan),
         deviceUdid: plan.deviceUdid,
         caption: plan.caption,
+        // What the phone will actually do with the media. Absent on posts planned
+        // before formats existed, which were all videos.
+        format: plan.format ?? 'video',
         assetId: plan.assetId,
         thumbnailUrl: `/api/assets/${plan.assetId}/thumbnail`,
         plannedFor: plan.plannedFor.toISOString(),

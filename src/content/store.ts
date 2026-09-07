@@ -4,7 +4,8 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import * as schema from '../database/schema.js';
 import {
     assets, captionTemplates, contentItems, contentSetItems, contentSets, dripPlans, dripRules, executions, schedules,
-    type CaptionTemplateRow, type ContentItemRow, type ContentSetRow, type DripPlanRow, type DripRuleRow,
+    type CaptionTemplateRow, type ContentItemRow, type ContentSetKind, type ContentSetRow, type DripPlanRow,
+    type DripRuleRow,
 } from '../database/schema.js';
 
 export type ContentDatabase = NodePgDatabase<typeof schema>;
@@ -29,6 +30,8 @@ export interface QueuePlanRow {
     deviceUdid: string | null;
     caption: string | null;
     assetId: string;
+    /** The post's format, read off the schedule payload; null before a schedule exists. */
+    format: string | null;
 }
 
 export interface ThumbnailAsset {
@@ -56,7 +59,13 @@ export interface ContentStore {
     updateItem(id: string, patch: Partial<typeof contentItems.$inferInsert>): Promise<ContentItemRow | null>;
     deleteItem(id: string): Promise<boolean>;
     listSets(): Promise<Array<ContentSetRow & { itemCount: number }>>;
-    createSet(values: { name: string; notes?: string | null }): Promise<ContentSetRow>;
+    set(id: string): Promise<ContentSetRow | null>;
+    createSet(values: {
+        name: string; notes?: string | null; kind?: ContentSetKind; coverIndex?: number;
+    }): Promise<ContentSetRow>;
+    updateSet(id: string, patch: {
+        name?: string; notes?: string | null; kind?: ContentSetKind; coverIndex?: number;
+    }): Promise<ContentSetRow | null>;
     deleteSet(id: string): Promise<boolean>;
     setItems(setId: string): Promise<ContentItemRow[]>;
     setSetItems(setId: string, itemIds: string[]): Promise<void>;
@@ -107,6 +116,7 @@ interface QueueJoin {
     ruleDevice: string | null;
     caption: string | null;
     assetId: string;
+    format: string | null;
 }
 
 /** The schedule knows the device it will actually run on; the rule is the fallback before one exists. */
@@ -115,7 +125,7 @@ function toQueuePlan(row: QueueJoin): QueuePlanRow {
         id: row.plan.id, ruleId: row.plan.ruleId, itemId: row.plan.itemId, scheduleId: row.plan.scheduleId,
         plannedFor: row.plan.plannedFor, usedMarkedAt: row.plan.usedMarkedAt,
         scheduleStatus: row.scheduleStatus, deviceUdid: row.scheduleDevice ?? row.ruleDevice,
-        caption: row.caption, assetId: row.assetId,
+        caption: row.caption, assetId: row.assetId, format: row.format,
     };
 }
 
@@ -148,6 +158,9 @@ export function createContentStore(db: ContentDatabase): ContentStore {
             const rows = await db.select({
                 plan: dripPlans, scheduleStatus: schedules.status, scheduleDevice: schedules.deviceUdid,
                 ruleDevice: dripRules.deviceUdid, caption: contentItems.caption, assetId: contentItems.assetId,
+                // The format lives in the payload the planner wrote, so the mobile
+                // queue can badge a slideshow without a column of its own.
+                format: sql<string | null>`${schedules.payload} ->> 'format'`,
             }).from(dripPlans)
                 .leftJoin(schedules, eq(schedules.id, dripPlans.scheduleId))
                 .leftJoin(dripRules, eq(dripRules.id, dripPlans.ruleId))
@@ -161,6 +174,9 @@ export function createContentStore(db: ContentDatabase): ContentStore {
             const rows = await db.select({
                 plan: dripPlans, scheduleStatus: schedules.status, scheduleDevice: schedules.deviceUdid,
                 ruleDevice: dripRules.deviceUdid, caption: contentItems.caption, assetId: contentItems.assetId,
+                // The format lives in the payload the planner wrote, so the mobile
+                // queue can badge a slideshow without a column of its own.
+                format: sql<string | null>`${schedules.payload} ->> 'format'`,
             }).from(dripPlans)
                 .leftJoin(schedules, eq(schedules.id, dripPlans.scheduleId))
                 .leftJoin(dripRules, eq(dripRules.id, dripPlans.ruleId))
@@ -207,10 +223,19 @@ export function createContentStore(db: ContentDatabase): ContentStore {
             const byId = new Map(counts.map((row) => [row.setId, row.count]));
             return sets.map((set) => ({ ...set, itemCount: byId.get(set.id) ?? 0 }));
         },
+        async set(id) {
+            return rowsOrNull(await db.select().from(contentSets).where(eq(contentSets.id, id)).limit(1));
+        },
         async createSet(values) {
             const [row] = await db.insert(contentSets).values(values).returning();
             if (!row) throw new Error('Unable to create set');
             return row;
+        },
+        async updateSet(id, patch) {
+            const [row] = Object.keys(patch).length
+                ? await db.update(contentSets).set(patch).where(eq(contentSets.id, id)).returning()
+                : await db.select().from(contentSets).where(eq(contentSets.id, id)).limit(1);
+            return row ?? null;
         },
         async deleteSet(id) {
             const rows = await db.delete(contentSets).where(eq(contentSets.id, id)).returning({ id: contentSets.id });

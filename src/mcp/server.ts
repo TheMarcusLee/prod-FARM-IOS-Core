@@ -265,7 +265,11 @@ function registerTikTokTools(server: McpServer, dependencies: McpDependencies): 
         inputSchema: {
             deviceUdid: z.string().min(1),
             account: z.string().min(1).describe('TikTok handle on the device, e.g. @studio.daily'),
-            assetIds: z.array(z.string().min(1)).min(1).max(3).describe('One video, or up to three slideshow images'),
+            assetIds: z.array(z.string().min(1)).min(1).max(35)
+                .describe('One video, one image, or 2–35 images in slide order. Never a video and images together.'),
+            format: z.enum(['video', 'photo', 'slideshow']).optional()
+                .describe('Read off the assets when omitted: one video is a video, one image a photo, several a slideshow.'),
+            cover: z.number().int().min(0).optional().describe('Index into assetIds of the lead slide. Slideshow only.'),
             caption: z.string().max(2200).optional(),
             musicUrl: z.string().optional().describe('HTTPS tiktok.com sound URL'),
             destination: destinationSchema,
@@ -287,6 +291,10 @@ function registerTikTokTools(server: McpServer, dependencies: McpDependencies): 
                 pluginId: TIKTOK_PLUGIN_ID, taskType: 'post', taskVersion: 1,
                 payload: {
                     media, destination: input.destination, account: input.account,
+                    // Left off when the agent did not say: the task's own validation
+                    // then reads the format off the assets, as it does everywhere else.
+                    ...(input.format ? { format: input.format } : {}),
+                    ...(input.cover === undefined ? {} : { cover: input.cover }),
                     ...(input.caption ? { caption: input.caption } : {}),
                     ...(input.musicUrl ? { musicUrl: input.musicUrl } : {}),
                     // The owner's call: an agent that asks to publish, publishes.

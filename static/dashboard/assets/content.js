@@ -382,7 +382,17 @@ document.addEventListener('click', (event) => {
     if (!button)
         return;
     const failed = (error) => window.alert(error.message);
-    if (button.dataset.deleteItem) {
+    if (button.dataset.addSlide) {
+        addSlide({
+            itemId: button.dataset.addSlide,
+            assetId: button.dataset.asset ?? '',
+            name: button.dataset.name ?? button.dataset.addSlide.slice(0, 8),
+        });
+    }
+    else if (button.dataset.editSet) {
+        void openSet(button.dataset.editSet).catch(failed);
+    }
+    else if (button.dataset.deleteItem) {
         if (!window.confirm('Delete this media and its files?'))
             return;
         void request(`/api/content/items/${button.dataset.deleteItem}`, { method: 'DELETE' })
@@ -424,6 +434,151 @@ document.addEventListener('click', (event) => {
             .then(() => refresh('rules')).catch(failed);
     }
 });
+const slides = [];
+let editingSetId = null;
+let coverAt = 0;
+const slideList = byId('slideshow-list');
+const slideCount = byId('slideshow-count');
+const slideName = byId('slideshow-name');
+const slideResult = byId('slideshow-result');
+/** The shortest true sentence about the tray: how many slides, and whether they post. */
+function describeSlides() {
+    if (!slides.length)
+        return 'no slides yet';
+    if (slides.length === 1)
+        return '1 slide · a photo post';
+    if (slides.length > 35)
+        return `${slides.length} slides · 35 is the most TikTok takes`;
+    return `${slides.length} slides`;
+}
+function renderSlides() {
+    if (coverAt >= slides.length)
+        coverAt = 0;
+    slideCount.textContent = describeSlides();
+    slideList.replaceChildren();
+    for (const [index, slide] of slides.entries()) {
+        const row = document.createElement('li');
+        row.className = `bl-slide${index === coverAt ? ' is-cover' : ''}`;
+        const position = document.createElement('span');
+        position.className = 'bl-slide-index';
+        position.textContent = String(index + 1);
+        const thumb = document.createElement('img');
+        thumb.className = 'bl-slide-thumb';
+        thumb.src = `/api/assets/${encodeURIComponent(slide.assetId)}/thumbnail?w=96`;
+        thumb.alt = '';
+        thumb.loading = 'lazy';
+        thumb.addEventListener('error', () => thumb.remove());
+        // The caption comes off the operator's own media, so it is set as text.
+        const name = document.createElement('span');
+        name.className = 'bl-slide-name';
+        name.textContent = slide.name;
+        name.title = slide.name;
+        const actions = document.createElement('span');
+        actions.className = 'bl-slide-actions';
+        const button = (label, title, run, pressed) => {
+            const node = document.createElement('button');
+            node.type = 'button';
+            node.className = 'bl-btn bl-btn-sm';
+            node.textContent = label;
+            node.title = title;
+            if (pressed !== undefined)
+                node.setAttribute('aria-pressed', String(pressed));
+            node.addEventListener('click', run);
+            return node;
+        };
+        actions.append(button('Cover', 'Lead the post with this slide', () => { coverAt = index; renderSlides(); }, index === coverAt), button('↑', 'Move earlier', () => move(index, -1)), button('↓', 'Move later', () => move(index, 1)), button('×', 'Remove this slide', () => {
+            slides.splice(index, 1);
+            if (coverAt > index)
+                coverAt -= 1;
+            renderSlides();
+        }));
+        row.append(position, thumb, name, actions);
+        slideList.append(row);
+    }
+}
+/** Moving a slide moves the cover with it, so "cover" keeps meaning the same picture. */
+function move(index, by) {
+    const target = index + by;
+    const slide = slides[index];
+    const other = slides[target];
+    if (!slide || !other)
+        return;
+    slides[index] = other;
+    slides[target] = slide;
+    if (coverAt === index)
+        coverAt = target;
+    else if (coverAt === target)
+        coverAt = index;
+    renderSlides();
+}
+function addSlide(slide) {
+    if (slides.some((existing) => existing.itemId === slide.itemId)) {
+        say(slideResult, 'That image is already in the slideshow.');
+        return;
+    }
+    slides.push(slide);
+    say(slideResult, '');
+    renderSlides();
+    byId('slideshow-panel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+function clearSlides() {
+    slides.length = 0;
+    coverAt = 0;
+    editingSetId = null;
+    slideName.value = '';
+    say(slideResult, '');
+    renderSlides();
+}
+/** "Open" on a set loads it into the tray, so editing a slideshow is the same screen as building one. */
+async function openSet(id) {
+    const detail = await request(`/api/content/sets/${id}`);
+    slides.length = 0;
+    for (const item of detail.items) {
+        slides.push({ itemId: item.id, assetId: item.assetId, name: item.caption?.trim() || item.id.slice(0, 8) });
+    }
+    editingSetId = detail.id;
+    coverAt = Math.min(Math.max(0, detail.coverIndex), Math.max(0, slides.length - 1));
+    slideName.value = detail.name;
+    say(slideResult, detail.kind === 'slideshow'
+        ? 'Editing this slideshow. Saving overwrites its slides and cover.'
+        : 'This set is a pool. Saving turns it into a slideshow.');
+    renderSlides();
+}
+byId('slideshow-clear').addEventListener('click', clearSlides);
+byId('slideshow-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const name = slideName.value.trim();
+    if (!name) {
+        say(slideResult, 'Give the slideshow a name.');
+        return;
+    }
+    if (!slides.length) {
+        say(slideResult, 'Add at least one image from the library.');
+        return;
+    }
+    if (slides.length > 35) {
+        say(slideResult, 'TikTok takes at most 35 slides.');
+        return;
+    }
+    const itemIds = slides.map((slide) => slide.itemId);
+    say(slideResult, 'Saving…');
+    // Create or update the set, then write its membership: the order of `itemIds`
+    // is the order of the post, and the server stores it as `position`.
+    const saved = editingSetId
+        ? json(`/api/content/sets/${editingSetId}`, 'PATCH', { name, kind: 'slideshow', coverIndex: coverAt })
+            .then(() => ({ id: editingSetId }))
+        : json('/api/content/sets', 'POST', { name, kind: 'slideshow', coverIndex: coverAt });
+    void saved
+        .then((set) => json(`/api/content/sets/${set.id}/items`, 'PUT', { itemIds }))
+        .then(() => {
+        say(slideResult, `Saved ${slides.length} slide(s) as "${name}".`);
+        clearSlides();
+        refresh('sets');
+        void loadChoices();
+    })
+        .catch((error) => say(slideResult, error.message));
+});
+renderSlides();
 // ---- sets, templates, rules ------------------------------------------------
 byId('set-form').addEventListener('submit', (event) => {
     event.preventDefault();

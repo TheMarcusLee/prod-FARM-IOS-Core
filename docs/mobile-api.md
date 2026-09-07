@@ -874,6 +874,7 @@ max 200).
       "status": "planned",
       "deviceUdid": "00008030-001A2B3C0E88802E",
       "caption": "day 14 of building the farm",
+      "format": "slideshow",
       "assetId": "9f2c…",
       "thumbnailUrl": "/api/assets/9f2c…/thumbnail",
       "plannedFor": "2026-09-06T18:00:00.000Z",
@@ -892,6 +893,12 @@ state the drip queue stores — there is no `approved` column and no migration:
 | `active` | `approved` |
 | `cancelled` | `skipped` |
 | `completed`, or the plan is marked used | `posted` |
+
+`format` is `video`, `photo` or `slideshow` — what the phone will actually do
+with the media, read off the scheduled post itself (see
+[post formats](content-queue.md#post-formats)). It is `video` for anything
+planned before formats existed, which is what those posts were. A slideshow's
+`assetId` and `thumbnailUrl` are its lead item's; one row is one post.
 
 `cancelled` is checked **before** the used marker, so a plan that was skipped
 and later marked used still reports `skipped`. Only these four values are

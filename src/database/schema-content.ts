@@ -15,6 +15,15 @@ export const contentSchema = pgSchema('scheduler');
 export type ContentKind = 'video' | 'image';
 export type ContentStatus = 'ready' | 'processing' | 'failed' | 'archived';
 export type DripSource = 'set' | 'tag';
+/**
+ * A set is either a pool the planner draws single posts from, or one ordered
+ * slideshow posted whole. `content_set_items.position` already carries the
+ * order, so a slideshow needs no table of its own — only this flag and the
+ * slide it leads with.
+ */
+export type ContentSetKind = 'pool' | 'slideshow';
+/** The `format` a drip rule will post. `any` is every format the pool happens to hold. */
+export type DripFormat = 'any' | 'video' | 'photo' | 'slideshow';
 export type DripOrder = 'random' | 'fifo';
 export type PostDestination = 'draft' | 'publish';
 
@@ -49,6 +58,9 @@ export const contentSets = contentSchema.table('content_sets', {
     id: uuid('id').primaryKey().defaultRandom(),
     name: text('name').notNull(),
     notes: text('notes'),
+    kind: text('kind').$type<ContentSetKind>().notNull().default('pool'),
+    /** Index into the set's ordered items of the slide the post leads with. */
+    coverIndex: integer('cover_index').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
 }, (table) => [uniqueIndex('content_sets_name_idx').on(table.name)]);
 
@@ -81,6 +93,8 @@ export const dripRules = contentSchema.table('drip_rules', {
     minGapMinutes: integer('min_gap_minutes').notNull().default(90),
     destination: text('destination').$type<PostDestination>().notNull().default('draft'),
     source: text('source').$type<DripSource>().notNull().default('tag'),
+    /** Narrows the pool to one post format; `any` leaves it alone. */
+    format: text('format').$type<DripFormat>().notNull().default('any'),
     setId: uuid('set_id').references(() => contentSets.id, { onDelete: 'set null' }),
     tag: text('tag'),
     captionTemplateId: uuid('caption_template_id').references(() => captionTemplates.id, { onDelete: 'set null' }),
