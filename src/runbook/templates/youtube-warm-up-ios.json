@@ -1,0 +1,74 @@
+{
+  "id": "rb-starter-youtube-warm-up-ios",
+  "name": "YouTube warm-up (iPhone)",
+  "description": "Opens YouTube on an iPhone, taps Shorts, and flicks through the feed as many times as you ask for.",
+  "platform": "ios",
+  "appId": "com.google.ios.youtube",
+  "createdFor": {
+    "udid": "starter-template-iphone8",
+    "screen": {
+      "width": 375,
+      "height": 667,
+      "scale": 2
+    }
+  },
+  "template": "youtube-warm-up-ios",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.google.ios.youtube"
+    },
+    {
+      "type": "wait",
+      "ms": 7000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.29867,
+          "y": 0.97901
+        }
+      },
+      "seen": [
+        "Shorts",
+        "Home",
+        "Subscriptions",
+        "You",
+        "Search",
+        "Subscribe",
+        "Like",
+        "Comments"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 4000
+    },
+    {
+      "type": "swipe",
+      "from": {
+        "x": 0.49867,
+        "y": 0.82459
+      },
+      "to": {
+        "x": 0.49867,
+        "y": 0.22489
+      },
+      "durationMs": 450,
+      "repeat": "{{scrolls}}",
+      "repeatDelayMs": 5000
+    },
+    {
+      "type": "key",
+      "key": "home"
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "scrolls": "12"
+  }
+}

@@ -1,0 +1,92 @@
+{
+  "id": "rb-starter-youtube-warm-up",
+  "name": "YouTube warm-up",
+  "description": "Opens YouTube, moves to the Shorts feed, and flicks through it as many times as you ask for.",
+  "platform": "android",
+  "appId": "com.google.android.youtube",
+  "createdFor": {
+    "udid": "starter-template",
+    "screen": {
+      "width": 1080,
+      "height": 2400,
+      "scale": 1
+    }
+  },
+  "template": "youtube-warm-up",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.google.android.youtube"
+    },
+    {
+      "type": "wait",
+      "ms": 4000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.5,
+          "y": 0.965
+        },
+        "id": "shorts_tab",
+        "text": "Shorts"
+      },
+      "seen": [
+        "Shorts",
+        "Home",
+        "Subscriptions",
+        "You",
+        "Search",
+        "Subscribe",
+        "Like",
+        "Comments"
+      ],
+      "guess": true
+    },
+    {
+      "type": "waitForText",
+      "text": "Shorts",
+      "timeoutMs": 30000,
+      "seen": [
+        "Shorts",
+        "Home",
+        "Subscriptions",
+        "You",
+        "Search",
+        "Subscribe",
+        "Like",
+        "Comments"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 3000
+    },
+    {
+      "type": "swipe",
+      "from": {
+        "x": 0.5,
+        "y": 0.78
+      },
+      "to": {
+        "x": 0.5,
+        "y": 0.24
+      },
+      "durationMs": 380,
+      "repeat": "{{scrolls}}",
+      "repeatDelayMs": 5000
+    },
+    {
+      "type": "key",
+      "key": "home"
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "scrolls": "12"
+  }
+}

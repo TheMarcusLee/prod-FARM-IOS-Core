@@ -901,6 +901,8 @@ const STARTER_SLUGS = [
     'clear-notifications', 'switch-account', 'like-a-hashtag-feed', 'login-check', 'repost-from-feed',
     'instagram-warm-up', 'instagram-reel-post', 'instagram-carousel-post',
     'threads-warm-up', 'threads-text-post', 'threads-photo-post',
+    // YouTube Shorts.
+    'youtube-warm-up', 'shorts-post', 'shorts-post-draft',
 ] as const;
 
 test('every starter runbook validates and reads back as sentences', async () => {

@@ -17,6 +17,7 @@ import { createRunbookPlugin } from '../runbook-plugin.js';
 import { createTikTokPlugin } from '../tiktok-plugin.js';
 import { createInstagramPlugin } from '../instagram-plugin.js';
 import { createThreadsPlugin } from '../threads-plugin.js';
+import { createYouTubePlugin } from '../youtube-plugin.js';
 
 export interface WorkerRuntime { close(): Promise<void> }
 
@@ -149,6 +150,10 @@ async function main(): Promise<void> {
             ...(process.env.INSTAGRAM_PACKAGE ? { packageName: process.env.INSTAGRAM_PACKAGE } : {}),
         }),
         createThreadsPlugin({ bundleId: process.env.THREADS_BUNDLE_ID, packageName: process.env.THREADS_PACKAGE }),
+        createYouTubePlugin({
+            ...(process.env.YOUTUBE_BUNDLE_ID ? { bundleId: process.env.YOUTUBE_BUNDLE_ID } : {}),
+            ...(process.env.YOUTUBE_PACKAGE ? { packageName: process.env.YOUTUBE_PACKAGE } : {}),
+        }),
         createRunbookPlugin(),
         ...await loadPlugins(configuredPluginModules()),
     ]);

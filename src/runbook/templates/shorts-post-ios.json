@@ -1,0 +1,333 @@
+{
+  "id": "rb-starter-shorts-post-ios",
+  "name": "Shorts post (iPhone)",
+  "description": "Uploads the newest clip in the camera roll as a public Short from an iPhone, with a title you fill in each run.",
+  "platform": "ios",
+  "appId": "com.google.ios.youtube",
+  "createdFor": {
+    "udid": "starter-template-iphone8",
+    "screen": {
+      "width": 375,
+      "height": 667,
+      "scale": 2
+    }
+  },
+  "template": "shorts-post-ios",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.google.ios.youtube"
+    },
+    {
+      "type": "wait",
+      "ms": 7000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.49867,
+          "y": 0.95952
+        }
+      },
+      "seen": [
+        "Home",
+        "Shorts",
+        "Subscriptions",
+        "You",
+        "Create",
+        "Add"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 4000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.5,
+          "y": 0.62
+        }
+      },
+      "seen": [
+        "Create a Short",
+        "Upload a video",
+        "Go live",
+        "Create a post",
+        "Add"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 4000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.16533,
+          "y": 0.3
+        }
+      },
+      "seen": [
+        "Recents",
+        "Camera roll",
+        "Videos",
+        "Photos",
+        "Gallery",
+        "Next"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 2500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.88,
+          "y": 0.063
+        }
+      },
+      "seen": [
+        "Next",
+        "Trim",
+        "Sound",
+        "Text",
+        "Filters"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 4000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.88,
+          "y": 0.063
+        }
+      },
+      "seen": [
+        "Next",
+        "Trim",
+        "Sound",
+        "Text",
+        "Filters"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 4000
+    },
+    {
+      "type": "waitForText",
+      "text": "Add a title",
+      "timeoutMs": 60000,
+      "seen": [
+        "Add a title",
+        "Add description",
+        "Visibility",
+        "Public",
+        "Upload Short",
+        "Save draft",
+        "Is this video made for kids?",
+        "No, it's not made for kids"
+      ],
+      "guess": true
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.5,
+          "y": 0.225
+        }
+      },
+      "seen": [
+        "Add a title",
+        "Add description",
+        "Visibility",
+        "Public",
+        "Upload Short",
+        "Save draft",
+        "Is this video made for kids?",
+        "No, it's not made for kids"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    },
+    {
+      "type": "type",
+      "text": "{{title}}"
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.05867,
+          "y": 0.06297
+        }
+      },
+      "seen": [
+        "Add a title",
+        "Add description",
+        "Visibility",
+        "Public",
+        "Upload Short",
+        "Save draft",
+        "Is this video made for kids?",
+        "No, it's not made for kids"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.5,
+          "y": 0.45
+        }
+      },
+      "seen": [
+        "Add a title",
+        "Add description",
+        "Visibility",
+        "Public",
+        "Upload Short",
+        "Save draft",
+        "Is this video made for kids?",
+        "No, it's not made for kids"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 2000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.5,
+          "y": 0.54
+        },
+        "text": "Public"
+      },
+      "seen": [
+        "Public",
+        "Unlisted",
+        "Private",
+        "Everyone"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 2000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.5,
+          "y": 0.54
+        },
+        "text": "made for kids"
+      },
+      "seen": [
+        "Add a title",
+        "Add description",
+        "Visibility",
+        "Public",
+        "Upload Short",
+        "Save draft",
+        "Is this video made for kids?",
+        "No, it's not made for kids"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 2000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.5,
+          "y": 0.63
+        },
+        "text": "No, it's not made for kids"
+      },
+      "seen": [
+        "Yes, it's made for kids",
+        "No, it's not made for kids"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 2000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.8,
+          "y": 0.945
+        }
+      },
+      "seen": [
+        "Add a title",
+        "Add description",
+        "Visibility",
+        "Public",
+        "Upload Short",
+        "Save draft",
+        "Is this video made for kids?",
+        "No, it's not made for kids"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 20000
+    },
+    {
+      "type": "screenshot",
+      "label": "after-the-short"
+    },
+    {
+      "type": "key",
+      "key": "home"
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "title": "new one today"
+  }
+}

@@ -217,24 +217,24 @@ Plugins are **not sandboxed** — a plugin has the full filesystem, network,
 process, and device access of the service account. Only install reviewed,
 exactly‑pinned packages.
 
-## The built-in plugins as worked examples
+## The built-in plugins
 
-Three plugins ship registered by default, and each is a complete example of a
-different shape:
+Five plugins are registered without any configuration, in `defaultPlugins()`
+(`src/api/server.ts`) and the worker's `main()`:
 
-- **TikTok** (`com.git-agni.tiktok`) — `post` and `doomscroll`, an iOS routine
-  and an Android one behind each task, plus a device panel and its own HTTP
-  routes. See [android-tiktok.md](android-tiktok.md).
-- **Threads** (`com.backline.threads`) — `post` (text · photo · carousel ·
-  video) and `warmup`, built to the same shape with no routes or panel of its
-  own. It is the smallest complete two-platform plugin in the tree, and the one
-  to copy from. See [threads.md](threads.md).
-- **Runbooks** (`com.farm.runbook`) — `run`, replaying a recorded flow.
+| Plugin | id | Tasks |
+|---|---|---|
+| TikTok automation | `com.git-agni.tiktok` | `doomscroll@1`, `post@1` |
+| Instagram | `com.backline.instagram` | `post@1` (reel · photo · carousel), `warmup@1` — see [instagram.md](instagram.md) |
+| YouTube Shorts | `com.backline.youtube` | `post@1`, `warmup@1` — see [youtube.md](youtube.md) |
+| Threads | `com.backline.threads` | `post@1` (text · photo · carousel · video), `warmup@1` — see [threads.md](threads.md) |
+| Runbooks | `com.farm.runbook` | `run@1` |
 
-Every plugin's tasks are reported by `GET /api/plugins`, which is what the
-Control Center's **network picker** on *Schedule post* and *Warm up* is built
-from: a plugin that registers a `post` task (or a `warmup` / `doomscroll` one)
-appears in that dropdown without any dashboard change.
+The Control Center's **Schedule a post** and **Warm up** dialogs are built from
+this list rather than from a hard-coded one: `GET /api/plugins` reports every
+registered plugin with its tasks, and any plugin shipping a `post` task (or a
+warm-up task — TikTok calls its own `doomscroll`) gets a row in the network
+picker automatically. A third-party plugin needs no dashboard change to appear.
 
 ## Trying the reference plugin
 

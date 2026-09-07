@@ -197,6 +197,26 @@ them. See [threads.md](threads.md).
       pushed, on the adb driver, with a message naming the character.
 - [ ] Correct every `GUESS` you touched in `POST_SELECTORS` / `FEED_SELECTORS`
       and drop the marker.
+### 1.9 YouTube Shorts
+
+- [ ] Sign YouTube in and add every channel the farm will use to the in-app
+      account list; grant the gallery permission by hand (**+** → *Upload a
+      video*), the same way as for TikTok.
+- [ ] Run the YouTube **warm-up** for 2 minutes from the device page. Expect it
+      to fail somewhere on the Shorts feed — that is the point of the step.
+- [ ] *Confirm:* however the run ends, the phone is left on its **home screen**.
+- [ ] Upload a short vertical clip and run the YouTube **post** to a **draft**
+      first, never straight to Public.
+- [ ] *Confirm:* the tolerant steps behaved — the log should say which of the
+      description box, the visibility row and the "made for kids" question were
+      on screen and which were skipped.
+
+> **Confirm — the YouTube selector table.** Every row in
+> [youtube.md § The selector table](youtube.md#the-selector-table) was written
+> with no phone attached, and most carry a `GUESS` marker in the source too.
+> Read the real values with `uiautomator dump` exactly as above, correct
+> `POST_SELECTORS` in `src/youtube/android/post.ts` and `FEED_SELECTORS` in
+> `src/youtube/android/warmup.ts`, then update the table in `docs/youtube.md`.
 
 ---
 

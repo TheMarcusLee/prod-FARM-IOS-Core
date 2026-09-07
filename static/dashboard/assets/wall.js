@@ -588,32 +588,37 @@ function ask(title, fields, submitLabel) {
         dialog.showModal();
     });
 }
+/* ---- toolbar ---------------------------------------------------------- */
+/**
+ * Which networks the toolbar offers is not a list in this file — it is whatever plugins the farm
+ * has registered. `/api/plugins` reports every plugin with its tasks, so a plugin that ships a
+ * `post` task appears in Schedule a post, and one that ships a warm-up task (TikTok calls its own
+ * `doomscroll`) appears in Warm up, with no change here.
+ */
+const WARM_UP_TASKS = ['warmup', 'doomscroll'];
 let pluginCache;
-/** Warm-ups predate the name: TikTok's is still called `doomscroll`. */
-const WARM_UP_TASKS = ['warmup', 'warm-up', 'doomscroll'];
-async function networks(taskTypes) {
+async function registeredPlugins() {
     pluginCache ??= await request('/api/plugins');
-    const choices = [];
-    for (const plugin of pluginCache) {
-        // First matching task per plugin: a plugin offers one warm-up, not three.
-        const task = plugin.tasks.find(({ type }) => taskTypes.includes(type));
-        if (!task)
-            continue;
-        choices.push({
-            pluginId: plugin.id, taskType: task.type, taskVersion: task.version,
-            label: plugin.displayName.replace(/\s+automation$/i, ''),
-        });
-    }
-    return choices;
+    return pluginCache;
 }
-function networkField(choices) {
+/** The plugins offering a given kind of task, in the order the farm registered them. */
+async function networks(taskTypes) {
+    const found = [];
+    for (const plugin of await registeredPlugins()) {
+        const task = plugin.tasks.find(({ type }) => taskTypes.includes(type));
+        if (task)
+            found.push({ pluginId: plugin.id, label: plugin.displayName, task });
+    }
+    return found;
+}
+function networkField(available) {
     return {
         name: 'network', label: 'Network', type: 'select',
-        options: choices.map((choice, index) => [String(index), choice.label]),
+        options: available.map(({ pluginId, label }) => [pluginId, label]),
     };
 }
-function chosenNetwork(choices, value) {
-    return choices[Number(value ?? 0)] ?? choices[0];
+function chosenNetwork(available, value) {
+    return available.find(({ pluginId }) => pluginId === value) ?? available[0];
 }
 function udids() {
     return selected().map(({ udid }) => udid);
@@ -639,11 +644,11 @@ async function bulk(body) {
 }
 const ACTIONS = {
     async 'schedule-post'(chosen) {
-        const choices = await networks(['post']);
-        if (!choices.length)
-            return report('No registered plugin can post.');
+        const available = await networks(['post']);
+        if (!available.length)
+            return report('No installed plugin can post.');
         const answers = await ask('Schedule a post', [
-            networkField(choices),
+            ...(available.length > 1 ? [networkField(available)] : []),
             { name: 'media', label: 'Media', type: 'file', accept: 'video/*,image/*', multiple: true },
             {
                 // Left blank the farm reads the format off the files: one video is a video, one
@@ -655,12 +660,14 @@ const ACTIONS = {
             { name: 'account', label: 'Account', type: 'text' },
             { name: 'runAt', label: 'Start', type: 'datetime-local' },
             { name: 'destination', label: 'Finish as', type: 'select', options: [['draft', 'Save to drafts'], ['publish', 'Post publicly']] },
+            // YouTube Shorts need a title; the other networks have no field for one and ignore it.
+            { name: 'title', label: 'Title (YouTube)', type: 'text' },
             { name: 'caption', label: 'Caption', type: 'text' },
             { name: 'stagger', label: 'Stagger between phones, minutes', type: 'number', value: '5', min: '0' },
         ], 'Schedule on the selection');
         if (!answers)
             return;
-        const network = chosenNetwork(choices, answers.values.network);
+        const network = chosenNetwork(available, answers.values.network);
         const caption = answers.values.caption?.trim() ?? '';
         // Threads posts text with no media at all; every other network needs a file.
         if (!answers.files.length && !caption)
@@ -671,11 +678,12 @@ const ACTIONS = {
         await bulk({
             deviceUdids: chosen,
             task: {
-                pluginId: network.pluginId, taskType: network.taskType, taskVersion: network.taskVersion,
+                pluginId: network.pluginId, taskType: network.task.type, taskVersion: network.task.version,
                 payload: {
                     media: uploaded.map((asset) => ({ assetId: asset.id, name: asset.name, mimeType: asset.mimeType })),
                     destination: answers.values.destination, account: answers.values.account?.trim() ?? '',
                     ...(answers.values.format ? { format: answers.values.format } : {}),
+                    ...(answers.values.title ? { title: answers.values.title } : {}),
                     // One box, two names: plugins call the body `caption` or `text`, and each one
                     // keeps the key it knows and ignores the other.
                     ...(caption ? { caption, text: caption } : {}),
@@ -686,27 +694,28 @@ const ACTIONS = {
         });
     },
     async 'warm-up'(chosen) {
-        const choices = await networks(WARM_UP_TASKS);
-        if (!choices.length)
-            return report('No registered plugin can warm a phone up.');
+        const available = await networks(WARM_UP_TASKS);
+        if (!available.length)
+            return report('No installed plugin can warm a phone up.');
         const answers = await ask('Warm up', [
-            networkField(choices),
+            ...(available.length > 1 ? [networkField(available)] : []),
             { name: 'durationMinutes', label: 'Minutes', type: 'number', value: '10', min: '1', max: '180' },
-            { name: 'account', label: 'Account', type: 'text' },
             { name: 'personality', label: 'Personality', type: 'select', options: [['casual', 'Casual'], ['skimmer', 'Skimmer'], ['engaged', 'Engaged']] },
+            { name: 'account', label: 'Account', type: 'text' },
             { name: 'stagger', label: 'Stagger between phones, minutes', type: 'number', value: '0', min: '0' },
         ], 'Warm up the selection');
         if (!answers)
             return;
-        const network = chosenNetwork(choices, answers.values.network);
+        const network = chosenNetwork(available, answers.values.network);
         const account = answers.values.account?.trim() ?? '';
         await bulk({
             deviceUdids: chosen,
             task: {
-                pluginId: network.pluginId, taskType: network.taskType, taskVersion: network.taskVersion,
+                pluginId: network.pluginId, taskType: network.task.type, taskVersion: network.task.version,
                 payload: {
                     durationMinutes: Number(answers.values.durationMinutes ?? 10),
-                    // Each plugin reads the engagement flags it has and ignores the rest.
+                    // Every warm-up takes a duration and a personality; each plugin reads the
+                    // engagement switches it has and ignores the rest.
                     personality: answers.values.personality,
                     likeEnabled: true, saveEnabled: false, repostEnabled: false,
                     ...(account ? { account } : {}),

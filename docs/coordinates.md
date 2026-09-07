@@ -27,6 +27,15 @@ A profile is a full set of tap targets for one screen geometry, in
 > [instagram.md](instagram.md). Unlike the TikTok points, they are **not** in
 > `CALIBRATABLE_POINTS`, so there are no per‑device overrides for them yet and
 > no calibration dialog on the device page — they are profile‑level only.
+- `youtube` — the same for the built‑in YouTube Shorts plugin (create, upload,
+  the newest picker cell, Next, title/description, visibility, the audience
+  answer, Upload Short / Save draft, like/subscribe/comment, feed swipe).
+  **Every value in the shipped `iphone8` block is unverified** — it was reasoned
+  from the 375 × 667 layout, never measured on a phone, and it is the first thing
+  to check when an iPhone Shorts run misses. Correcting it means editing
+  `src/devices/coordinates.ts` and re-running `npm run check`; unlike the TikTok
+  points, the YouTube ones are not yet re‑pointable per device from the
+  dashboard (`CALIBRATABLE_POINTS` still covers only the TikTok block).
 
 ```ts
 export const DEVICE_COORDINATES = {

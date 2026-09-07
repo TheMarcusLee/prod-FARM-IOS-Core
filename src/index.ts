@@ -11,6 +11,7 @@ export * from './tiktok-plugin.js';
 export * from './instagram-plugin.js';
 export * from './instagram/post-manifest.js';
 export * from './threads-plugin.js';
+export * from './youtube-plugin.js';
 export * from './runbook-plugin.js';
 export * from './runbook/model.js';
 export * from './runbook/replay.js';
