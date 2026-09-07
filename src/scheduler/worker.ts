@@ -15,6 +15,7 @@ import { createQueue, ensureDeviceQueue, type ExecutionJob } from './queue.js';
 import { SchedulerRepository, STUCK_EXECUTION_ERROR } from './repository.js';
 import { createRunbookPlugin } from '../runbook-plugin.js';
 import { createTikTokPlugin } from '../tiktok-plugin.js';
+import { createThreadsPlugin } from '../threads-plugin.js';
 
 export interface WorkerRuntime { close(): Promise<void> }
 
@@ -142,6 +143,7 @@ export async function startWorker(plugins: PluginRegistry): Promise<WorkerRuntim
 async function main(): Promise<void> {
     const plugins = new PluginRegistry([
         createTikTokPlugin({ bundleId: process.env.TIKTOK_BUNDLE_ID }),
+        createThreadsPlugin({ bundleId: process.env.THREADS_BUNDLE_ID, packageName: process.env.THREADS_PACKAGE }),
         createRunbookPlugin(),
         ...await loadPlugins(configuredPluginModules()),
     ]);

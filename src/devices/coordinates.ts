@@ -47,6 +47,45 @@ export interface DeviceCoordinates {
             durationMs: number;
         };
     };
+    /**
+     * The Threads (Meta) plugin's iOS tap targets. Every value below is a GUESS measured from
+     * nothing — see docs/coordinates.md. The Android Threads routines never read these; they use
+     * the accessibility tree.
+     */
+    threads: ThreadsCoordinates;
+}
+
+/** iOS tap targets for com.burbn.barcelona, in points. */
+export interface ThreadsCoordinates {
+    homeTab: Point;
+    profileTab: Point;
+    /** The handle / chevron in the profile header that opens the account list. */
+    accountSwitcher: Point;
+    /** The compose pencil in the bottom bar. */
+    compose: Point;
+    /** The paperclip / image button inside the composer. */
+    attach: Point;
+    /** The text box inside the composer. */
+    composerField: Point;
+    /** The first (newest) cell of the photo picker, and the picker's confirm control. */
+    pickerFirstCell: Point;
+    pickerColumnStep: number;
+    pickerRowStep: number;
+    pickerAdd: Point;
+    /** Dismisses the keyboard without leaving the composer. */
+    keyboardDone: Point;
+    post: Point;
+    draft: Point;
+    /** Feed engagement, in the row under a thread. */
+    like: Point;
+    repost: Point;
+    follow: Point;
+    swipe: {
+        x: number;
+        startY: number;
+        endY: number;
+        durationMs: number;
+    };
 }
 
 export const DEFAULT_COORDINATE_PROFILE = 'iphone8';
@@ -88,6 +127,26 @@ export const DEVICE_COORDINATES = {
             finish: { x: 277, y: 630 },
             like: { x: 345, y: 313 },
             save: { x: 345, y: 444 },
+            swipe: { x: 187, startY: 550, endY: 150, durationMs: 450 },
+        },
+        // GUESS, every value: Threads has never been opened on hardware from this repository.
+        threads: {
+            homeTab: { x: 38, y: 653 },
+            profileTab: { x: 338, y: 653 },
+            accountSwitcher: { x: 187, y: 120 },
+            compose: { x: 262, y: 653 },
+            attach: { x: 40, y: 300 },
+            composerField: { x: 187, y: 180 },
+            pickerFirstCell: { x: 62, y: 420 },
+            pickerColumnStep: 125,
+            pickerRowStep: 125,
+            pickerAdd: { x: 320, y: 620 },
+            keyboardDone: { x: 340, y: 120 },
+            post: { x: 330, y: 630 },
+            draft: { x: 40, y: 60 },
+            like: { x: 60, y: 470 },
+            repost: { x: 140, y: 470 },
+            follow: { x: 330, y: 200 },
             swipe: { x: 187, startY: 550, endY: 150, durationMs: 450 },
         },
     },

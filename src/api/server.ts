@@ -7,6 +7,7 @@ import { createSchedulerRuntime } from '../scheduler/runtime.js';
 import { assertSafeBind } from '../security.js';
 import { createRunbookPlugin } from '../runbook-plugin.js';
 import { createTikTokPlugin } from '../tiktok-plugin.js';
+import { createThreadsPlugin } from '../threads-plugin.js';
 import { defaultDashboardTheme } from '../dashboard-theme.js';
 import { DeviceRegistrationService } from '../devices/registration.js';
 import { createApp, type DashboardTheme } from './app.js';
@@ -20,7 +21,9 @@ export interface StartServerOptions {
 }
 
 export async function defaultPlugins(): Promise<PhoneFarmPlugin[]> {
-    return [createTikTokPlugin({ bundleId: process.env.TIKTOK_BUNDLE_ID }), createRunbookPlugin(),
+    return [createTikTokPlugin({ bundleId: process.env.TIKTOK_BUNDLE_ID }),
+        createThreadsPlugin({ bundleId: process.env.THREADS_BUNDLE_ID, packageName: process.env.THREADS_PACKAGE }),
+        createRunbookPlugin(),
         ...await loadPlugins(configuredPluginModules())];
 }
 

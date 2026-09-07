@@ -1,0 +1,245 @@
+{
+  "id": "rb-starter-threads-photo-post-ios",
+  "name": "Threads photo post (iPhone)",
+  "description": "Posts the newest picture in the phone gallery as a thread, with wording you fill in each run.",
+  "platform": "ios",
+  "appId": "com.burbn.barcelona",
+  "createdFor": {
+    "udid": "starter-template-iphone8",
+    "screen": {
+      "width": 375,
+      "height": 667,
+      "scale": 2
+    }
+  },
+  "template": "threads-photo-post-ios",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.burbn.barcelona"
+    },
+    {
+      "type": "wait",
+      "ms": 6000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.5,
+          "y": 0.62
+        },
+        "text": "Not now"
+      },
+      "seen": [
+        "Not now",
+        "Allow",
+        "Continue",
+        "Skip"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.699,
+          "y": 0.979
+        },
+        "text": "Create"
+      },
+      "seen": [
+        "For you",
+        "Following",
+        "Home",
+        "Search",
+        "Activity",
+        "Profile",
+        "Create",
+        "Compose"
+      ],
+      "guess": true
+    },
+    {
+      "type": "waitForText",
+      "text": "Post",
+      "timeoutMs": 30000,
+      "seen": [
+        "What's new?",
+        "Start a thread",
+        "Post",
+        "New thread",
+        "Cancel",
+        "Add to thread"
+      ],
+      "guess": true
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.5,
+          "y": 0.27
+        },
+        "text": "What's new?"
+      },
+      "seen": [
+        "What's new?",
+        "Start a thread",
+        "Post",
+        "New thread",
+        "Cancel",
+        "Add to thread"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 1200
+    },
+    {
+      "type": "type",
+      "text": "{{text}}"
+    },
+    {
+      "type": "wait",
+      "ms": 1000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.107,
+          "y": 0.45
+        },
+        "text": "Add photos"
+      },
+      "seen": [
+        "What's new?",
+        "Start a thread",
+        "Post",
+        "New thread",
+        "Cancel",
+        "Add to thread",
+        "Add photos",
+        "Attach media"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 2500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.5,
+          "y": 0.62
+        },
+        "text": "Allow"
+      },
+      "seen": [
+        "Allow",
+        "Allow all",
+        "Select photos",
+        "Not now"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.17,
+          "y": 0.3
+        }
+      },
+      "seen": [
+        "Recents",
+        "All photos",
+        "Camera roll",
+        "Add",
+        "Done",
+        "Next",
+        "Gallery"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 1200
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.86,
+          "y": 0.94
+        },
+        "text": "Add"
+      },
+      "seen": [
+        "Recents",
+        "All photos",
+        "Camera roll",
+        "Add",
+        "Done",
+        "Next",
+        "Gallery"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 2000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.88,
+          "y": 0.945
+        },
+        "text": "Post"
+      },
+      "seen": [
+        "What's new?",
+        "Start a thread",
+        "Post",
+        "New thread",
+        "Cancel",
+        "Add to thread"
+      ],
+      "guess": true
+    },
+    {
+      "type": "waitForText",
+      "text": "Posted",
+      "timeoutMs": 180000,
+      "seen": [
+        "Posted",
+        "Your thread was posted",
+        "Posting"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 5000
+    },
+    {
+      "type": "key",
+      "key": "home"
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "text": "one from today"
+  }
+}

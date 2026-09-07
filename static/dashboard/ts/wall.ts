@@ -620,7 +620,57 @@ function ask(title: string, fields: Field[], submitLabel: string): Promise<Answe
 
 /* ---- toolbar ---------------------------------------------------------- */
 
-const TIKTOK = 'com.git-agni.tiktok';
+/**
+ * The network picker.
+ *
+ * Which app a bulk post or warm-up goes to is not a constant: every plugin that registers a `post`
+ * (or a warm-up) task is one more network the wall can drive. The list is read from
+ * `/api/plugins`, which already reports every registered plugin's task types, so a plugin added to
+ * the farm shows up here without a dashboard change.
+ */
+interface PluginSummary {
+    id: string;
+    displayName: string;
+    tasks: Array<{ type: string; version: number; displayName: string }>;
+}
+
+interface NetworkChoice {
+    pluginId: string;
+    taskType: string;
+    taskVersion: number;
+    label: string;
+}
+
+let pluginCache: PluginSummary[] | undefined;
+
+/** Warm-ups predate the name: TikTok's is still called `doomscroll`. */
+const WARM_UP_TASKS = ['warmup', 'warm-up', 'doomscroll'];
+
+async function networks(taskTypes: readonly string[]): Promise<NetworkChoice[]> {
+    pluginCache ??= await request<PluginSummary[]>('/api/plugins');
+    const choices: NetworkChoice[] = [];
+    for (const plugin of pluginCache) {
+        // First matching task per plugin: a plugin offers one warm-up, not three.
+        const task = plugin.tasks.find(({ type }) => taskTypes.includes(type));
+        if (!task) continue;
+        choices.push({
+            pluginId: plugin.id, taskType: task.type, taskVersion: task.version,
+            label: plugin.displayName.replace(/\s+automation$/i, ''),
+        });
+    }
+    return choices;
+}
+
+function networkField(choices: NetworkChoice[]): Field {
+    return {
+        name: 'network', label: 'Network', type: 'select',
+        options: choices.map((choice, index) => [String(index), choice.label] as [string, string]),
+    };
+}
+
+function chosenNetwork(choices: NetworkChoice[], value: string | undefined): NetworkChoice {
+    return choices[Number(value ?? 0)] ?? choices[0]!;
+}
 
 function udids(): string[] {
     return selected().map(({ udid }) => udid);
@@ -647,26 +697,34 @@ async function bulk(body: unknown): Promise<void> {
 
 const ACTIONS: Record<string, (chosen: string[]) => Promise<void>> = {
     async 'schedule-post'(chosen) {
+        const choices = await networks(['post']);
+        if (!choices.length) return report('No registered plugin can post.');
         const answers = await ask('Schedule a post', [
+            networkField(choices),
             { name: 'media', label: 'Media', type: 'file', accept: 'video/*,image/*', multiple: true },
+            { name: 'account', label: 'Account', type: 'text' },
             { name: 'runAt', label: 'Start', type: 'datetime-local' },
             { name: 'destination', label: 'Finish as', type: 'select', options: [['draft', 'Save to drafts'], ['publish', 'Post publicly']] },
             { name: 'caption', label: 'Caption', type: 'text' },
             { name: 'stagger', label: 'Stagger between phones, minutes', type: 'number', value: '5', min: '0' },
         ], 'Schedule on the selection');
         if (!answers) return;
-        if (!answers.files.length) return report('Choose at least one clip.');
+        const network = chosenNetwork(choices, answers.values.network);
+        const caption = answers.values.caption?.trim() ?? '';
+        // Threads posts text with no media at all; every other network needs a file.
+        if (!answers.files.length && !caption) return report('Choose at least one clip, or write something to post.');
         if (!answers.values.runAt) return report('Choose when the post should go out.');
-        report('Uploading media');
-        const uploaded = await uploadFiles(answers.files);
+        const uploaded = answers.files.length ? (report('Uploading media'), await uploadFiles(answers.files)) : [];
         await bulk({
             deviceUdids: chosen,
             task: {
-                pluginId: TIKTOK, taskType: 'post', taskVersion: 1,
+                pluginId: network.pluginId, taskType: network.taskType, taskVersion: network.taskVersion,
                 payload: {
                     media: uploaded.map((asset) => ({ assetId: asset.id, name: asset.name, mimeType: asset.mimeType })),
-                    destination: answers.values.destination, account: '',
-                    ...(answers.values.caption ? { caption: answers.values.caption } : {}),
+                    destination: answers.values.destination, account: answers.values.account?.trim() ?? '',
+                    // One box, two names: plugins call the body `caption` or `text`, and each one
+                    // keeps the key it knows and ignores the other.
+                    ...(caption ? { caption, text: caption } : {}),
                 },
             },
             timing: { kind: 'once', runAt: new Date(answers.values.runAt!).toISOString() },
@@ -674,19 +732,28 @@ const ACTIONS: Record<string, (chosen: string[]) => Promise<void>> = {
         });
     },
     async 'warm-up'(chosen) {
+        const choices = await networks(WARM_UP_TASKS);
+        if (!choices.length) return report('No registered plugin can warm a phone up.');
         const answers = await ask('Warm up', [
+            networkField(choices),
             { name: 'durationMinutes', label: 'Minutes', type: 'number', value: '10', min: '1', max: '180' },
+            { name: 'account', label: 'Account', type: 'text' },
             { name: 'personality', label: 'Personality', type: 'select', options: [['casual', 'Casual'], ['skimmer', 'Skimmer'], ['engaged', 'Engaged']] },
             { name: 'stagger', label: 'Stagger between phones, minutes', type: 'number', value: '0', min: '0' },
         ], 'Warm up the selection');
         if (!answers) return;
+        const network = chosenNetwork(choices, answers.values.network);
+        const account = answers.values.account?.trim() ?? '';
         await bulk({
             deviceUdids: chosen,
             task: {
-                pluginId: TIKTOK, taskType: 'doomscroll', taskVersion: 1,
+                pluginId: network.pluginId, taskType: network.taskType, taskVersion: network.taskVersion,
                 payload: {
                     durationMinutes: Number(answers.values.durationMinutes ?? 10),
-                    personality: answers.values.personality, likeEnabled: true, saveEnabled: false,
+                    // Each plugin reads the engagement flags it has and ignores the rest.
+                    personality: answers.values.personality,
+                    likeEnabled: true, saveEnabled: false, repostEnabled: false,
+                    ...(account ? { account } : {}),
                 },
             },
             timing: { kind: 'now' },

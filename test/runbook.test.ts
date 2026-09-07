@@ -895,15 +895,16 @@ test('a failed runbook execution offers the operator somewhere to fix it', async
 
 /* ---- the starter library ----------------------------------------------- */
 
-/** The ten shipped flows. Each one exists twice: `<slug>` for Android, `<slug>-ios` for iPhone. */
+/** The shipped flows. Each one exists twice: `<slug>` for Android, `<slug>-ios` for iPhone. */
 const STARTER_SLUGS = [
     'warm-up-scroll', 'post-from-recents', 'save-to-drafts', 'follow-back-sweep', 'search-a-niche',
     'clear-notifications', 'switch-account', 'like-a-hashtag-feed', 'login-check', 'repost-from-feed',
+    'threads-warm-up', 'threads-text-post', 'threads-photo-post',
 ] as const;
 
 test('every starter runbook validates and reads back as sentences', async () => {
     const starters = await loadStarterRunbooks();
-    assert.equal(starters.length, STARTER_SLUGS.length * 2, `expected ten per platform, got ${starters.length}`);
+    assert.equal(starters.length, STARTER_SLUGS.length * 2, `expected one per platform each, got ${starters.length}`);
 
     // One template name per file: exactly the ten flows, on Android and on the iPhone.
     const names = starters.map((starter) => starter.template!);
