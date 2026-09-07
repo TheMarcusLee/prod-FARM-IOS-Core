@@ -50,6 +50,17 @@ const STOPWORDS = new Set([
     'best', 'simple', 'easy', 'free', 'great', 'good', 'better', 'lets', 'let', 'get', 'gets',
     'built', 'build', 'building', 'company', 'startup', 'business', 'turn', 'turns', 'turning',
     'want', 'wants', 'need', 'needs', 'one', 'two', 'place', 'way', 'ways', 'want', 'anything',
+    // The words every product description has, whatever the product is: pricing, plans and
+    // platforms say nothing about who would watch the content.
+    'plan', 'plans', 'planning', 'tier', 'tiers', 'pro', 'premium', 'subscription', 'subscriptions',
+    'version', 'versions', 'feature', 'features', 'account', 'accounts', 'mobile', 'ios', 'android',
+    'web', 'online', 'desktop', 'dashboard', 'cloud', 'sync', 'data', 'content', 'video', 'videos',
+    'photo', 'photos', 'social', 'media', 'share', 'shares', 'sharing', 'create', 'creates', 'creating',
+    'track', 'tracks', 'tracking', 'manage', 'manages', 'managing', 'save', 'saves', 'saving', 'time',
+    'day', 'days', 'week', 'weeks', 'month', 'months', 'year', 'years', 'first', 'last', 'next',
+    'toward', 'towards', 'connect', 'connects', 'connecting', 'suggestion', 'suggestions', 'shared',
+    'split', 'splits', 'log', 'logs', 'tracker', 'trackers', 'timer', 'timers', 'calculator', 'calculators',
+    'marketplace', 'vetted', 'neighbourhood', 'neighborhood', 'owner', 'owners', 'check', 'checks',
 ]);
 
 /**
@@ -177,6 +188,14 @@ function scorePreset(preset: PersonaPreset, text: ReadonlySet<string>): RankedPr
     const reason = ordered
         .filter((term) => term.includes(' ') || !phrases.some((phrase) => phrase.split(' ').includes(term)))
         .slice(0, 6);
+    // One word in common is a coincidence: "plan" is in a wedding and in a study plan, and "home"
+    // is in a home gym and a home baker. A preset is a fit when its whole name is in the text, when
+    // one of its real interests is ("sourdough" is baking, whatever else the text says), or when
+    // two different terms met.
+    const wholeLabel = matched.has(preset.label.toLowerCase()) || (words(preset.label).length === 1 && matched.size > 0
+        && matched.has(words(preset.label)[0]!));
+    const interestHit = preset.persona.interests.some((interest) => matched.has(interest.replace(/^#/, '')));
+    if (!wholeLabel && !interestHit && matched.size < 2) score = 0;
     return {
         id: preset.id, label: preset.label, category: preset.category,
         score: Math.round(score * 10) / 10, matched: reason,
@@ -220,12 +239,15 @@ export function extraInterests(text: string, options: ExtraInterestOptions = {})
     if (!limit) return [];
 
     const covered = new Set<string>();
+    const coveredPairs = new Set<string>();
     for (const id of options.presets ?? []) {
         const preset = PERSONA_PRESETS.find((entry) => entry.id === id);
         if (!preset) continue;
         for (const source of [preset.label, preset.description, preset.category, preset.persona.niche,
             ...preset.persona.interests, ...preset.persona.avoid]) {
-            for (const token of tokenise(source.replace(/^#/, ''))) covered.add(token);
+            const tokens = tokenise(source.replace(/^#/, ''));
+            for (const token of tokens) covered.add(token);
+            for (let index = 0; index + 1 < tokens.length; index += 1) coveredPairs.add(`${tokens[index]} ${tokens[index + 1]}`);
         }
     }
 
@@ -239,7 +261,14 @@ export function extraInterests(text: string, options: ExtraInterestOptions = {})
 
     const counts = new Map<string, number>();
     const bump = (term: string): void => { counts.set(term, (counts.get(term) ?? 0) + 1); };
+    // A bigram the presets already cover ("note taking") covers its own words: "note" and "taking"
+    // on their own are not interests, they are the halves of one the account already has.
+    const pairCovered = (index: number): boolean => {
+        const pair = raw[index] && raw[index + 1] ? `${stem(raw[index]!)} ${stem(raw[index + 1]!)}` : '';
+        return Boolean(pair) && coveredPairs.has(pair);
+    };
     for (let index = 0; index < raw.length; index += 1) {
+        if (pairCovered(index) || pairCovered(index - 1)) continue;
         if (!usable(index)) continue;
         if (usable(index + 1)) bump(`${raw[index]} ${raw[index + 1]}`);
         bump(raw[index]!);
