@@ -2,7 +2,8 @@
  * The Control Center: the wall of live phone screens, its filters, its selection and its
  * inspector. Server-rendered markup, no framework. See docs/design/backline.md.
  */
-import { FRAME_RATES, FramePump, TILE_SIZES, TILE_SIZE_LABELS, all, devicePoint, errorMessage, pick, rateLabel, remember, remembered, remoteAction, request, screenInfo, send, } from './shell.js';
+import { FramePump, TILE_SIZES, TILE_SIZE_LABELS, all, devicePoint, errorMessage, pick, remember, remembered, remoteAction, request, screenInfo, send, } from './shell.js';
+import { LivePlayer, MAX_SOCKET_FAILURES, STILLS_FPS, VIEW_MODE_LABELS, chooseMode, hasWebCodecs, liveVideoAvailable, orientedScreen, viewMode, } from './live.js';
 const wall = pick('#wall');
 const filters = pick('#wall-filters');
 const selectionLabel = pick('#wall-selection');
@@ -18,6 +19,10 @@ const tiles = all('[data-tile]').map((element, index, list) => {
         tags: (element.dataset.tags ?? '').split(',').filter(Boolean),
         checkbox: pick('[data-select]', element),
         pump: image ? new FramePump(image, udid, platform, index / Math.max(list.length, 1)) : null,
+        image,
+        canvas: pick('[data-canvas]', element),
+        player: null,
+        failures: 0,
         visible: false,
     };
 });
@@ -42,6 +47,7 @@ function applyFilters() {
         tile.element.hidden = !shown;
         if (!shown) {
             tile.pump?.stop();
+            tile.player?.stop();
             if (tile.checkbox)
                 tile.checkbox.checked = false;
         }
@@ -53,7 +59,7 @@ function applyFilters() {
         chip.setAttribute('aria-pressed', String((chip.dataset.group ?? '') === group));
     }
     countSelection();
-    refreshPumps();
+    refreshFrames();
 }
 filters?.addEventListener('click', (event) => {
     const linkButton = event.target?.closest('[data-link-filter]');
@@ -76,8 +82,8 @@ filters?.addEventListener('click', (event) => {
 });
 const sizeSlider = pick('#wall-size');
 const sizeValue = pick('#wall-size-value');
-const rateSlider = pick('#wall-rate');
-const rateValue = pick('#wall-rate-value');
+const qualitySlider = pick('#wall-quality');
+const qualityValue = pick('#wall-quality-value');
 function applySize() {
     const notch = Number(sizeSlider?.value ?? 1);
     const size = TILE_SIZES[notch] ?? TILE_SIZES[1];
@@ -85,33 +91,84 @@ function applySize() {
     if (sizeValue)
         sizeValue.textContent = TILE_SIZE_LABELS[notch] ?? 'M';
 }
-function currentRate() {
-    return FRAME_RATES[Number(rateSlider?.value ?? 2)] ?? 1;
+/** Off, stills or live — what the operator asked the wall for. */
+function preference() {
+    return viewMode(Number(qualitySlider?.value ?? 2));
 }
-function applyRate() {
-    const rate = currentRate();
-    if (rateValue)
-        rateValue.textContent = rateLabel(rate);
+function applyQuality() {
+    const wanted = preference();
+    if (qualityValue)
+        qualityValue.textContent = VIEW_MODE_LABELS[wanted];
     for (const tile of tiles)
-        tile.pump?.setRate(rate);
-    inspectorPump?.setRate(Math.max(rate, 4));
+        tile.pump?.setRate(STILLS_FPS);
+    refreshFrames();
+    bindInspectorFrames();
 }
 sizeSlider?.addEventListener('input', () => { applySize(); remember('tileSize', sizeSlider.value); });
-rateSlider?.addEventListener('input', () => { applyRate(); remember('tileRate', rateSlider.value); });
+qualitySlider?.addEventListener('input', () => { applyQuality(); remember('tileQuality', qualitySlider.value); });
 /* ---- live frames ------------------------------------------------------ */
-function refreshPumps() {
+/** Whether this farm has scrcpy at all; until the answer is in, the wall shows stills. */
+let liveServer = false;
+void liveVideoAvailable().then((available) => {
+    liveServer = available;
+    refreshFrames();
+    bindInspectorFrames();
+});
+function modeFor(platform, failures) {
+    return chooseMode({
+        preference: preference(), webCodecs: hasWebCodecs(), serverAvailable: liveServer,
+        socketFailures: failures, platform,
+    });
+}
+/** The still image is what the tile shows until a picture has actually been decoded. */
+function showStills(tile) {
+    if (tile.canvas)
+        tile.canvas.hidden = true;
+    if (tile.image)
+        tile.image.hidden = false;
+}
+function tilePlayer(tile) {
+    if (!tile.canvas)
+        return null;
+    tile.player ??= new LivePlayer({
+        canvas: tile.canvas, udid: tile.udid, profile: 'wall',
+        onFallback() {
+            tile.failures = MAX_SOCKET_FAILURES;
+            showStills(tile);
+            refreshFrames();
+        },
+        onPainted() {
+            if (tile.canvas)
+                tile.canvas.hidden = false;
+            if (tile.image)
+                tile.image.hidden = true;
+        },
+    });
+    return tile.player;
+}
+function refreshFrames() {
     const hidden = document.hidden;
-    if (hidden)
-        inspectorPump?.stop();
-    else
-        inspectorPump?.start();
     for (const tile of tiles) {
-        if (!tile.pump)
-            continue;
-        if (hidden || tile.element.hidden || !tile.visible)
-            tile.pump.stop();
-        else
-            tile.pump.start();
+        const off = hidden || tile.element.hidden || !tile.visible;
+        const wanted = off ? 'off' : modeFor(tile.platform, tile.failures);
+        if (wanted === 'live') {
+            const player = tilePlayer(tile);
+            if (player) {
+                tile.pump?.stop();
+                player.start();
+                continue;
+            }
+        }
+        tile.player?.stop();
+        // "Off" holds whatever the tile is showing, live picture included; only stills needs the
+        // image back in front of the canvas.
+        if (wanted === 'stills') {
+            showStills(tile);
+            tile.pump?.start();
+        }
+        else {
+            tile.pump?.stop();
+        }
     }
 }
 const observer = new IntersectionObserver((entries) => {
@@ -120,11 +177,14 @@ const observer = new IntersectionObserver((entries) => {
         if (tile)
             tile.visible = entry.isIntersecting;
     }
-    refreshPumps();
+    refreshFrames();
 }, { rootMargin: '160px' });
 for (const tile of tiles)
     observer.observe(tile.element);
-document.addEventListener('visibilitychange', refreshPumps);
+document.addEventListener('visibilitychange', () => {
+    refreshFrames();
+    bindInspectorFrames();
+});
 /* ---- selection -------------------------------------------------------- */
 function selected() {
     return tiles.filter((tile) => !tile.element.hidden && tile.checkbox?.checked);
@@ -148,6 +208,9 @@ for (const tile of tiles) {
 }
 /* ---- the inspector ---------------------------------------------------- */
 let inspectorPump = null;
+let inspectorPlayer = null;
+let inspectorFailures = 0;
+let inspectorViewer = null;
 let inspectorScreen;
 let inspectorUdid = pick('#inspector')?.dataset.udid ?? '';
 function markSelected(udid) {
@@ -178,20 +241,69 @@ async function select(udid) {
         holder.textContent = errorMessage(error);
     }
 }
+/**
+ * The inspector is the one place that is worth a real stream: it is large, it is the thing being
+ * driven, and there is only ever one of it. Live when the farm can, four stills a second when not.
+ */
+function bindInspectorFrames() {
+    const viewer = inspectorViewer;
+    if (!viewer || viewer.dataset.live !== '1')
+        return;
+    const udid = viewer.dataset.udid ?? '';
+    const platform = viewer.dataset.platform ?? 'android';
+    const image = pick('[data-frame]', viewer);
+    const canvas = pick('[data-canvas]', viewer);
+    const wanted = document.hidden ? 'off' : modeFor(platform, inspectorFailures);
+    if (wanted === 'live' && canvas) {
+        inspectorPump?.stop();
+        inspectorPlayer ??= new LivePlayer({
+            canvas, udid, profile: 'viewer',
+            onFallback() {
+                inspectorFailures = MAX_SOCKET_FAILURES;
+                inspectorPlayer = null;
+                canvas.hidden = true;
+                if (image)
+                    image.hidden = false;
+                bindInspectorFrames();
+            },
+            onPainted() {
+                canvas.hidden = false;
+                if (image)
+                    image.hidden = true;
+            },
+        });
+        inspectorPlayer.start();
+        return;
+    }
+    inspectorPlayer?.stop();
+    if (wanted === 'off') {
+        inspectorPump?.stop();
+        return;
+    }
+    if (canvas)
+        canvas.hidden = true;
+    if (image)
+        image.hidden = false;
+    if (!image)
+        return;
+    inspectorPump ??= new FramePump(image, udid, platform);
+    inspectorPump.setRate(4);
+    inspectorPump.start();
+}
 function bindInspector() {
     inspectorPump?.stop();
     inspectorPump = null;
+    inspectorPlayer?.stop();
+    inspectorPlayer = null;
+    inspectorFailures = 0;
     inspectorScreen = undefined;
     const viewer = pick('[data-viewer]');
+    inspectorViewer = viewer;
     if (!viewer)
         return;
     const udid = viewer.dataset.udid ?? '';
-    const image = pick('[data-frame]', viewer);
-    if (image && viewer.dataset.live === '1') {
-        inspectorPump = new FramePump(image, udid, viewer.dataset.platform ?? 'android');
-        inspectorPump.setRate(Math.max(currentRate(), 4));
-        if (!document.hidden)
-            inspectorPump.start();
+    if (viewer.dataset.live === '1') {
+        bindInspectorFrames();
         void screenInfo(udid).then((info) => { inspectorScreen = info; });
     }
     bindViewerInput(viewer, udid);
@@ -292,16 +404,21 @@ document.addEventListener('click', (event) => {
 /** Click to tap, drag to swipe — mapped into the phone's own coordinate space. */
 export function bindViewerInput(viewer, udid) {
     let start;
+    // A live stream reports the size it is really encoding, which is the one that says which way
+    // up the phone is; the cached screen size only says how big it is.
+    const mapped = () => (inspectorScreen ? orientedScreen(inspectorScreen, inspectorPlayer?.size()) : undefined);
     viewer.addEventListener('pointerdown', (event) => {
-        if (!inspectorScreen)
+        const screen = mapped();
+        if (!screen)
             return;
-        const point = devicePoint(viewer, inspectorScreen, event);
+        const point = devicePoint(viewer, screen, event);
         start = { ...point, at: Date.now() };
     });
     viewer.addEventListener('pointerup', (event) => {
-        if (!inspectorScreen || !start)
+        const screen = mapped();
+        if (!screen || !start)
             return;
-        const end = devicePoint(viewer, inspectorScreen, event);
+        const end = devicePoint(viewer, screen, event);
         const moved = Math.hypot(end.x - start.x, end.y - start.y);
         const action = moved < 12
             ? { type: 'tap', x: end.x, y: end.y }
@@ -633,18 +750,18 @@ document.addEventListener('click', (event) => {
 const savedSize = remembered('tileSize');
 if (savedSize && sizeSlider)
     sizeSlider.value = savedSize;
-const savedRate = remembered('tileRate');
-if (savedRate && rateSlider)
-    rateSlider.value = savedRate;
+const savedQuality = remembered('tileQuality');
+if (savedQuality && qualitySlider)
+    qualitySlider.value = savedQuality;
 for (const udid of (remembered('wall.selection') ?? '').split(',').filter(Boolean)) {
     const tile = byUdid.get(udid);
     if (tile?.checkbox)
         tile.checkbox.checked = true;
 }
 applySize();
-applyRate();
 applyFilters();
 bindInspector();
+applyQuality();
 const focus = remembered('wall.focus');
 if (focus && byUdid.has(focus))
     void select(focus);
