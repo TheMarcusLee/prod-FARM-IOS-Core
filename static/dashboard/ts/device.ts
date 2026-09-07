@@ -1,4 +1,7 @@
 import { FramePump } from './shell.js';
+import {
+    LivePlayer, MAX_SOCKET_FAILURES, chooseMode, hasWebCodecs, liveVideoAvailable, orientedScreen,
+} from './live.js';
 
 export {};
 
@@ -73,6 +76,8 @@ function element<T extends Element>(selector: string): T {
 const udid = decodeURIComponent(location.pathname.split('/').filter(Boolean).at(-1) ?? '');
 const elements = {
     screen: element<HTMLImageElement>('#screen'),
+    screenView: element<HTMLElement>('#screen-view'),
+    screenCanvas: element<HTMLCanvasElement>('#screen-canvas'),
     status: element<HTMLElement>('#status'),
     statusText: element<HTMLElement>('#status span:last-child'),
     refresh: element<HTMLButtonElement>('#refresh'),
@@ -166,6 +171,9 @@ const elements = {
 
 let screenSize: ScreenSize | undefined;
 let pump: FramePump | null = null;
+let player: LivePlayer | null = null;
+let liveServer = false;
+let liveFailures = 0;
 let devicePlatform = 'ios';
 let paused = false;
 let connecting = false;
@@ -246,18 +254,50 @@ async function jsonRequest<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 /**
- * iOS phones have a real MJPEG stream; Android has none, so its frames are polled by the same
- * pump the wall uses. Either way `#screen` ends up showing the phone.
+ * The device page is the one screen worth a real video stream, so an Android phone gets scrcpy's
+ * H.264 when the farm has it. iPhones keep WebDriverAgent's MJPEG, and anything that cannot do
+ * live video falls back to four screenshots a second.
  */
 function startStream(): void {
     if (paused || !screenSize) return;
     setStatus('Connecting to the phone', 'busy');
     pump?.stop();
+    player?.stop();
+    const mode = chooseMode({
+        preference: 'live', webCodecs: hasWebCodecs(), serverAvailable: liveServer,
+        socketFailures: liveFailures, platform: devicePlatform,
+    });
+    if (mode === 'live') {
+        player = new LivePlayer({
+            canvas: elements.screenCanvas, udid, profile: 'viewer',
+            onFallback() {
+                liveFailures = MAX_SOCKET_FAILURES;
+                player = null;
+                elements.screenCanvas.hidden = true;
+                elements.screen.hidden = false;
+                startStream();
+            },
+            onPainted() {
+                elements.screenCanvas.hidden = false;
+                elements.screen.hidden = true;
+                setStatus('Live', 'live');
+            },
+        });
+        player.start();
+        return;
+    }
+    elements.screenCanvas.hidden = true;
+    elements.screen.hidden = false;
     pump = new FramePump(elements.screen, udid, devicePlatform);
     pump.setRate(4);
     pump.start();
     setStatus('Live', 'live');
 }
+
+void liveVideoAvailable().then((available) => {
+    liveServer = available;
+    if (!paused && screenSize && !player) startStream();
+});
 
 async function connectRemote(): Promise<void> {
     if (paused || connecting || !screenSize) return;
@@ -333,10 +373,13 @@ document.addEventListener('htmx:afterRequest', (event) => {
 
 function pointFromEvent(event: PointerEvent): Point {
     if (!screenSize) throw new Error('Screen dimensions are unavailable');
-    const rect = elements.screen.getBoundingClientRect();
+    // The stream reports the size it is really encoding, which is what says which way up the
+    // phone is; the screen size on its own does not.
+    const screen = orientedScreen(screenSize, player?.size());
+    const rect = elements.screenView.getBoundingClientRect();
     return {
-        x: Math.round((event.clientX - rect.left) * screenSize.width / rect.width),
-        y: Math.round((event.clientY - rect.top) * screenSize.height / rect.height),
+        x: Math.round((event.clientX - rect.left) * screen.width / rect.width),
+        y: Math.round((event.clientY - rect.top) * screen.height / rect.height),
     };
 }
 
@@ -409,12 +452,12 @@ elements.remoteButtons.forEach((button) => {
     });
 });
 
-elements.screen.addEventListener('pointerdown', (event) => {
+elements.screenView.addEventListener('pointerdown', (event) => {
     if (!screenSize) return;
-    elements.screen.setPointerCapture(event.pointerId);
+    elements.screenView.setPointerCapture(event.pointerId);
     pointerStart = { ...pointFromEvent(event), time: performance.now() };
 });
-elements.screen.addEventListener('pointerup', (event) => {
+elements.screenView.addEventListener('pointerup', (event) => {
     if (!pointerStart || !screenSize) return;
     const end = pointFromEvent(event);
     const start = pointerStart;
@@ -434,7 +477,7 @@ elements.screen.addEventListener('pointerup', (event) => {
         });
     }
 });
-elements.screen.addEventListener('pointercancel', () => { pointerStart = undefined; });
+elements.screenView.addEventListener('pointercancel', () => { pointerStart = undefined; });
 elements.screen.addEventListener('load', () => setStatus('Live video connected', 'ready'));
 elements.screen.addEventListener('error', () => {
     if (paused) return;
@@ -461,6 +504,7 @@ elements.toggle.addEventListener('click', () => {
     elements.toggle.textContent = paused ? 'Resume' : 'Pause';
     if (paused) {
         pump?.stop();
+        player?.stop();
         elements.screen.removeAttribute('src');
         setStatus('Paused');
     } else {

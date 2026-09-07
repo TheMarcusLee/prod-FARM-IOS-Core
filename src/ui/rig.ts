@@ -36,6 +36,8 @@ export interface RigFacts {
     pushRegistrations: number;
     /** Version reported by /health, when it is known. */
     release?: string;
+    /** "live video: scrcpy 3.1" or "stills only: install scrcpy (brew install scrcpy)". */
+    liveVideo?: string;
 }
 
 function countPlatform(devices: readonly RegisteredDevice[], platform: 'ios' | 'android'): number {
@@ -77,7 +79,8 @@ export function rigServices(facts: RigFacts): RigService[] {
             name: 'Android bridge', state: attachedAndroid > 0 ? 'running' : android > 0 ? 'stopped' : 'idle',
             detail: android === 0
                 ? 'No Android phones are registered yet'
-                : `adb · ${attachedAndroid} of ${plural(android, 'phone')} attached`,
+                : `adb · ${attachedAndroid} of ${plural(android, 'phone')} attached`
+                    + (facts.liveVideo ? ` · ${facts.liveVideo}` : ''),
             docs: '/docs/android-dashboard',
         },
         {

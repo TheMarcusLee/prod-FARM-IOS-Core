@@ -28,14 +28,9 @@ export async function request(url, options = {}) {
 export function send(url, body, method = 'POST') {
     return request(url, { method, body: JSON.stringify(body ?? {}) });
 }
-/** Frames per second for each notch of the refresh slider; 0 means "hold the last frame". */
-export const FRAME_RATES = [0, 0.5, 1, 2, 4];
 /** Tile minimum width in px for small, medium and large. */
 export const TILE_SIZES = [120, 150, 210];
 export const TILE_SIZE_LABELS = ['S', 'M', 'L'];
-export function rateLabel(rate) {
-    return rate === 0 ? 'off' : `${rate} fps`;
-}
 /**
  * Keeps one `<img>` showing a phone. iOS phones have a real MJPEG stream, so the image is simply
  * pointed at it; Android has no stream, so its frames are polled at the chosen rate, each pump
@@ -220,7 +215,7 @@ function initCopy() {
     const reset = pick('[data-reset-tiles]');
     reset?.addEventListener('click', () => {
         remember('tileSize', '1');
-        remember('tileRate', '2');
+        remember('tileQuality', '2');
         reset.textContent = 'Reset';
     });
 }

@@ -1,6 +1,7 @@
 import cookie from '@fastify/cookie';
 import formbody from '@fastify/formbody';
 import multipart from '@fastify/multipart';
+import websocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import crypto from 'node:crypto';
 import { mkdir, open, readdir, readFile } from 'node:fs/promises';
@@ -49,8 +50,13 @@ import { fileURLToPath } from 'node:url';
 import { eq } from 'drizzle-orm';
 import { assets } from '../database/schema.js';
 import { runCommand } from '../drivers/common.js';
+import {
+    avcCodecString, liveVideoStatus, parameterSets, startScrcpyStream, type LiveVideoStatus,
+} from '../live/scrcpy.js';
+import { LiveUnavailableError, createSessionManager, type StartLiveStream } from '../live/sessions.js';
 import { registerContentRoutes } from './routes/content.js';
 import { registerUploadRoutes } from './routes/uploads.js';
+import { registerLiveRoutes } from './routes/live.js';
 import { registerFleetRoutes } from './routes/fleet.js';
 import { registerMcpRoutes } from './routes/mcp.js';
 import { personaHead, registerPersonaRoutes, renderPersonaSection } from './routes/personas.js';
@@ -73,6 +79,11 @@ export interface CreateAppOptions {
     connectedUdids?: () => Promise<string[]>;
     /** The event log behind Alerts and the sidebar's unread count; production builds it from the database. */
     events?: EventStore;
+    /** Live video, so a test can pretend scrcpy is installed without a phone in the room. */
+    liveVideo?: {
+        status?(): Promise<LiveVideoStatus>;
+        start?: StartLiveStream;
+    };
     logger?: boolean;
 }
 
@@ -326,6 +337,11 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
             fieldSize: 1024 * 1024, fieldNameSize: 200, headerPairs: 200,
         },
     });
+
+    // Live video's WebSocket routes. Registered here, before the guards below, because the
+    // plugin tags an upgrade request on the way in and closes its raw socket on the way out: a
+    // request refused by a hook that runs earlier would leave the connection hanging open.
+    await app.register(websocket);
 
     // Server-rendered HTML must never be cached — a stale page + fresh assets
     // (or vice versa) breaks the dashboard after a deploy.
@@ -1002,6 +1018,28 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     });
     await registerMobileRoutes(app, options);
 
+    // Live video: one scrcpy stream per watched Android phone, started on demand. Without scrcpy
+    // installed the sockets answer "not available" and every surface keeps polling screenshots.
+    const liveStatus = options.liveVideo?.status ?? (() => liveVideoStatus());
+    const liveSessions = createSessionManager({
+        start: options.liveVideo?.start ?? (async (udid, quality, handlers) => {
+            const device = await androidDevice(udid);
+            if (!device) throw new LiveUnavailableError('This phone has no adb connection');
+            return startScrcpyStream({
+                serial: device.android?.serial ?? device.udid,
+                status: await liveStatus(), maxSize: quality.maxSize, maxFps: quality.maxFps,
+            }, handlers);
+        }),
+        decoderCodec: avcCodecString,
+        parameterSets,
+    });
+    app.addHook('onClose', () => liveSessions.close());
+    await registerLiveRoutes(app, {
+        sessions: liveSessions,
+        status: liveStatus,
+        canStream: async (udid) => Boolean(await androidDevice(udid)),
+    });
+
     for (const plugin of options.plugins.list()) {
         if (plugin.registerRoutes) await plugin.registerRoutes({
             app, routePrefix: `/plugins/${plugin.id}`, scheduler: options.scheduler, remote,
@@ -1053,8 +1091,8 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         app.get<{ Params: { udid: string } }>('/api/fragments/inspector/:udid', async (request, reply) => {
             const device = await wallDevice(request.params.udid);
             if (!device) return reply.code(404).type('text/html').send(renderInspector(undefined));
-            return reply.type('text/html')
-                .send(renderInspector(device, await inspectorLog(options.scheduler, device.udid)));
+            return reply.type('text/html').send(renderInspector(
+                device, await inspectorLog(options.scheduler, device.udid), (await liveStatus()).message));
         });
         app.get<{ Params: { udid: string } }>('/api/fragments/inspector/:udid/run', async (request, reply) => {
             const device = await wallDevice(request.params.udid);
@@ -1077,7 +1115,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         });
         return reply.type('text/html').send(await shell(request, {
             title: 'Control Center', active: 'control',
-            body: renderControlCenter(data),
+            body: renderControlCenter({ ...data, liveVideo: (await liveStatus()).message }),
             toolbar: wallToolbar(),
             toolbarRight: `${wallToolbarRight()}${AVATAR}`,
             head: `${scriptTag('wall.js')}<link rel="stylesheet" href="/assets/pages.css">`,

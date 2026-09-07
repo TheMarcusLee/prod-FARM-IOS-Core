@@ -19,6 +19,7 @@ import { acknowledgedMark } from '../push/acks.js';
 import type { PluginRegistry } from '../registry.js';
 import type { SchedulerRepository } from '../scheduler/repository.js';
 import { icon } from './icons.js';
+import { STILLS_ONLY_MESSAGE, liveVideoStatus } from '../live/scrcpy.js';
 import { rigStatus, type RigFacts } from './rig.js';
 import { NAV, escapeHtml, renderShell, type RigStatus, type ShellInput } from './shell.js';
 import { readFleet, type FleetRead, type WallSources } from './wall-data.js';
@@ -132,6 +133,7 @@ export function createShellContext(options: ShellContextOptions): ShellContext {
             running: fleet.executions.filter(({ status }) => status === 'running').length,
             queued: fleet.executions.filter(({ status }) => status === 'queued').length,
             eventLog: Boolean(events()), pushRegistrations: 0,
+            liveVideo: (await liveVideoStatus().catch(() => undefined))?.message ?? STILLS_ONLY_MESSAGE,
         };
         return { facts, fleet, rig: rigStatus(facts), unread, theme: theme(request) };
     };

@@ -39,15 +39,9 @@ export function send(url: string, body: unknown, method = 'POST'): Promise<unkno
     return request(url, { method, body: JSON.stringify(body ?? {}) });
 }
 
-/** Frames per second for each notch of the refresh slider; 0 means "hold the last frame". */
-export const FRAME_RATES = [0, 0.5, 1, 2, 4] as const;
 /** Tile minimum width in px for small, medium and large. */
 export const TILE_SIZES = [120, 150, 210] as const;
 export const TILE_SIZE_LABELS = ['S', 'M', 'L'] as const;
-
-export function rateLabel(rate: number): string {
-    return rate === 0 ? 'off' : `${rate} fps`;
-}
 
 /**
  * Keeps one `<img>` showing a phone. iOS phones have a real MJPEG stream, so the image is simply
@@ -231,7 +225,7 @@ function initCopy(): void {
     const reset = pick<HTMLButtonElement>('[data-reset-tiles]');
     reset?.addEventListener('click', () => {
         remember('tileSize', '1');
-        remember('tileRate', '2');
+        remember('tileQuality', '2');
         reset.textContent = 'Reset';
     });
 }

@@ -55,6 +55,8 @@ export interface WallData {
     selected?: WallDevice;
     /** The selected phone's running log, newest last. */
     log?: readonly WallLogLine[];
+    /** "live video: scrcpy 3.1" or "stills only: install scrcpy (brew install scrcpy)". */
+    liveVideo?: string;
 }
 
 const STATE_WORD: Record<DerivedDeviceState, string> = {
@@ -80,7 +82,8 @@ function tileScreen(device: WallDevice): string {
             : device.lastFrameAt ? `last frame ${clock(device.lastFrameAt)}` : 'offline';
         return `<span class="bl-tile-screen">${escapeHtml(label)}</span>`;
     }
-    return '<span class="bl-tile-screen" data-screen><img data-frame alt="" draggable="false"></span>';
+    const canvas = device.platform === 'android' ? '<canvas data-canvas hidden></canvas>' : '';
+    return `<span class="bl-tile-screen" data-screen><img data-frame alt="" draggable="false">${canvas}</span>`;
 }
 
 function tile(device: WallDevice): string {
@@ -154,8 +157,8 @@ function filters(data: WallData): string {
 <div class="bl-cc-group">
 <label class="bl-label" for="wall-size"><span>Screen size</span><b id="wall-size-value">M</b></label>
 <input class="bl-slider" id="wall-size" type="range" min="0" max="2" step="1" value="1">
-<label class="bl-label" for="wall-rate"><span>Refresh</span><b id="wall-rate-value">1 fps</b></label>
-<input class="bl-slider" id="wall-rate" type="range" min="0" max="4" step="1" value="2">
+<label class="bl-label" for="wall-quality"><span>Quality</span><b id="wall-quality-value">Live</b></label>
+<input class="bl-slider" id="wall-quality" type="range" min="0" max="2" step="1" value="2">
 </div>
 <div class="bl-cc-group">
 <div class="bl-label"><span>Group</span><a href="/devices">Edit</a></div>
@@ -212,8 +215,9 @@ export function hardwareColumn(platform: 'ios' | 'android'): string {
 
 /** The live screen of one phone, at the size the caller's column gives it. */
 export function viewer(device: WallDevice, badge: string): string {
+    const canvas = device.platform === 'android' ? '<canvas data-canvas hidden></canvas>' : '';
     const inner = showsFrames(device)
-        ? `<img data-frame alt="Screen of ${escapeHtml(device.name)}" draggable="false">`
+        ? `<img data-frame alt="Screen of ${escapeHtml(device.name)}" draggable="false">${canvas}`
             + `<span class="bl-viewer-badge">${escapeHtml(badge)}</span>`
         : `<span class="bl-viewer-empty">${escapeHtml(device.disabled ? 'This phone is disabled' : 'This phone is offline')}</span>`;
     return `<div class="bl-viewer-screen" data-viewer data-udid="${escapeHtml(device.udid)}"`
@@ -230,7 +234,9 @@ function logBlock(log: readonly WallLogLine[]): string {
 }
 
 /** The right-hand column for one phone. Also served on its own at /api/fragments/inspector/:udid. */
-export function renderInspector(device: WallDevice | undefined, log: readonly WallLogLine[] = []): string {
+export function renderInspector(
+    device: WallDevice | undefined, log: readonly WallLogLine[] = [], liveVideo?: string,
+): string {
     if (!device) {
         return '<div class="bl-inspector" id="inspector"><div class="bl-empty">'
             + '<span>Select a phone to control it.</span>'
@@ -254,6 +260,7 @@ export function renderInspector(device: WallDevice | undefined, log: readonly Wa
 <a class="bl-btn bl-btn-icon" href="/devices/${encodeURIComponent(device.udid)}" title="Open device">${icon('expand')}</a></div>
 <div class="bl-viewer">${viewer(device, 'live')}${hardwareColumn(device.platform)}</div>
 <div class="bl-inspector-foot">
+${device.platform === 'android' && liveVideo ? `<p class="bl-hint" data-live-status>${escapeHtml(liveVideo)}</p>` : ''}
 <div class="bl-btn-row">${stop}<a class="bl-btn" href="/devices/${encodeURIComponent(device.udid)}">Open device</a>
 <button type="button" class="bl-btn" data-record-runbook="${escapeHtml(device.udid)}">Record what I do next</button></div>
 <div id="inspector-recording" hidden></div>
@@ -289,5 +296,6 @@ function wall(devices: readonly WallDevice[]): string {
 
 /** The `.bl-cc` body of the Control Center; the caller wraps it in `renderShell`. */
 export function renderControlCenter(data: WallData): string {
-    return `<div class="bl-cc">${filters(data)}${wall(data.devices)}${renderInspector(data.selected, data.log)}</div>`;
+    return `<div class="bl-cc">${filters(data)}${wall(data.devices)}`
+        + `${renderInspector(data.selected, data.log, data.liveVideo)}</div>`;
 }
