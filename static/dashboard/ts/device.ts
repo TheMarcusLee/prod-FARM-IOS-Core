@@ -85,6 +85,11 @@ const elements = {
     remoteButtons: Array.from(document.querySelectorAll<HTMLButtonElement>('[data-remote-action]')),
     openPost: element<HTMLButtonElement>('#open-post'),
     openDoomscroll: element<HTMLButtonElement>('#open-doomscroll'),
+    doomscrollNetwork: element<HTMLSelectElement>('#doomscroll-network'),
+    doomscrollSurfaceField: element<HTMLElement>('#doomscroll-surface-field'),
+    postNetwork: element<HTMLSelectElement>('#post-network'),
+    postMediaHint: element<HTMLElement>('#post-media-hint'),
+    musicUrlField: element<HTMLElement>('#music-url-field'),
     doomscrollDialog: element<HTMLDialogElement>('#doomscroll-dialog'),
     closeDoomscroll: element<HTMLButtonElement>('#close-doomscroll'),
     cancelDoomscroll: element<HTMLButtonElement>('#cancel-doomscroll'),
@@ -212,6 +217,42 @@ function updatePostSchedule(): void {
     elements.postRunWindowField.hidden = kind === 'now';
     elements.postRunAt.required = kind === 'once';
 }
+
+/* ---- which network a task is for ---------------------------------------
+ * Both plugins offer the same two verbs on a phone, so the dialogs ask which app rather than
+ * doubling the buttons on the panel. The only per-network differences are the endpoint, how much
+ * media is allowed, and the two TikTok-only fields.
+ */
+const INSTAGRAM_MAX_MEDIA = 20;
+const TIKTOK_MAX_MEDIA = 3;
+
+function postNetworkIsInstagram(): boolean {
+    return elements.postNetwork.value === 'instagram';
+}
+
+function maxPostMedia(): number {
+    return postNetworkIsInstagram() ? INSTAGRAM_MAX_MEDIA : TIKTOK_MAX_MEDIA;
+}
+
+function updatePostNetwork(): void {
+    const instagram = postNetworkIsInstagram();
+    elements.musicUrlField.hidden = instagram;
+    elements.postMediaHint.textContent = instagram
+        ? 'One video for a reel, one image for a photo, or 2–20 images for a carousel — in the order you want them.'
+        : 'One video, or up to three images in the order you want them.';
+    // Instagram posts from whichever account the phone is already on when none is named; the
+    // handles offered here are the phone's, and the Instagram panel keeps its own list.
+    elements.postAccount.required = !instagram;
+}
+
+function updateDoomscrollNetwork(): void {
+    elements.doomscrollSurfaceField.hidden = elements.doomscrollNetwork.value !== 'instagram';
+}
+
+elements.postNetwork.addEventListener('change', updatePostNetwork);
+elements.doomscrollNetwork.addEventListener('change', updateDoomscrollNetwork);
+updatePostNetwork();
+updateDoomscrollNetwork();
 
 elements.doomscrollRecurring.addEventListener('change', updateDoomscrollSchedule);
 elements.doomscrollStartKind.addEventListener('change', updateDoomscrollSchedule);
@@ -362,6 +403,16 @@ function useDeviceSummary(summary: HTMLElement): void {
 document.addEventListener('htmx:afterSwap', () => {
     const summary = document.querySelector<HTMLElement>('#device-summary[data-screen-width]');
     if (summary) useDeviceSummary(summary);
+});
+
+// The warm-up form is posted by htmx, so the network picker retargets the request rather than
+// swapping the form's markup: each plugin owns its own fragment route.
+document.addEventListener('htmx:configRequest', (event) => {
+    const detail = (event as CustomEvent<{ elt?: Element; path?: string }>).detail;
+    if (detail?.elt !== elements.doomscrollForm) return;
+    const base = `/api/devices/${encodeURIComponent(udid)}/fragments`;
+    detail.path = elements.doomscrollNetwork.value === 'instagram'
+        ? `${base}/instagram-warmup-run` : `${base}/scroll-run`;
 });
 
 document.addEventListener('htmx:afterRequest', (event) => {
@@ -739,12 +790,20 @@ elements.postForm.addEventListener('change', (event) => {
 elements.postForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     const destination = selectedDestination();
+    const instagram = postNetworkIsInstagram();
     if (orderedMedia.length === 0) { elements.postResult.textContent = 'Choose media first.'; return; }
-    if (orderedMedia.length > 3) { elements.postResult.textContent = 'Choose no more than three slideshow images.'; return; }
+    if (orderedMedia.length > maxPostMedia()) {
+        elements.postResult.textContent = instagram
+            ? 'A carousel is at most 20 images.' : 'Choose no more than three slideshow images.';
+        return;
+    }
     const videos = orderedMedia.filter(({ type }) => type.startsWith('video/'));
     const images = orderedMedia.filter(({ type }) => type.startsWith('image/'));
     if (!((videos.length === 1 && orderedMedia.length === 1) || images.length === orderedMedia.length)) {
-        elements.postResult.textContent = 'Choose exactly one video, or only slideshow images.'; return;
+        elements.postResult.textContent = instagram
+            ? 'Choose one video for a reel, or only images — Instagram cannot mix them in one post.'
+            : 'Choose exactly one video, or only slideshow images.';
+        return;
     }
     if (destination === 'publish' && !elements.confirmPublish.checked) {
         elements.postResult.textContent = 'Confirm public publishing before continuing.'; return;
@@ -752,7 +811,8 @@ elements.postForm.addEventListener('submit', async (event) => {
     const form = new FormData();
     for (const file of orderedMedia) form.append('media', file, file.name);
     form.append('destination', destination);
-    form.append('musicUrl', elements.musicUrl.value);
+    // The sound deep link is TikTok's; the Instagram route has no field for it.
+    if (!instagram) form.append('musicUrl', elements.musicUrl.value);
     form.append('caption', elements.caption.value);
     form.append('account', elements.postAccount.value);
     try {
@@ -765,7 +825,10 @@ elements.postForm.addEventListener('submit', async (event) => {
     elements.submitPost.disabled = true;
     elements.postResult.textContent = 'Uploading media to the automation server…';
     try {
-        const result = await jsonRequest<{ status: string }>(`/api/devices/${encodeURIComponent(udid)}/posts`, { method: 'POST', body: form });
+        const endpoint = instagram
+            ? `/api/devices/${encodeURIComponent(udid)}/instagram/posts`
+            : `/api/devices/${encodeURIComponent(udid)}/posts`;
+        const result = await jsonRequest<{ status: string }>(endpoint, { method: 'POST', body: form });
         window.clearTimeout(postPoll);
         if (result.status === 'running') {
             await pollPost();

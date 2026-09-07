@@ -590,6 +590,15 @@ function ask(title, fields, submitLabel) {
 }
 /* ---- toolbar ---------------------------------------------------------- */
 const TIKTOK = 'com.git-agni.tiktok';
+const INSTAGRAM = 'com.backline.instagram';
+/**
+ * The network a bulk action targets. Both plugins expose the same two verbs — post something, and
+ * browse for a while — so the toolbar asks which app rather than growing a second pair of buttons.
+ */
+const NETWORKS = [['tiktok', 'TikTok'], ['instagram', 'Instagram']];
+function isInstagram(answers) {
+    return answers.values.network === 'instagram';
+}
 function udids() {
     return selected().map(({ udid }) => udid);
 }
@@ -615,6 +624,7 @@ async function bulk(body) {
 const ACTIONS = {
     async 'schedule-post'(chosen) {
         const answers = await ask('Schedule a post', [
+            { name: 'network', label: 'Network', type: 'select', options: NETWORKS },
             { name: 'media', label: 'Media', type: 'file', accept: 'video/*,image/*', multiple: true },
             { name: 'runAt', label: 'Start', type: 'datetime-local' },
             { name: 'destination', label: 'Finish as', type: 'select', options: [['draft', 'Save to drafts'], ['publish', 'Post publicly']] },
@@ -629,10 +639,12 @@ const ACTIONS = {
             return report('Choose when the post should go out.');
         report('Uploading media');
         const uploaded = await uploadFiles(answers.files);
+        // Instagram infers the format (reel / photo / carousel) from the media it was given, so
+        // the dialog never asks the operator to name a surface it can already see.
         await bulk({
             deviceUdids: chosen,
             task: {
-                pluginId: TIKTOK, taskType: 'post', taskVersion: 1,
+                pluginId: isInstagram(answers) ? INSTAGRAM : TIKTOK, taskType: 'post', taskVersion: 1,
                 payload: {
                     media: uploaded.map((asset) => ({ assetId: asset.id, name: asset.name, mimeType: asset.mimeType })),
                     destination: answers.values.destination, account: '',
@@ -645,21 +657,33 @@ const ACTIONS = {
     },
     async 'warm-up'(chosen) {
         const answers = await ask('Warm up', [
+            { name: 'network', label: 'Network', type: 'select', options: NETWORKS },
             { name: 'durationMinutes', label: 'Minutes', type: 'number', value: '10', min: '1', max: '180' },
             { name: 'personality', label: 'Personality', type: 'select', options: [['casual', 'Casual'], ['skimmer', 'Skimmer'], ['engaged', 'Engaged']] },
             { name: 'stagger', label: 'Stagger between phones, minutes', type: 'number', value: '0', min: '0' },
         ], 'Warm up the selection');
         if (!answers)
             return;
+        // The two plugins name the verb differently — TikTok doomscrolls, Instagram warms up — and
+        // Instagram wants to know which surface; 'both' is the feed then reels.
         await bulk({
             deviceUdids: chosen,
-            task: {
-                pluginId: TIKTOK, taskType: 'doomscroll', taskVersion: 1,
-                payload: {
-                    durationMinutes: Number(answers.values.durationMinutes ?? 10),
-                    personality: answers.values.personality, likeEnabled: true, saveEnabled: false,
+            task: isInstagram(answers)
+                ? {
+                    pluginId: INSTAGRAM, taskType: 'warmup', taskVersion: 1,
+                    payload: {
+                        durationMinutes: Number(answers.values.durationMinutes ?? 10),
+                        surface: 'both', personality: answers.values.personality,
+                        likeEnabled: true, saveEnabled: false,
+                    },
+                }
+                : {
+                    pluginId: TIKTOK, taskType: 'doomscroll', taskVersion: 1,
+                    payload: {
+                        durationMinutes: Number(answers.values.durationMinutes ?? 10),
+                        personality: answers.values.personality, likeEnabled: true, saveEnabled: false,
+                    },
                 },
-            },
             timing: { kind: 'now' },
             stagger: { kind: 'fixed', minutes: Number(answers.values.stagger ?? 0) },
         });

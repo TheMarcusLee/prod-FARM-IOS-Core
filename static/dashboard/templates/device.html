@@ -181,6 +181,16 @@
             <button id="close-doomscroll" class="bl-btn bl-btn-sm" type="button">Close</button></div>
         <div class="bl-dialog-body">
             <p class="bl-muted">A timed, personality-driven scrolling session on this phone.</p>
+            <label class="bl-field" for="doomscroll-network"><span>Network</span>
+                <select id="doomscroll-network" class="bl-select" name="network">
+                    <option value="tiktok" selected>TikTok</option><option value="instagram">Instagram</option>
+                </select></label>
+            <div id="doomscroll-surface-field" class="bl-field" hidden>
+                <label for="doomscroll-surface">Surface</label>
+                <select id="doomscroll-surface" class="bl-select" name="surface">
+                    <option value="both">Feed, then reels</option><option value="feed">Feed</option><option value="reels">Reels</option>
+                </select>
+            </div>
             <label class="bl-field" for="doomscroll-duration"><span>Duration in minutes</span>
                 <input id="doomscroll-duration" class="bl-input" name="durationMinutes" type="number" min="1" max="180" value="5" required></label>
             <div class="bl-actions">
@@ -245,11 +255,15 @@
         <div class="bl-dialog-head">Prepare a post<span class="bl-spacer"></span>
             <button id="close-post" class="bl-btn bl-btn-sm" type="button">Close</button></div>
         <div class="bl-dialog-body">
-            <p class="bl-muted">One video, or up to three images in the order you want them.</p>
+            <p id="post-media-hint" class="bl-muted">One video, or up to three images in the order you want them.</p>
+            <label class="bl-field" for="post-network"><span>Network</span>
+                <select id="post-network" class="bl-select" name="network">
+                    <option value="tiktok" selected>TikTok</option><option value="instagram">Instagram</option>
+                </select></label>
             <label class="bl-field" for="media"><span>Media</span>
                 <input id="media" class="bl-input" name="media-picker" type="file" accept="video/*,image/*" multiple required></label>
             <ol id="media-list"></ol>
-            <label class="bl-field" for="music-url"><span>Music URL, optional</span>
+            <label class="bl-field" id="music-url-field" for="music-url"><span>Music URL, optional</span>
                 <input id="music-url" class="bl-input" type="url" placeholder="https://www.tiktok.com/music/…"></label>
             <label class="bl-field" for="caption"><span>Caption, optional</span>
                 <textarea id="caption" class="bl-textarea" rows="3" maxlength="2200" placeholder="Write a caption"></textarea></label>

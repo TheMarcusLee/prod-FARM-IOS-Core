@@ -121,6 +121,19 @@ A serial reading `unauthorized` means the prompt was not accepted.
       the post is the first cell in the picker. Check the picker actually shows
       it in that order.
 
+### 1.6 Instagram
+
+- [ ] Grant the gallery permission by hand as well: Instagram → **+** → accept
+      the photos/media prompt.
+- [ ] From the device page, set the dialog's **Network** to **Instagram** and
+      run a 2-minute **warm-up**, then a **photo** post to drafts.
+- [ ] Expect both to fail somewhere. Every Instagram selector ships as a
+      `GUESS`; the failure names the alternates it tried and the texts that
+      were on screen.
+- [ ] Correct `POST_SELECTORS` in `src/instagram/android/post.ts` and
+      `FEED_SELECTORS` in `src/instagram/android/warmup.ts`, then update the
+      table in [instagram.md](instagram.md#selectors-to-verify).
+
 ---
 
 ## Part 2 — the accessibility bridge APK
@@ -395,6 +408,8 @@ When the session is over, correct the docs rather than remembering:
 | If you learned | Fix |
 | --- | --- |
 | Real TikTok selectors | `src/tiktok/android/{post,doomscroll}.ts` and the table in `docs/android-tiktok.md` |
+| Real Instagram selectors | `src/instagram/android/{post,warmup}.ts` and the table in `docs/instagram.md` |
+| Real Instagram coordinates on an iPhone | the `instagram` section of `src/devices/coordinates.ts`, and `docs/coordinates.md` |
 | The coordinate units | `docs/mobile-api.md` (`/remote/info`, `/remote/action`) and `docs/mobile-app.md` "Still open" |
 | Bridge behaviour on your phones | This file's §2.2 confirm boxes, and `sim-use/FARM-NOTES.md` |
 | A step that is missing here | This file |

@@ -47,6 +47,48 @@ export interface DeviceCoordinates {
             durationMs: number;
         };
     };
+    /**
+     * Every tap and swipe the built-in Instagram plugin's iOS routines use. Instagram gets its own
+     * section rather than sharing TikTok's: the two apps put the composer, the picker grid and the
+     * engagement rail in different places, and a shared point would silently be wrong for one of
+     * them.
+     *
+     * **Every value below is unverified** — see docs/coordinates.md and docs/instagram.md. Nobody
+     * has calibrated Instagram against a real iPhone 8 yet; the numbers are the TikTok layout's
+     * nearest equivalents, which is a starting point for a calibration session and nothing more.
+     */
+    instagram: {
+        homeTab: Point;
+        reelsTab: Point;
+        profileTab: Point;
+        accountSwitcher: Point;
+        create: Point;
+        /** The surface strip under the picker: POST / STORY / REEL. */
+        postTab: Point;
+        reelTab: Point;
+        selectMultiple: Point;
+        picker: {
+            cellX: number;
+            cellStep: number;
+            cellY: number;
+            rowStep: number;
+        };
+        pickerNext: Point;
+        editorNext: Point;
+        caption: Point;
+        keyboardBack: Point;
+        /** "Save draft" on the sheet that backing out of the share screen opens. */
+        draft: Point;
+        share: Point;
+        like: Point;
+        save: Point;
+        swipe: {
+            x: number;
+            startY: number;
+            endY: number;
+            durationMs: number;
+        };
+    };
 }
 
 export const DEFAULT_COORDINATE_PROFILE = 'iphone8';
@@ -88,6 +130,27 @@ export const DEVICE_COORDINATES = {
             finish: { x: 277, y: 630 },
             like: { x: 345, y: 313 },
             save: { x: 345, y: 444 },
+            swipe: { x: 187, startY: 550, endY: 150, durationMs: 450 },
+        },
+        // UNVERIFIED. Not one of these has been checked against an iPhone.
+        instagram: {
+            homeTab: { x: 38, y: 653 },
+            reelsTab: { x: 262, y: 653 },
+            profileTab: { x: 338, y: 656 },
+            accountSwitcher: { x: 130, y: 60 },
+            create: { x: 187, y: 653 },
+            postTab: { x: 150, y: 640 },
+            reelTab: { x: 225, y: 640 },
+            selectMultiple: { x: 60, y: 330 },
+            picker: { cellX: 62, cellStep: 125, cellY: 420, rowStep: 125 },
+            pickerNext: { x: 340, y: 60 },
+            editorNext: { x: 340, y: 60 },
+            caption: { x: 180, y: 120 },
+            keyboardBack: { x: 22, y: 42 },
+            draft: { x: 187, y: 400 },
+            share: { x: 187, y: 620 },
+            like: { x: 30, y: 470 },
+            save: { x: 345, y: 470 },
             swipe: { x: 187, startY: 550, endY: 150, durationMs: 450 },
         },
     },
@@ -132,7 +195,9 @@ export function coordinatesForProfile(profile: string = DEFAULT_COORDINATE_PROFI
 
 // The single-tap TikTok targets an operator can re-point from the dashboard.
 // (picker grid, swipe vector and the passcode keypad are not single points and
-// stay profile-level for now.)
+// stay profile-level for now. The `instagram` section is profile-level in its
+// entirety — calibrate it by editing the profile until there is a real layout
+// worth exposing in the dashboard's calibration dialog.)
 export const CALIBRATABLE_POINTS = [
     'profileTab', 'homeTab', 'accountSwitcher', 'create', 'upload', 'selectMultiple', 'useLayout',
     'pickerNext', 'editorNext', 'caption', 'keyboardBack', 'draft', 'finish', 'like', 'save',

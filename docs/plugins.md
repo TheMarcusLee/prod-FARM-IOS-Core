@@ -222,3 +222,15 @@ exactly‑pinned packages.
 `src/example-plugin.ts` is a complete minimal plugin (`open-app@1`). To load it
 during development, point `PHONE_FARM_PLUGINS` at the built package path or add
 it to `defaultPlugins()` locally.
+
+## The built-in plugins
+
+`defaultPlugins()` in `src/api/server.ts` (and the same list in
+`src/scheduler/worker.ts`) registers three: `com.git-agni.tiktok`
+(`doomscroll@1`, `post@1` — [android-tiktok.md](android-tiktok.md)),
+`com.backline.instagram` (`warmup@1`, `post@1` for reels, photos and 2–20-image
+carousels — [instagram.md](instagram.md)), and `com.farm.runbook`
+(`run@1` — [runbooks.md](runbooks.md)). They are ordinary plugins built against
+the contract above; read `src/instagram-plugin.ts` for a worked example of a
+two-task plugin with per-platform routines, its own device panel and its own
+routes.

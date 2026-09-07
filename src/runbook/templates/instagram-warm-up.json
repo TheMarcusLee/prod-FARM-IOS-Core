@@ -1,0 +1,104 @@
+{
+  "id": "rb-starter-instagram-warm-up",
+  "name": "Instagram warm-up",
+  "description": "Opens Instagram, scrolls the feed, moves to reels and scrolls those, as many times as you ask for.",
+  "platform": "android",
+  "appId": "com.instagram.android",
+  "createdFor": {
+    "udid": "starter-template",
+    "screen": {
+      "width": 1080,
+      "height": 2400,
+      "scale": 1
+    }
+  },
+  "template": "instagram-warm-up",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.instagram.android"
+    },
+    {
+      "type": "waitForText",
+      "text": "Home",
+      "timeoutMs": 45000,
+      "seen": [
+        "Home",
+        "Reels",
+        "Search",
+        "Profile",
+        "Following",
+        "For you",
+        "Notifications"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 3000
+    },
+    {
+      "type": "swipe",
+      "from": {
+        "x": 0.5,
+        "y": 0.78
+      },
+      "to": {
+        "x": 0.5,
+        "y": 0.24
+      },
+      "durationMs": 380,
+      "repeat": "{{scrolls}}",
+      "repeatDelayMs": 4500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Reels",
+        "fraction": {
+          "x": 0.5,
+          "y": 0.965
+        }
+      },
+      "seen": [
+        "Home",
+        "Reels",
+        "Search",
+        "Profile",
+        "Following",
+        "For you",
+        "Notifications"
+      ],
+      "optional": true,
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 3000
+    },
+    {
+      "type": "swipe",
+      "from": {
+        "x": 0.5,
+        "y": 0.78
+      },
+      "to": {
+        "x": 0.5,
+        "y": 0.24
+      },
+      "durationMs": 380,
+      "repeat": "{{scrolls}}",
+      "repeatDelayMs": 4500
+    },
+    {
+      "type": "key",
+      "key": "home"
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "scrolls": "12"
+  }
+}

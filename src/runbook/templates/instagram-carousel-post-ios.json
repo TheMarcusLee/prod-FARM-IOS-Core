@@ -1,0 +1,271 @@
+{
+  "id": "rb-starter-instagram-carousel-post-ios",
+  "name": "Instagram carousel post (iPhone)",
+  "description": "Opens the Instagram composer on POST, multi-selects the newest images, captions them and shares the carousel. On an iPhone.",
+  "platform": "ios",
+  "appId": "com.burbn.instagram",
+  "createdFor": {
+    "udid": "starter-template-iphone8",
+    "screen": {
+      "width": 375,
+      "height": 667,
+      "scale": 2
+    }
+  },
+  "template": "instagram-carousel-post-ios",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.burbn.instagram"
+    },
+    {
+      "type": "wait",
+      "ms": 7000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Create",
+        "fraction": {
+          "x": 0.5,
+          "y": 0.979
+        }
+      },
+      "seen": [
+        "Home",
+        "Reels",
+        "Search",
+        "Profile",
+        "Following",
+        "For you",
+        "Notifications"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 2500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Post",
+        "fraction": {
+          "x": 0.38,
+          "y": 0.94
+        }
+      },
+      "seen": [
+        "Recents",
+        "Gallery",
+        "Next",
+        "Select multiple",
+        "POST",
+        "REEL",
+        "STORY"
+      ],
+      "optional": true,
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 2500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Select multiple",
+        "fraction": {
+          "x": 0.12,
+          "y": 0.5
+        }
+      },
+      "seen": [
+        "Recents",
+        "Gallery",
+        "Next",
+        "Select multiple",
+        "POST",
+        "REEL",
+        "STORY"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.16,
+          "y": 0.62
+        }
+      },
+      "seen": [
+        "Recents",
+        "Gallery",
+        "Next",
+        "Select multiple",
+        "POST",
+        "REEL",
+        "STORY"
+      ],
+      "guess": true
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.5,
+          "y": 0.62
+        }
+      },
+      "seen": [
+        "Recents",
+        "Gallery",
+        "Next",
+        "Select multiple",
+        "POST",
+        "REEL",
+        "STORY"
+      ],
+      "guess": true
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.84,
+          "y": 0.62
+        }
+      },
+      "seen": [
+        "Recents",
+        "Gallery",
+        "Next",
+        "Select multiple",
+        "POST",
+        "REEL",
+        "STORY"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Next",
+        "fraction": {
+          "x": 0.9,
+          "y": 0.06
+        }
+      },
+      "seen": [
+        "Recents",
+        "Gallery",
+        "Next",
+        "Select multiple",
+        "POST",
+        "REEL",
+        "STORY"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 3000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Next",
+        "fraction": {
+          "x": 0.9,
+          "y": 0.06
+        }
+      },
+      "seen": [
+        "Recents",
+        "Gallery",
+        "Next",
+        "Select multiple",
+        "POST",
+        "REEL",
+        "STORY"
+      ],
+      "optional": true,
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 3000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Write a caption",
+        "fraction": {
+          "x": 0.5,
+          "y": 0.18
+        }
+      },
+      "seen": [
+        "Write a caption",
+        "Share",
+        "Tag people",
+        "Add location",
+        "Advanced settings"
+      ],
+      "guess": true
+    },
+    {
+      "type": "type",
+      "text": "{{caption}}"
+    },
+    {
+      "type": "key",
+      "key": "back"
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Share",
+        "fraction": {
+          "x": 0.5,
+          "y": 0.9
+        }
+      },
+      "seen": [
+        "Write a caption",
+        "Share",
+        "Tag people",
+        "Add location",
+        "Advanced settings"
+      ],
+      "guess": true
+    },
+    {
+      "type": "assert",
+      "text": "Posting",
+      "expect": "present",
+      "optional": true,
+      "guess": true
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "caption": "A few from today"
+  }
+}
