@@ -95,3 +95,37 @@ export function orientedScreen(screen: Size, stream: Size | undefined): Size {
 export function hasWebCodecs(scope: { VideoDecoder?: unknown } = globalThis): boolean {
     return typeof scope.VideoDecoder === 'function';
 }
+
+/**
+ * Chrome's H.264 decoder takes AVCC framing (4-byte length before each NAL unit) together with an
+ * avcC description built from the SPS and PPS; Annex B start codes with in-band parameter sets are
+ * silently not decoded. scrcpy sends Annex B, so every frame is re-framed on the way in.
+ */
+export function annexBToAvcc(annexB: Uint8Array): Uint8Array {
+    const starts: Array<[number, number]> = [];
+    for (let i = 0; i + 3 < annexB.length; i += 1) {
+        if (annexB[i] !== 0 || annexB[i + 1] !== 0) continue;
+        if (annexB[i + 2] === 1) { starts.push([i, i + 3]); i += 2; continue; }
+        if (annexB[i + 2] === 0 && annexB[i + 3] === 1) { starts.push([i, i + 4]); i += 3; }
+    }
+    if (!starts.length) return annexB;
+    const units = starts.map(([, from], index) => annexB.subarray(from, index + 1 < starts.length ? starts[index + 1]![0] : annexB.length));
+    const out = new Uint8Array(units.reduce((sum, unit) => sum + 4 + unit.length, 0));
+    let offset = 0;
+    for (const unit of units) {
+        out[offset] = unit.length >>> 24; out[offset + 1] = (unit.length >>> 16) & 255;
+        out[offset + 2] = (unit.length >>> 8) & 255; out[offset + 3] = unit.length & 255;
+        out.set(unit, offset + 4);
+        offset += 4 + unit.length;
+    }
+    return out;
+}
+
+/** The avcC record (ISO 14496-15) for one SPS and one PPS, as `VideoDecoderConfig.description`. */
+export function avcCDescription(sps: Uint8Array, pps: Uint8Array): Uint8Array {
+    return new Uint8Array([
+        1, sps[1] ?? 0, sps[2] ?? 0, sps[3] ?? 0, 0xff, 0xe1,
+        sps.length >>> 8, sps.length & 255, ...sps,
+        1, pps.length >>> 8, pps.length & 255, ...pps,
+    ]);
+}

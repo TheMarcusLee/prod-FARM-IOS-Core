@@ -150,7 +150,7 @@ test('the Android post routine taps the flow in order, types the caption and con
     assert.deepEqual(fake.pushed, ['clip.mp4']);
     assert.deepEqual(fake.typed, ['hello farm']);
     // The routine wakes the phone before opening the app, then dismisses the keyboard with back.
-    assert.deepEqual(fake.keys, ['wake', 'back']);
+    assert.deepEqual(fake.keys, ['wake', 'back', 'home']);
 });
 
 test('destination draft taps Drafts and waits for the draft confirmation instead', async () => {
@@ -160,7 +160,7 @@ test('destination draft taps Drafts and waits for the draft confirmation instead
     assert.deepEqual(fake.taps, ['Create', 'Upload', 'newest', 'Next', 'Next', 'Drafts']);
     // No caption in this manifest, so the caption field is never opened and nothing is typed.
     assert.deepEqual(fake.typed, []);
-    assert.deepEqual(fake.keys, ['wake']);
+    assert.deepEqual(fake.keys, ['wake', 'home']);
 });
 
 test('media is pushed newest-last so the first manifest file is the first gallery cell', async () => {

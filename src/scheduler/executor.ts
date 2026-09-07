@@ -260,7 +260,10 @@ export async function executeAutomation(
         if (requested) controller.abort(new Error('Stop requested'));
     }).catch(console.error), 1_000);
     const motionSeed = String(seedForExecution(execution.id));
-    const jitterMs = startJitterMs(execution.id, Date.now(), execution.deadlineAt.getTime());
+    // Jitter separates phones on the same schedule; a run started by hand (scheduled for the
+    // moment it was created) must start now.
+    const startedByHand = execution.scheduledFor.getTime() - execution.createdAt.getTime() < 60_000;
+    const jitterMs = startedByHand ? 0 : startJitterMs(execution.id, Date.now(), execution.deadlineAt.getTime());
     let device: Device;
     try {
         await repository.appendLogs(execution.id, attempt, [

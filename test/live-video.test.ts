@@ -15,7 +15,7 @@ import {
     qualityFor, type LiveQuality, type LiveStreamHandlers,
 } from '../src/live/sessions.js';
 import { FLAG_CONFIG, FLAG_KEYFRAME, encodeFrame, shouldSendFrame } from '../src/api/routes/live.js';
-import { chooseMode, decodeFrame, orientedScreen, viewMode } from '../static/dashboard/ts/live-modes.js';
+import { chooseMode, decodeFrame, orientedScreen, viewMode, annexBToAvcc, avcCDescription } from '../static/dashboard/ts/live-modes.js';
 import type { RegisteredDevice } from '../src/devices/registry.js';
 import type { SchedulerRepository } from '../src/scheduler/repository.js';
 
@@ -460,4 +460,20 @@ test('the browser reads the frame header and maps taps through the stream size',
     assert.deepEqual(orientedScreen(portrait, undefined), portrait);
     assert.deepEqual(orientedScreen(portrait, { width: 360, height: 800 }), portrait);
     assert.deepEqual(orientedScreen(portrait, { width: 800, height: 360 }), { width: 2400, height: 1080 });
+});
+
+test('Annex B frames are re-framed as AVCC and the parameter sets become an avcC description', () => {
+    const sps = Uint8Array.from([0x67, 0x64, 0x00, 0x1f, 0xac]);
+    const pps = Uint8Array.from([0x68, 0xee, 0x06, 0xf2]);
+    const idr = Uint8Array.from([0x65, 0xb8, 0x00, 0x01]);
+    const annexB = Uint8Array.from([0, 0, 0, 1, ...sps, 0, 0, 1, ...pps, 0, 0, 0, 1, ...idr]);
+    const avcc = annexBToAvcc(annexB);
+    assert.deepEqual(Array.from(avcc.subarray(0, 4)), [0, 0, 0, sps.length]);
+    assert.equal(avcc.length, 3 * 4 + sps.length + pps.length + idr.length);
+    assert.deepEqual(Array.from(avcc.subarray(avcc.length - idr.length)), Array.from(idr));
+    // A payload without start codes is passed through untouched.
+    assert.equal(annexBToAvcc(idr), idr);
+    const description = avcCDescription(sps, pps);
+    assert.deepEqual(Array.from(description.subarray(0, 6)), [1, 0x64, 0x00, 0x1f, 0xff, 0xe1]);
+    assert.equal(description.length, 6 + 2 + sps.length + 1 + 2 + pps.length);
 });

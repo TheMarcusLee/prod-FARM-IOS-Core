@@ -377,6 +377,13 @@ try {
         swipes += 1;
     }
 
+    // Leave the phone on its home screen rather than looping the last video until the next run.
+    try {
+        await remoteControl.performAction(udid, { type: 'home' });
+        console.log('Left TikTok on the home screen');
+    } catch (error) {
+        console.log(`Could not press Home at the end: ${error instanceof Error ? error.message : String(error)}`);
+    }
     const elapsedMs = Date.now() - runStartedAt;
     const reason = stopRequested ? 'stopped' : 'completed';
     if (session && persona) {

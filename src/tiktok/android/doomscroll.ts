@@ -308,6 +308,14 @@ export async function doomscrollOnAndroid(driver: DeviceDriver, options: Doomscr
         swipes += 1;
     }
 
+    // Leave the phone on its home screen rather than looping the last video until the next run.
+    try {
+        await driver.pressKey('home');
+        console.log('Left TikTok on the home screen');
+    } catch (error) {
+        console.log(`Could not press Home at the end: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
     const summary: DoomscrollSummary = {
         videosViewed, swipes, likes, saves, follows, searches,
         elapsedMs: now() - runStartedAt,

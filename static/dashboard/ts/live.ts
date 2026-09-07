@@ -5,8 +5,7 @@
  * screenshot polling the wall has always had. See docs/live-video.md.
  */
 import {
-    MAX_SOCKET_FAILURES, decodeFrame, hasWebCodecs, type Size,
-} from './live-modes.js';
+    MAX_SOCKET_FAILURES, decodeFrame, hasWebCodecs, type Size, annexBToAvcc, avcCDescription } from './live-modes.js';
 
 export * from './live-modes.js';
 
@@ -158,8 +157,12 @@ export class LivePlayer {
             this.options.onSize?.(this.streamSize);
         }
         const codec = message.decoderCodec ?? 'avc1.42e01e';
-        if (this.decoder && this.codec === codec) return;
-        this.codec = codec;
+        // The parameter sets are part of the decoder's configuration, not of the frames.
+        const description = message.sps && message.pps
+            ? avcCDescription(fromBase64(message.sps), fromBase64(message.pps)) : undefined;
+        const signature = `${codec}:${message.sps ?? ''}:${message.pps ?? ''}`;
+        if (this.decoder && this.codec === signature) return;
+        this.codec = signature;
         this.closeDecoder();
         const decoder = new VideoDecoder({
             output: (frame) => this.paint(frame),
@@ -168,6 +171,7 @@ export class LivePlayer {
         try {
             decoder.configure({
                 codec,
+                ...(description ? { description } : {}),
                 ...(this.streamSize ? { codedWidth: this.streamSize.width, codedHeight: this.streamSize.height } : {}),
                 optimizeForLatency: true,
             });
@@ -176,9 +180,6 @@ export class LivePlayer {
             return;
         }
         this.decoder = decoder;
-        if (message.sps && message.pps) {
-            this.parameters = concat(fromBase64(message.sps), fromBase64(message.pps));
-        }
     }
 
     private paint(frame: VideoFrame): void {
@@ -208,18 +209,13 @@ export class LivePlayer {
     private decodeChunk(bytes: Uint8Array): void {
         const frame = decodeFrame(bytes);
         if (!frame) return;
-        if (frame.config) {
-            this.parameters = frame.data.slice();
-            return;
-        }
+        // Parameter sets arrive in the config message; the in-band copy is not needed.
+        if (frame.config) return;
         const decoder = this.decoder;
         if (!decoder || decoder.state !== 'configured') return;
         // Nothing decodes before the first keyframe, so delta frames are simply dropped until one.
         if (!frame.keyframe && !this.painted && !this.decodedKey) return;
-        let data = frame.data;
-        if (frame.keyframe && this.parameters) {
-            data = concat(this.parameters, data);
-        }
+        const data = annexBToAvcc(frame.data);
         try {
             decoder.decode(new EncodedVideoChunk({
                 type: frame.keyframe ? 'key' : 'delta',

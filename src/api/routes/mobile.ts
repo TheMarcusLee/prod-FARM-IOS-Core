@@ -147,7 +147,7 @@ export function bucketFor(method: string, url: string): Bucket {
         return { name: 'action', max: envNumber('RATE_LIMIT_ACTION', 10), windowMs: 1_000, scope: remote[1] ?? '' };
     }
     if (remote?.[2] === 'screenshot') {
-        return { name: 'screenshot', max: envNumber('RATE_LIMIT_SCREENSHOT', 5), windowMs: 1_000, scope: remote[1] ?? '' };
+        return { name: 'screenshot', max: envNumber('RATE_LIMIT_SCREENSHOT', 20), windowMs: 1_000, scope: remote[1] ?? '' };
     }
     if (['GET', 'HEAD', 'OPTIONS'].includes(method)) {
         return { name: 'read', max: envNumber('RATE_LIMIT_READ', 300), windowMs: 60_000, scope: '' };

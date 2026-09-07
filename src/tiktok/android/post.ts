@@ -295,6 +295,9 @@ export async function postOnAndroid(driver: DeviceDriver, manifest: PostManifest
         // The upload continues in the background; leave the app alone while it finishes.
         await driver.pause(timing.settleMs * 4, timing.signal);
     }
+    // Then go home: a phone left inside TikTok keeps playing whatever it landed on.
+    await driver.pressKey('home');
+    console.log('Left TikTok on the home screen');
 }
 
 /** The manifest's `musicUrl` is an iOS-only deep-link flow and is ignored on Android. */

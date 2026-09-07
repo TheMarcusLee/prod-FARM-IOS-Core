@@ -244,7 +244,7 @@ test('rate limit buckets separate remote actions per device from ordinary reads 
     const action = bucketFor('POST', '/api/devices/udid-1/remote/action');
     assert.deepEqual([action.name, action.max, action.windowMs, action.scope], ['action', 10, 1_000, 'udid-1']);
     const shot = bucketFor('GET', '/api/devices/udid-2/remote/screenshot');
-    assert.deepEqual([shot.name, shot.max, shot.windowMs, shot.scope], ['screenshot', 5, 1_000, 'udid-2']);
+    assert.deepEqual([shot.name, shot.max, shot.windowMs, shot.scope], ['screenshot', 20, 1_000, 'udid-2']);
     assert.deepEqual(bucketFor('GET', '/api/devices').max, 300);
     assert.deepEqual(bucketFor('POST', '/api/schedules').max, 60);
 });
