@@ -90,11 +90,34 @@ export const defaultReapTools: ReapTools = {
         }
     },
     kill(pid) {
-        for (const signal of ['SIGTERM', 'SIGKILL'] as const) {
-            try { process.kill(-pid, signal); } catch { /* the group is already gone */ }
-        }
+        for (const signal of ['SIGTERM', 'SIGKILL'] as const) signalGroupOrProcess(pid, signal);
     },
 };
+
+/**
+ * Signals the process group led by `pid`, and when there is no such group, the
+ * process itself.
+ *
+ * Services spawned by this app are `detached`, so their pid leads a group and the
+ * negative form takes the whole tree down. The bundled postmaster is not: the
+ * `embedded-postgres` library spawns it as an ordinary child, in Electron's own
+ * group, so `kill(-pid)` says ESRCH and a leftover postmaster would survive every
+ * relaunch while holding both the port and the cluster's lock file.
+ */
+export function signalGroupOrProcess(
+    pid: number, signal: NodeJS.Signals, send: (pid: number, signal: NodeJS.Signals) => void = process.kill,
+): 'group' | 'process' | 'gone' {
+    try {
+        send(-pid, signal);
+        return 'group';
+    } catch { /* not a group leader, or the group is already gone */ }
+    try {
+        send(pid, signal);
+        return 'process';
+    } catch {
+        return 'gone';
+    }
+}
 
 /**
  * The on-disk list of children this app currently supervises.

@@ -82,6 +82,11 @@ interface Runtime {
     totalRestarts: number;
     /** Consecutive failed sweeps while in `healthy`; reset by any success. */
     healthFailures: number;
+    /**
+     * Parked by startAll because a required dependency was not healthy. Launched
+     * automatically the moment that dependency comes good.
+     */
+    waiting: boolean;
 }
 
 /**
@@ -97,6 +102,8 @@ export class Supervisor extends EventEmitter {
     private shuttingDown = false;
     private monitorTimer: unknown = null;
     private sweeping = false;
+    private releasing = false;
+    private releaseRequested = false;
 
     constructor(definitions: readonly ServiceDefinition[], options: SupervisorOptions = {}) {
         super();
@@ -117,6 +124,7 @@ export class Supervisor extends EventEmitter {
                 lastExitAt: 0,
                 totalRestarts: 0,
                 healthFailures: 0,
+                waiting: false,
             });
         }
         assertAcyclic(definitions);
@@ -251,26 +259,37 @@ export class Supervisor extends EventEmitter {
         await this.startAll();
     }
 
-    /** Start every service in dependency order. Optional failures never abort the run. */
+    /**
+     * Start every service in dependency order.
+     *
+     * A required service that fails to come up does not abort the run: services
+     * that do not depend on it still start, and the ones that do are parked as
+     * `waiting on <it>` and launched automatically once it recovers — a launch
+     * failure goes through the same backoff as a crash, so a Postgres that could
+     * not start on the first try gets its dependents the moment it does. The first
+     * required failure is still reported to the caller, so a smoke run fails.
+     */
     async startAll(): Promise<void> {
         this.shuttingDown = false;
+        let firstFailure: unknown = null;
         for (const id of this.startOrder()) {
             const runtime = this.runtimeOf(id);
+            if (runtime.handle || runtime.state === 'healthy') continue;
             const blocked = this.blockedBy(id);
             if (blocked.length > 0) {
+                runtime.desired = true;
+                runtime.waiting = true;
                 this.transition(runtime, 'failed', `waiting on ${blocked.join(', ')}`);
                 continue;
             }
             try {
                 await this.start(id);
             } catch (error) {
-                if (!runtime.definition.optional) {
-                    this.startHealthMonitor();
-                    throw error;
-                }
+                if (!runtime.definition.optional && firstFailure === null) firstFailure = error;
             }
         }
         this.startHealthMonitor();
+        if (firstFailure !== null) throw firstFailure;
     }
 
     /** Stop everything in reverse dependency order; never rejects. */
@@ -312,6 +331,7 @@ export class Supervisor extends EventEmitter {
     async stop(id: string): Promise<void> {
         const runtime = this.runtimeOf(id);
         runtime.desired = false;
+        runtime.waiting = false;
         runtime.generation += 1;
         if (runtime.backoffTimer !== null) {
             this.clock.clearTimeout(runtime.backoffTimer);
@@ -331,6 +351,7 @@ export class Supervisor extends EventEmitter {
     private async launch(runtime: Runtime): Promise<void> {
         const id = runtime.definition.id;
         if (runtime.handle) return;
+        runtime.waiting = false;
         const generation = ++runtime.generation;
 
         if (runtime.definition.preflight) {
@@ -349,7 +370,15 @@ export class Supervisor extends EventEmitter {
         try {
             handle = await runtime.definition.launch(this.launchContext(id));
         } catch (error) {
-            this.transition(runtime, 'failed', messageOf(error));
+            if (generation !== runtime.generation) return;
+            // A long-lived service that could not even start is treated like one
+            // that crashed straight away: it goes through the backoff and gets its
+            // retries, instead of being parked with its dependents waiting for ever.
+            if (runtime.definition.oneshot || !runtime.desired || this.shuttingDown) {
+                this.transition(runtime, 'failed', messageOf(error));
+            } else {
+                this.onUnexpectedExit(runtime, null, messageOf(error));
+            }
             if (!runtime.definition.optional) throw error;
             return;
         }
@@ -484,6 +513,34 @@ export class Supervisor extends EventEmitter {
         runtime.detail = detail;
         if (state === 'stopped' || state === 'not-configured' || state === 'failed') runtime.since = null;
         this.emitChange();
+        if (state === 'healthy') this.releaseWaiting();
+    }
+
+    /**
+     * Launches every service startAll parked as `waiting on …` whose dependencies
+     * are now all healthy. Runs one at a time in start order, and re-runs itself
+     * when a launch it triggered makes something else healthy in the middle.
+     */
+    private releaseWaiting(): void {
+        this.releaseRequested = true;
+        if (this.releasing) return;
+        this.releasing = true;
+        void (async () => {
+            try {
+                while (this.releaseRequested && !this.shuttingDown) {
+                    this.releaseRequested = false;
+                    for (const id of this.startOrder()) {
+                        const runtime = this.runtimeOf(id);
+                        if (!runtime.waiting || !runtime.desired || runtime.handle) continue;
+                        if (this.blockedBy(id).length > 0) continue;
+                        this.appendLog(id, 'app', `${runtime.definition.dependsOn?.join(', ') ?? 'dependencies'} ready; starting`);
+                        await this.launch(runtime).catch(() => undefined);
+                    }
+                }
+            } finally {
+                this.releasing = false;
+            }
+        })();
     }
 
     private emitChange(): void {

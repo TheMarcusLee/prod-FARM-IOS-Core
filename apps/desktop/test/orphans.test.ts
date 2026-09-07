@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import {
-    ChildRegistry, parseChildRecords, reapOrphans, type ChildRecord, type ReapTools,
+    ChildRegistry, parseChildRecords, reapOrphans, signalGroupOrProcess, type ChildRecord, type ReapTools,
 } from '../src/main/orphans.ts';
 
 function record(pid: number, label = 'web', command = `node ${label}.js`): ChildRecord {
@@ -113,4 +113,28 @@ test('an unreadable pid file does not stop the app from starting', () => {
 
     assert.deepEqual(registry.previous(), []);
     assert.deepEqual(registry.reapPrevious(tools({})), []);
+});
+
+test('a leftover that leads no process group is signalled directly', () => {
+    // The bundled postmaster: spawned by a library as an ordinary child, so the
+    // group form the detached services rely on says ESRCH and would leave it alive.
+    const sent: Array<[number, string]> = [];
+    const send = (pid: number, signal: NodeJS.Signals) => {
+        if (pid < 0) throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+        sent.push([pid, signal]);
+    };
+
+    assert.equal(signalGroupOrProcess(9123, 'SIGTERM', send), 'process');
+    assert.deepEqual(sent, [[9123, 'SIGTERM']]);
+});
+
+test('a leftover that leads a process group is signalled as a group, once', () => {
+    const sent: Array<[number, string]> = [];
+    const send = (pid: number, signal: NodeJS.Signals) => { sent.push([pid, signal]); };
+
+    assert.equal(signalGroupOrProcess(501, 'SIGTERM', send), 'group');
+    assert.deepEqual(sent, [[-501, 'SIGTERM']], 'the process itself is not signalled twice');
+
+    const gone = () => { throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' }); };
+    assert.equal(signalGroupOrProcess(501, 'SIGKILL', gone), 'gone');
 });

@@ -73,11 +73,82 @@ test('a required dependency that is not healthy blocks its dependent', async () 
     const { supervisor } = build([db, web]);
 
     await supervisor.startAll();
+    // The launch failure is retried like a crash; give the retries their turn.
+    await settle();
 
     assert.equal(supervisor.stateOf('db'), 'failed');
+    assert.match(supervisor.snapshotOf('db').detail, /boom; gave up after 3 restarts/);
+    assert.equal(db.launches, 4);
     assert.equal(supervisor.stateOf('web'), 'failed');
     assert.equal(supervisor.snapshotOf('web').detail, 'waiting on db');
     assert.equal(web.launches, 0);
+});
+
+test('a launch that fails and then succeeds brings its waiting dependents up', async () => {
+    // The observed Postgres failure: a leftover postmaster makes the first start
+    // throw. The service used to be parked in `failed` with migrations, worker and
+    // web waiting on it for ever, and the supervisor never looked again.
+    let attempts = 0;
+    const db = fakeService({ id: 'db', healthy: () => true });
+    const launch = db.definition.launch;
+    db.definition.launch = async (context) => {
+        attempts += 1;
+        if (attempts < 3) throw new Error('lock file "postmaster.pid" already exists');
+        return launch(context);
+    };
+    const migrations = fakeService({ id: 'migrations', dependsOn: ['db'], oneshot: true });
+    const migrate = migrations.definition.launch;
+    migrations.definition.launch = async (context) => {
+        const handle = await migrate(context);
+        migrations.current()?.finish(0);
+        return handle;
+    };
+    const web = fakeService({ id: 'web', dependsOn: ['migrations'], healthy: () => true });
+    const adb = fakeService({ id: 'adb', optional: true, healthy: () => true });
+    const { supervisor, clock } = build([db, migrations, web, adb]);
+
+    await assert.rejects(() => supervisor.startAll(), /postmaster\.pid/);
+    assert.equal(supervisor.stateOf('adb'), 'healthy', 'services that do not need db still start');
+    assert.equal(supervisor.snapshotOf('web').detail, 'waiting on migrations');
+    assert.equal(supervisor.snapshotOf('migrations').detail, 'waiting on db');
+
+    await settle();
+
+    assert.equal(attempts, 3);
+    assert.deepEqual(clock.backoffDelays(10).slice(0, 2), [backoffMs(0), backoffMs(1)]);
+    assert.equal(supervisor.stateOf('db'), 'healthy');
+    assert.equal(supervisor.stateOf('migrations'), 'healthy');
+    assert.equal(supervisor.stateOf('web'), 'healthy');
+    assert.equal(web.launches, 1);
+    assert.ok(
+        supervisor.recentLogs('web').some((line) => line.text === 'migrations ready; starting'),
+        'the release is on the record',
+    );
+});
+
+test('a dependent parked as waiting is not launched by a stop or a shutdown', async () => {
+    const db = fakeService({ id: 'db', failLaunch: 'boom' });
+    const web = fakeService({ id: 'web', dependsOn: ['db'], healthy: () => true });
+    const { supervisor } = build([db, web]);
+
+    await assert.rejects(() => supervisor.startAll(), /boom/);
+    await supervisor.stopAll();
+    await settle();
+
+    assert.equal(supervisor.stateOf('web'), 'stopped');
+    assert.equal(web.launches, 0);
+});
+
+test('a one-shot that throws on launch is not retried', async () => {
+    const migrations = fakeService({ id: 'migrations', oneshot: true, failLaunch: 'no node' });
+    const { supervisor } = build([migrations]);
+
+    await assert.rejects(() => supervisor.startAll(), /no node/);
+    await settle();
+
+    assert.equal(supervisor.stateOf('migrations'), 'failed');
+    assert.equal(supervisor.snapshotOf('migrations').detail, 'no node');
+    assert.equal(migrations.launches, 1);
 });
 
 test('a crash is restarted with exponential backoff and then given up on', async () => {

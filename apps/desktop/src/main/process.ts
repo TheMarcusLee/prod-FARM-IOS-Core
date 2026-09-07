@@ -14,6 +14,18 @@ export function setChildRegistry(next: ChildRegistry | null): void {
     registry = next;
 }
 
+/**
+ * For services that are not spawned through `spawnService` — the bundled Postgres
+ * is started by a library — but still have a pid the next launch must know about.
+ */
+export function registerChild(pid: number, label: string): void {
+    registry?.add(pid, label);
+}
+
+export function unregisterChild(pid: number): void {
+    registry?.remove(pid);
+}
+
 export interface SpawnSpec {
     file: string;
     args: readonly string[];

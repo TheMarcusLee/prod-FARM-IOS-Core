@@ -286,9 +286,15 @@ the app version and the target database, written **only after a run that exited
 Resetting the database clears the stamp.
 
 A `postmaster.pid` left behind by a hard kill of the app or the machine is
-detected before every start: when no process holds the pid it is removed and the
-fact is logged, and when one does, that postmaster is reused. Nothing else in the
-data directory is touched — crash recovery is Postgres's own job.
+detected before every start. When no process holds the pid it is removed and the
+fact is logged. When a live postmaster from a previous run holds it, the app
+never starts a second one on top of it: if it is on the configured port and
+answers, it is adopted and supervised as if this run had started it; if it is on
+another port or never answers, it is shut down (`SIGINT`, then `SIGKILL`) and a
+fresh one started. Nothing else in the data directory is touched — crash
+recovery is Postgres's own job. Should the first start still fail, the service
+is retried with the same backoff as a crash, and migrations, worker and web are
+started automatically once it is healthy.
 
 ### Pointing it at your own PostgreSQL
 
@@ -341,7 +347,9 @@ Every service is spawned `detached`, in its own process group, so stopping one
 also stops whatever it spawned. The cost is that a crash or a force‑quit of
 Electron leaves those groups running — the worker keeps posting, the web server
 keeps the port — so every spawned pid is recorded in `supervised-children.json`
-and the next launch kills what the last one left behind. It refuses to signal a
+and the next launch kills what the last one left behind. The bundled postmaster
+is recorded too, although a library spawns it rather than this app; it is not a
+process‑group leader, so it is signalled directly. The reaper refuses to signal a
 pid whose `ps` command line no longer matches the one recorded, so a pid the OS
 has since recycled is never touched. A clean quit empties the file.
 
@@ -443,9 +451,11 @@ means an operator who needs a fix has to be told about it out of band.
   `embedded-postgres` gives no exit signal, so a postmaster that dies on its own
   is caught by the 15‑second re‑probe rather than instantly. The other services
   are supervised properly.
-- **A leftover postmaster blocks startup.** If the app is `kill -9`'d, the
-  Postgres process can survive and hold the data directory; the next launch
-  fails with a message naming the stale PID. Kill it and start again.
+- **A leftover postmaster is adopted or replaced, not diagnosed.** If the app
+  is `kill -9`'d the Postgres process survives; the next launch reaps it from
+  `supervised-children.json`, and failing that adopts it or shuts it down before
+  starting (see "Database"). A postmaster that ignores `SIGKILL` is the one case
+  still reported to the operator by pid.
 - **`embedded-postgres` prints `TypeError: done is not a function`** from its own
   exit hook when the app exits. It is cosmetic and does not affect shutdown.
 - **The main process is CommonJS on purpose.** Electron 44's ESM main entry did
