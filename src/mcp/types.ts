@@ -1,4 +1,5 @@
 import type { CreateTaskInput, JsonObject, ScheduleTiming } from '../types.js';
+import type { Key, Point, Swipe, UiNode } from '../drivers/types.js';
 
 /**
  * The narrow shapes the MCP tools need. Structural subsets of the real
@@ -87,6 +88,21 @@ export interface PluginLike {
     tasks: readonly { type: string; version: number; displayName: string }[];
 }
 
+/**
+ * The part of `DeviceDriver` the agent-facing tools need. A real driver satisfies it as it is;
+ * a test fake only has to implement these seven verbs rather than the whole control channel.
+ */
+export interface DeviceControlLike {
+    readonly udid: string;
+    uiTree(): Promise<UiNode>;
+    screenshot(): Promise<Buffer>;
+    tap(point: Point): Promise<void>;
+    swipe(swipe: Swipe): Promise<void>;
+    pressKey(key: Key): Promise<void>;
+    type(text: string): Promise<void>;
+    launchApp(appId: string): Promise<void>;
+}
+
 /** Everything the tool set calls. Wired to the live farm in `dependencies.ts`, faked in tests. */
 export interface McpDependencies {
     scheduler: SchedulerLike;
@@ -99,4 +115,12 @@ export interface McpDependencies {
     dataDirectory?: string;
     /** Directories `upload_asset`'s `path` may read. Defaults to MCP_UPLOAD_DIRS / the content directory. */
     uploadDirectories?: readonly string[];
+    /**
+     * A live control channel for one phone. Absent means this deployment does not expose device
+     * control over MCP at all, and the read_screen / tap / swipe / type family says so rather
+     * than half-working.
+     */
+    control?(udid: string): Promise<DeviceControlLike>;
+    /** Where confirmed selectors are stored. Defaults to `<data dir>/selector-overrides.json`. */
+    selectorOverridesPath?: string;
 }
