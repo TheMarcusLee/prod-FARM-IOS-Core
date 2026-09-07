@@ -15,6 +15,18 @@ A profile is a full set of tap targets for one screen geometry, in
 - `passcodeKeypad` — column x's and row y's for auto‑unlock
 - `tiktok` — every tap/swipe the built‑in TikTok plugin uses (tabs, create,
   media picker grid, caption field, like/save, feed swipe, …)
+- `instagram` — the same for the built‑in Instagram plugin (tabs, create, the
+  POST/REEL surface strip, picker grid, caption field, Share and the Save draft
+  sheet, like/save, feed swipe)
+
+> **The `instagram` section is entirely unverified.** Nobody has calibrated
+> Instagram against a real iPhone; the shipped `iphone8` values are the TikTok
+> layout's nearest equivalents and are a starting point for a calibration
+> session, not working coordinates. Correct them in
+> `src/devices/coordinates.ts` and note what you found in
+> [instagram.md](instagram.md). Unlike the TikTok points, they are **not** in
+> `CALIBRATABLE_POINTS`, so there are no per‑device overrides for them yet and
+> no calibration dialog on the device page — they are profile‑level only.
 
 ```ts
 export const DEVICE_COORDINATES = {

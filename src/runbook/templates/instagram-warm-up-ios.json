@@ -1,0 +1,93 @@
+{
+  "id": "rb-starter-instagram-warm-up-ios",
+  "name": "Instagram warm-up (iPhone)",
+  "description": "Opens Instagram, scrolls the feed, moves to reels and scrolls those, as many times as you ask for. On an iPhone.",
+  "platform": "ios",
+  "appId": "com.burbn.instagram",
+  "createdFor": {
+    "udid": "starter-template-iphone8",
+    "screen": {
+      "width": 375,
+      "height": 667,
+      "scale": 2
+    }
+  },
+  "template": "instagram-warm-up-ios",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.burbn.instagram"
+    },
+    {
+      "type": "wait",
+      "ms": 7000
+    },
+    {
+      "type": "wait",
+      "ms": 3000
+    },
+    {
+      "type": "swipe",
+      "from": {
+        "x": 0.5,
+        "y": 0.78
+      },
+      "to": {
+        "x": 0.5,
+        "y": 0.24
+      },
+      "durationMs": 450,
+      "repeat": "{{scrolls}}",
+      "repeatDelayMs": 4500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "text": "Reels",
+        "fraction": {
+          "x": 0.5,
+          "y": 0.979
+        }
+      },
+      "seen": [
+        "Home",
+        "Reels",
+        "Search",
+        "Profile",
+        "Following",
+        "For you",
+        "Notifications"
+      ],
+      "optional": true,
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 3000
+    },
+    {
+      "type": "swipe",
+      "from": {
+        "x": 0.5,
+        "y": 0.78
+      },
+      "to": {
+        "x": 0.5,
+        "y": 0.24
+      },
+      "durationMs": 450,
+      "repeat": "{{scrolls}}",
+      "repeatDelayMs": 4500
+    },
+    {
+      "type": "key",
+      "key": "home"
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "scrolls": "12"
+  }
+}

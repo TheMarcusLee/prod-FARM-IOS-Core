@@ -1,0 +1,103 @@
+<style>.ig-form{display:grid;gap:10px;margin:12px 0 24px}.ig-form label{display:grid;gap:4px}.ig-timing{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}</style>
+<p class="bl-muted">Instagram handles signed in on this phone live in <code>pluginData["com.backline.instagram"]</code> — they are separate from the TikTok list above.</p>
+<form id="ig-accounts-form" class="ig-form">
+  <label>Instagram handles<input class="bl-input" name="accounts" placeholder="@account_one, @account_two" autocomplete="off"></label>
+  <button class="bl-btn bl-btn-sm" type="submit">Save Instagram accounts</button>
+</form>
+<form id="ig-warmup-form" class="ig-form">
+  <h3>Warm up</h3>
+  <div class="ig-timing">
+    <label>Duration (minutes)<input class="bl-input" name="durationMinutes" type="number" min="1" max="180" value="10"></label>
+    <label>Surface<select class="bl-select" name="surface"><option value="both">Feed then reels</option><option value="feed">Feed</option><option value="reels">Reels</option></select></label>
+    <label>Account<input class="bl-input" name="account" autocomplete="off" placeholder="@account"></label>
+  </div>
+  <div><label class="bl-check"><input name="likeEnabled" type="checkbox" checked> Like</label> <label class="bl-check"><input name="saveEnabled" type="checkbox"> Save</label></div>
+  <div class="ig-timing"><label>Schedule<select class="bl-select" name="scheduleKind"><option value="now">Run now</option><option value="once">Once</option><option value="daily">Daily</option><option value="weekly">Weekly</option></select></label><label>When / local time<input class="bl-input" name="time" type="datetime-local"></label><label>Weekdays (0–6)<input class="bl-input" name="weekdays" placeholder="1,3,5"></label></div>
+  <button class="bl-btn bl-btn-sm" type="submit">Schedule warm-up</button>
+</form>
+<form id="ig-post-form" class="ig-form">
+  <h3>Post</h3>
+  <label>Media — 1 video (reel), 1 image (photo), or 2–20 images (carousel)<input class="bl-input" name="media" type="file" accept="image/*,video/*" multiple required></label>
+  <div class="ig-timing">
+    <label>Account<input class="bl-input" name="account" autocomplete="off" placeholder="@account (optional)"></label>
+    <label>Destination<select class="bl-select" name="destination"><option value="draft">Draft</option><option value="publish">Publish</option></select></label>
+  </div>
+  <label>Caption<textarea class="bl-textarea" name="caption" maxlength="2200"></textarea></label>
+  <label class="bl-check"><input name="recurringPublishConfirmed" type="checkbox"> I explicitly approve recurring public posts</label>
+  <div class="ig-timing"><label>Schedule<select class="bl-select" name="scheduleKind"><option value="now">Run now</option><option value="once">Once</option><option value="daily">Daily</option><option value="weekly">Weekly</option></select></label><label>When / local time<input class="bl-input" name="time" type="datetime-local"></label><label>Weekdays (0–6)<input class="bl-input" name="weekdays" placeholder="1,3,5"></label></div>
+  <button class="bl-btn bl-btn-sm" type="submit">Upload and schedule</button>
+</form>
+<p id="ig-form-result" class="bl-muted" aria-live="polite"></p>
+<script>
+(function () {
+  var deviceUdid = decodeURIComponent(location.pathname.split('/').pop());
+  var base = '/api/devices/' + encodeURIComponent(deviceUdid);
+  var result = document.getElementById('ig-form-result');
+  function timingFields(form, body) {
+    var kind = form.get('scheduleKind') || 'now';
+    body.append('scheduleKind', kind);
+    if (kind === 'now') return;
+    var raw = String(form.get('time') || '');
+    if (!raw) throw new Error('Choose a date/time.');
+    if (kind === 'once') { body.append('runAt', new Date(raw).toISOString()); return; }
+    body.append('localTime', raw.includes('T') ? raw.split('T')[1].slice(0, 5) : raw.slice(0, 5));
+    body.append('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone);
+    if (kind === 'weekly') body.append('weekdays', String(form.get('weekdays') || ''));
+  }
+  function timingJson(form) {
+    var kind = form.get('scheduleKind') || 'now';
+    if (kind === 'now') return {kind: 'now'};
+    var raw = String(form.get('time') || '');
+    if (!raw) throw new Error('Choose a date/time.');
+    if (kind === 'once') return {kind: 'once', runAt: new Date(raw).toISOString()};
+    var timing = {kind: kind, localTime: raw.includes('T') ? raw.split('T')[1].slice(0, 5) : raw.slice(0, 5), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone};
+    if (kind === 'weekly') timing.weekdays = String(form.get('weekdays') || '').split(',').map(Number).filter(Number.isInteger);
+    return timing;
+  }
+  document.getElementById('ig-accounts-form').addEventListener('submit', async function (event) {
+    event.preventDefault(); result.textContent = 'Saving…';
+    try {
+      var handles = String(new FormData(event.currentTarget).get('accounts') || '').split(',');
+      var response = await fetch(base + '/instagram/accounts', {method: 'PATCH', headers: {'content-type': 'application/json'}, body: JSON.stringify({accounts: handles})});
+      if (!response.ok) throw new Error(((await response.json()) || {}).error || 'Request failed');
+      result.textContent = 'Instagram accounts saved.';
+    } catch (error) { result.textContent = error.message; }
+  });
+  document.getElementById('ig-warmup-form').addEventListener('submit', async function (event) {
+    event.preventDefault(); result.textContent = 'Scheduling…';
+    try {
+      var form = new FormData(event.currentTarget);
+      var body = new URLSearchParams();
+      body.append('durationMinutes', String(form.get('durationMinutes') || ''));
+      body.append('surface', String(form.get('surface') || 'both'));
+      if (form.get('account')) body.append('account', String(form.get('account')));
+      if (form.has('likeEnabled')) body.append('likeEnabled', 'on');
+      if (form.has('saveEnabled')) body.append('saveEnabled', 'on');
+      timingFields(form, body);
+      var response = await fetch(base + '/fragments/instagram-warmup-run', {method: 'POST', headers: {'content-type': 'application/x-www-form-urlencoded'}, body: body});
+      if (!response.ok) throw new Error('Request failed');
+      result.textContent = 'Warm-up scheduled.';
+      setTimeout(function () { location.reload(); }, 700);
+    } catch (error) { result.textContent = error.message; }
+  });
+  document.getElementById('ig-post-form').addEventListener('submit', async function (event) {
+    event.preventDefault(); result.textContent = 'Uploading…';
+    try {
+      var form = new FormData(event.currentTarget);
+      var files = form.getAll('media').filter(function (file) { return file.size; });
+      if (files.length < 1 || files.length > 20) throw new Error('Choose between 1 and 20 files.');
+      var upload = new FormData();
+      files.forEach(function (file) { upload.append('media', file, file.name); });
+      upload.append('destination', String(form.get('destination')));
+      if (form.get('account')) upload.append('account', String(form.get('account')));
+      if (form.get('caption')) upload.append('caption', String(form.get('caption')));
+      if (form.has('recurringPublishConfirmed')) upload.append('recurringPublishConfirmed', 'true');
+      upload.append('timing', JSON.stringify(timingJson(form)));
+      var response = await fetch(base + '/instagram/posts', {method: 'POST', body: upload});
+      if (!response.ok) throw new Error(((await response.json()) || {}).error || 'Request failed');
+      result.textContent = 'Instagram post scheduled.';
+      setTimeout(function () { location.reload(); }, 700);
+    } catch (error) { result.textContent = error.message; }
+  });
+})();
+</script>
