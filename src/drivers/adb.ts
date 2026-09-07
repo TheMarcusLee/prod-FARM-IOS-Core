@@ -23,7 +23,7 @@ export interface AdbDriverOptions {
     motionSeed?: Seed;
 }
 
-const ANDROID_KEYCODES: Record<Key, number> = { home: 3, back: 4, enter: 66, delete: 67, recents: 187, power: 26 };
+const ANDROID_KEYCODES: Record<Key, number> = { home: 3, back: 4, enter: 66, delete: 67, recents: 187, power: 26, wake: 224 };
 
 /** uiautomator writes here, then we `cat` it; OEM builds only ever print a banner on stdout. */
 const DUMP_PATH = '/sdcard/window_dump.xml';

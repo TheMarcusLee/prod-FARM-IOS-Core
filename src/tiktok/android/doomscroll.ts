@@ -15,7 +15,7 @@ import { readMemory, writeMemory, type PersonaMemory } from '../../persona/memor
 import { readVideo } from '../../persona/observe.js';
 import { beginSession, describeSession, finishSession, noteDecision, noteSearch } from '../../persona/session.js';
 import { driverFromEnv } from './driver-from-env.js';
-import { recognizeOnDevice, tapIfPresent, type SelectorList, type TapOptions } from './ui.js';
+import { recognizeOnDevice, tapIfPresent, waitForAny, type SelectorList, type TapOptions } from './ui.js';
 import { TIKTOK_ANDROID_PACKAGE, switchAccount } from './post.js';
 
 /**
@@ -103,6 +103,32 @@ export interface DoomscrollSummary {
  * The flick to the next video: an arc starting somewhere in this device's thumb zone, with its
  * own length, curvature and speed. Two of these are never the same shape (src/motion/gesture.ts).
  */
+/**
+ * A warm-up must start on the For You feed. TikTok may open on a profile, a notification, a
+ * half-finished upload or a sign-in sheet, so: back out of anything modal, tap the Home tab if a
+ * tab bar is visible, then wait for the feed. Never fatal — the run logs what it saw and carries on.
+ */
+async function ensureFeed(
+    driver: DeviceDriver, tapping: TapOptions | undefined,
+    sleep: (ms: number) => Promise<void>,
+): Promise<void> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (await tapIfPresent(driver, 'Home tab', FEED_SELECTORS.homeTab, tapping)) {
+            console.log('On the feed');
+            return;
+        }
+        console.log(`No tab bar on screen (attempt ${attempt + 1}); pressing back`);
+        await driver.pressKey('back');
+        await sleep(900);
+    }
+    try {
+        await waitForAny(driver, 'the For You feed', FEED_SELECTORS.homeTab, { timeoutMs: 8_000 });
+        console.log('On the feed');
+    } catch (error) {
+        console.log(`Could not confirm the feed; scrolling anyway. ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
+
 async function swipeToNextVideo(driver: DeviceDriver, motion: MotionSource): Promise<void> {
     await driver.gesture(motion.swipe(await driver.screen(), { direction: 'up' }));
 }
@@ -164,9 +190,12 @@ export async function doomscrollOnAndroid(driver: DeviceDriver, options: Doomscr
         + `likeEnabled=${likeEnabled} saveEnabled=${saveEnabled}`,
     );
 
+    // A phone that dozed off shows nothing and launches nothing; wake it first.
+    await driver.pressKey('wake');
     console.log(`Launching ${packageName} on ${driver.udid}`);
     await driver.launchApp(packageName);
     await sleep(motion.pause('afterOpenApp'));
+    await ensureFeed(driver, tapping, sleep);
 
     if (options.account) {
         const switchOptions = {
@@ -174,8 +203,7 @@ export async function doomscrollOnAndroid(driver: DeviceDriver, options: Doomscr
         };
         await switchAccount(driver, options.account, switchOptions);
         // The switch leaves the app on the Profile tab; the loop below expects the feed.
-        await tapIfPresent(driver, 'Home tab', FEED_SELECTORS.homeTab, tapping);
-        await sleep(motion.pause('reaction'));
+        await ensureFeed(driver, tapping, sleep);
     }
 
     const deadline = now() + sessionLength * 60_000;

@@ -265,6 +265,7 @@ export async function postOnAndroid(driver: DeviceDriver, manifest: PostManifest
     await pushAllMedia(driver, manifest);
 
     console.log(`Launching ${packageName} on ${driver.udid}`);
+    await driver.pressKey('wake');
     await driver.launchApp(packageName);
     await driver.pause(timing.settleMs, timing.signal);
 

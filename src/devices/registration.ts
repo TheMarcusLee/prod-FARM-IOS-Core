@@ -716,6 +716,16 @@ export class DeviceRegistrationService implements DeviceRegistrationManager {
             return;
         }
         const serial = session.device.udid;
+        if (bootstrap) {
+            // A farm phone that dozes off streams nothing and cannot be driven. Developer options'
+            // "Stay awake" is the honest fix and adb can set it directly (7 = any charger type).
+            try {
+                await this.android.stayAwake(serial);
+                this.log(session, 'Set the phone to stay awake while it is plugged in');
+            } catch (error) {
+                this.log(session, `Could not set stay-awake: ${errorMessage(error)}`);
+            }
+        }
         if ((session.driver ?? 'adb') === 'adb') {
             session.checks.driver = check('passed', 'The adb driver needs nothing installed on the phone');
             return;

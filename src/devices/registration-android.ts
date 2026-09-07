@@ -105,6 +105,8 @@ export interface AndroidProbe {
     accessibilityEnabled(serial: string, packageName: string): Promise<boolean>;
     bridgeToken(serial: string): Promise<string | undefined>;
     forwardBridgePort(serial: string, localPort: number, devicePort: number): Promise<void>;
+    /** `settings put global stay_on_while_plugged_in 7`: the screen stays on while charging. */
+    stayAwake(serial: string): Promise<void>;
 }
 
 /** Every adb call the wizard makes, behind an injectable CommandRunner so tests never spawn adb. */
@@ -127,6 +129,7 @@ export function createAndroidProbe(run: CommandRunner = runCommand): AndroidProb
         accessibilityEnabled: async (serial, packageName) =>
             parseAccessibilityEnabled(await shell(serial, 'settings', 'get', 'secure', 'enabled_accessibility_services'), packageName),
         bridgeToken: async (serial) => parseBridgeToken(await shell(serial, 'content', 'query', '--uri', BRIDGE_TOKEN_URI)),
+        stayAwake: async (serial) => { await shell(serial, 'settings', 'put', 'global', 'stay_on_while_plugged_in', '7'); },
         forwardBridgePort: async (serial, localPort, devicePort) => {
             try {
                 await run('adb', ['-s', serial, 'forward', `tcp:${localPort}`, `tcp:${devicePort}`], { timeoutMs: 10_000 });

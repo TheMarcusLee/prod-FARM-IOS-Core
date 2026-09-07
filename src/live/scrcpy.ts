@@ -22,9 +22,12 @@ export const FRAME_HEADER_BYTES = 12;
 /** `send_device_meta=true` writes the device name in a fixed-width, null-padded field. */
 export const DEVICE_NAME_BYTES = 64;
 
-const PACKET_FLAG_CONFIG = 1n << 63n;
-const PACKET_FLAG_KEY_FRAME = 1n << 62n;
-const PTS_MASK = (1n << 62n) - 1n;
+// scrcpy 4.x: bit 63 marks a session packet (size announcement), 62 a config packet, 61 a keyframe.
+const PACKET_FLAG_SESSION = 1n << 63n;
+const PACKET_FLAG_CONFIG = 1n << 62n;
+const PACKET_FLAG_KEY_FRAME = 1n << 61n;
+const PTS_MASK = (1n << 61n) - 1n;
+const SESSION_PACKET_BYTES = 12;
 
 /** Codec ids are four ASCII bytes read as a big-endian u32. */
 const CODEC_NAMES: Record<number, string> = {
@@ -69,6 +72,7 @@ export class ScrcpyStreamParser {
     private stage: Stage;
     private readonly codecMeta: boolean;
     private readonly deviceMeta: boolean;
+    private codecName = 'h264';
 
     constructor(options: ScrcpyParserOptions = {}) {
         this.deviceMeta = options.deviceMeta ?? true;
@@ -107,16 +111,24 @@ export class ScrcpyStreamParser {
             return true;
         }
         if (this.stage === 'codec') {
-            if (this.buffer.length < 12) return false;
+            // scrcpy 4.x sends only the codec id here; the picture size follows as a session packet.
+            if (this.buffer.length < 4) return false;
             const id = this.buffer.readUInt32BE(0);
-            const width = this.buffer.readUInt32BE(4);
-            const height = this.buffer.readUInt32BE(8);
-            this.buffer = this.buffer.subarray(12);
-            events.push({ type: 'codec', codec: CODEC_NAMES[id] ?? 'unknown', width, height });
+            this.buffer = this.buffer.subarray(4);
+            this.codecName = CODEC_NAMES[id] ?? 'unknown';
             this.stage = 'frames';
             return true;
         }
         if (this.buffer.length < FRAME_HEADER_BYTES) return false;
+        if ((this.buffer.readBigUInt64BE(0) & PACKET_FLAG_SESSION) !== 0n) {
+            // Session packet: flags(4) width(4) height(4). Sent at start and again on rotation.
+            if (this.buffer.length < SESSION_PACKET_BYTES) return false;
+            const width = this.buffer.readUInt32BE(4);
+            const height = this.buffer.readUInt32BE(8);
+            this.buffer = this.buffer.subarray(SESSION_PACKET_BYTES);
+            events.push({ type: 'codec', codec: this.codecName, width, height });
+            return true;
+        }
         const size = this.buffer.readUInt32BE(8);
         if (this.buffer.length < FRAME_HEADER_BYTES + size) return false;
         const marked = this.buffer.readBigUInt64BE(0);
@@ -366,19 +378,25 @@ export async function startScrcpyStream(
         if (!stopped) handlers.end('the scrcpy server stopped');
     });
 
+    // Keep the server's complaints: when the stream never starts, they are the only clue.
+    let stderr = '';
+    child.stderr?.on('data', (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-2_000); });
+    let first: Buffer;
     try {
-        socket = await connectWithRetries(connect, port);
+        ({ socket, first } = await connectWithRetries(connect, port));
     } catch (error) {
         await cleanUp();
-        throw error;
+        throw new Error(`${error instanceof Error ? error.message : String(error)}${stderr ? ` · server said: ${stderr.trim()}` : ''}`);
     }
     const parser = new ScrcpyStreamParser();
-    socket.on('data', (chunk: Buffer) => {
+    const feed = (chunk: Buffer) => {
         for (const event of parser.push(chunk)) {
             if (event.type === 'codec') handlers.codec(event);
             else if (event.type === 'frame') handlers.frame(event.frame);
         }
-    });
+    };
+    feed(first);
+    socket.on('data', feed);
     socket.once('close', () => { if (!stopped) handlers.end('the phone closed the video stream'); });
     socket.once('error', (error: Error) => { if (!stopped) handlers.end(error.message); });
 
@@ -390,18 +408,45 @@ export async function startScrcpyStream(
     };
 }
 
-/** The server needs a moment to bind its socket after `app_process` starts. */
+/**
+ * The server needs a moment to bind its socket after `app_process` starts, and adb's forward
+ * accepts our TCP connection *before* the phone side is listening, then drops it: a connect that
+ * succeeds and closes with no bytes is "not ready yet", not "ended". So a connection only counts
+ * once the server's first byte (the tunnel_forward dummy) has arrived, exactly as scrcpy's own
+ * client does. The bytes read while deciding are handed back so nothing is lost.
+ */
 async function connectWithRetries(
-    connect: (port: number) => Promise<net.Socket>, port: number, attempts = 20,
-): Promise<net.Socket> {
-    let last: unknown;
+    connect: (port: number) => Promise<net.Socket>, port: number, attempts = 40,
+): Promise<{ socket: net.Socket; first: Buffer }> {
+    let last: unknown = 'no answer';
     for (let attempt = 0; attempt < attempts; attempt += 1) {
+        let socket: net.Socket | undefined;
         try {
-            return await connect(port);
+            socket = await connect(port);
+            const first = await firstBytes(socket, 1_500);
+            if (first) return { socket, first };
+            last = 'the tunnel closed before the server answered';
         } catch (error) {
             last = error;
-            await new Promise((resolve) => setTimeout(resolve, 100));
         }
+        socket?.destroy();
+        await new Promise((resolve) => setTimeout(resolve, 150));
     }
     throw new Error(`Could not reach the scrcpy server on port ${port}: ${String(last)}`);
+}
+
+/** Resolves with the first data the socket delivers, or undefined if it closes or stays silent. */
+function firstBytes(socket: net.Socket, timeoutMs: number): Promise<Buffer | undefined> {
+    return new Promise((resolve) => {
+        const done = (value: Buffer | undefined) => {
+            clearTimeout(timer);
+            socket.off('data', onData); socket.off('close', onClose); socket.off('error', onClose); socket.off('end', onClose);
+            resolve(value);
+        };
+        const onData = (chunk: Buffer) => done(chunk);
+        const onClose = () => done(undefined);
+        const timer = setTimeout(() => done(undefined), timeoutMs);
+        socket.once('data', onData);
+        socket.once('close', onClose); socket.once('error', onClose); socket.once('end', onClose);
+    });
 }

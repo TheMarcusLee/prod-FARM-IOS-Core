@@ -9,7 +9,7 @@ export const VIEW_MODE_LABELS = { off: 'Off', stills: 'Stills', live: 'Live' };
 /** Two failed sockets in a row is enough; the third attempt would just be a slower screenshot. */
 export const MAX_SOCKET_FAILURES = 2;
 /** Frames per second the stills pump uses on the wall when live video is not in play. */
-export const STILLS_FPS = 1;
+export const STILLS_FPS = 2;
 export function viewMode(notch) {
     return VIEW_MODES[Math.max(0, Math.min(VIEW_MODES.length - 1, Math.round(notch)))] ?? 'live';
 }

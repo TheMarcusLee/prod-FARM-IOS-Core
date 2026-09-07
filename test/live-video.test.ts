@@ -33,8 +33,9 @@ const { PluginRegistry } = await import('../src/registry.js');
 
 /* ---- the wire format -------------------------------------------------- */
 
-const CONFIG_FLAG = 1n << 63n;
-const KEY_FLAG = 1n << 62n;
+const CONFIG_FLAG = 1n << 62n;
+const KEY_FLAG = 1n << 61n;
+const SESSION_FLAG = 0x80_00_00_00;
 
 function packet(data: Buffer, options: { ptsUs?: number; keyframe?: boolean; config?: boolean } = {}): Buffer {
     const header = Buffer.alloc(12);
@@ -54,10 +55,12 @@ function header(name = 'Pixel 7', width = 1080, height = 2400): Buffer {
     const dummy = Buffer.from([0]);
     const nameField = Buffer.alloc(64);
     nameField.write(name, 'utf8');
-    const codec = Buffer.alloc(12);
+    // scrcpy 4.x: the codec id alone, then a session packet carrying the size.
+    const codec = Buffer.alloc(16);
     codec.writeUInt32BE(0x68_32_36_34, 0);
-    codec.writeUInt32BE(width, 4);
-    codec.writeUInt32BE(height, 8);
+    codec.writeUInt32BE(SESSION_FLAG, 4);
+    codec.writeUInt32BE(width, 8);
+    codec.writeUInt32BE(height, 12);
     return Buffer.concat([dummy, nameField, codec]);
 }
 

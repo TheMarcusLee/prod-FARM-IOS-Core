@@ -54,6 +54,7 @@ const ports = document.querySelector<HTMLElement>('#registration-ports')!;
 const checks = document.querySelector<HTMLElement>('#registration-checks')!;
 const logs = document.querySelector<HTMLElement>('#registration-logs')!;
 const authorize = document.querySelector<HTMLInputElement>('#authorize-registration')!;
+let driverDirty = false;
 const driverField = document.querySelector<HTMLElement>('#registration-driver-field')!;
 const driverInput = document.querySelector<HTMLInputElement>('#registration-driver')!;
 const driverSegment = document.querySelector<HTMLElement>('#registration-driver-seg')!;
@@ -142,7 +143,8 @@ function render(snapshot: Snapshot): void {
     profileInput.required = !android;
     prepareButton.textContent = android ? 'Set up the driver' : 'Register and prepare WDA';
     verifyButton.textContent = android ? 'Verify capture, input and TikTok' : 'Verify Appium, video, touch and accounts';
-    if (android) setDriver(snapshot.driver ?? 'adb');
+    // A driver the operator just picked must not be undone by the next poll; it is saved on click.
+    if (android && !driverDirty) setDriver(snapshot.driver ?? 'adb');
     if (android && document.activeElement !== bridgeInput) bridgeInput.value = snapshot.bridgeUrl ?? '';
     if (document.activeElement !== nameInput) nameInput.value = snapshot.name;
     if (!android && document.activeElement !== profileInput) {
@@ -205,8 +207,26 @@ prepareButton.addEventListener('click', () => {
 verifyButton.addEventListener('click', () => void action('verify'));
 driverSegment.addEventListener('click', (event) => {
     const button = (event.target as Element | null)?.closest<HTMLButtonElement>('[data-driver]');
-    if (button) setDriver(button.dataset.driver ?? 'adb');
+    if (!button) return;
+    const chosen = button.dataset.driver ?? 'adb';
+    driverDirty = true;
+    setDriver(chosen);
+    // Save the choice straight away so "Set up the driver" acts on the driver on screen.
+    void (async () => {
+        if (!currentId) return;
+        try {
+            const snapshot = await request<Snapshot>(`/api/device-registrations/${encodeURIComponent(currentId)}`, {
+                method: 'PATCH', headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ driver: chosen, bridgeUrl: bridgeInput.value.trim() }),
+            });
+            driverDirty = false;
+            render(snapshot);
+        } catch (error) { showError(error); }
+    })();
 });
+// Anything typed into the form lights up Save details until it is saved.
+const saveButton = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+form.addEventListener('input', () => { saveButton?.classList.add('bl-btn-primary'); });
 finalizeButton.addEventListener('click', () => void action('finalize'));
 document.querySelector<HTMLButtonElement>('#action-cancel')!.addEventListener('click', async () => {
     if (!currentId || !window.confirm('Cancel this setup? Apple Developer registration or an installed WDA app cannot be undone automatically.')) return;
@@ -226,7 +246,7 @@ form.addEventListener('submit', async (event) => {
                 tiktokAccounts: accountsInput.value.split(','),
             }),
         });
-        passcodeInput.value = ''; render(snapshot);
+        passcodeInput.value = ''; saveButton?.classList.remove('bl-btn-primary'); render(snapshot);
     } catch (error) { showError(error); }
 });
 

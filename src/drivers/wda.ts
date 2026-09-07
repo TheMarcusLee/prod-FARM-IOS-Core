@@ -71,6 +71,7 @@ async function pressWdaKey(key: Key, remote: WdaRemoteControl, udid: string, pos
         case 'enter': { await post('/wda/keys', { value: ['\n'] }); return; }
         case 'delete': { await post('/wda/keys', { value: ['\b'] }); return; }
         case 'power': return remote.performAction(udid, { type: 'power' });
+        case 'wake': return remote.performAction(udid, { type: 'wake' });
         case 'back': throw new UnsupportedOperationError('wda', 'pressKey(back) — iOS has no back button; swipe from the left edge instead');
         case 'recents': throw new UnsupportedOperationError('wda', 'pressKey(recents) — iOS has no recents key; double-press Home or swipe up and hold instead');
     }

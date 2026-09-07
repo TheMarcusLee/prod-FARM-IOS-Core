@@ -42,7 +42,7 @@ export function gestureParams(path: readonly TimedPoint[]): Record<string, strin
     };
 }
 
-const ANDROID_KEYCODES: Record<Key, number> = { home: 3, back: 4, enter: 66, delete: 67, recents: 187, power: 26 };
+const ANDROID_KEYCODES: Record<Key, number> = { home: 3, back: 4, enter: 66, delete: 67, recents: 187, power: 26, wake: 224 };
 
 /**
  * The bridge answers `503 {"status":"error","code":"server_busy"}` when its on-device handler
