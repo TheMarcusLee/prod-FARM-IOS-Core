@@ -1270,7 +1270,7 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         const rows = accountRows(devices);
         return reply.type('text/html').send(await shell(request, {
             title: 'Accounts', active: 'accounts',
-            head: personaHead(),
+            head: personaHead() + scriptTag('personas.js'),
             body: renderAccountsPage(rows, devices) + renderCreatorsSection()
                 + renderPersonaSection(rows.map(({ handle }) => handle)),
         }, read));

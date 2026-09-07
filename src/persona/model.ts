@@ -19,6 +19,11 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
+// The preset library, for one check only: that a persona's `presets` field names presets that
+// actually ship. `presets.ts` imports this file back, which is a cycle ES modules handle because
+// neither module touches the other's bindings while it is still evaluating.
+import { PRESET_IDS } from './presets.js';
+
 /** An inclusive `min`–`max` pair. Used for per-session budgets, watch bands and session length. */
 export interface Range {
     min: number;
@@ -75,6 +80,12 @@ export interface Persona {
     sessionMinutes: Range;
     activeHours: HourRange[];
     followRule: FollowRule;
+    /**
+     * The preset ids this persona was blended from, if it was. A record, not a rule: `decide.ts`
+     * never reads it, and a persona file written before blends existed simply has no `presets` key
+     * and loads exactly as it did. The editor reads it to draw the chips and to re-blend.
+     */
+    presets?: string[];
 }
 
 export class PersonaError extends Error {}
@@ -106,12 +117,23 @@ export const LANGUAGES = [
 
 export type Language = (typeof LANGUAGES)[number];
 
-const NICHE_PATTERN = /^[a-z0-9][a-z0-9 &'\-/]{0,39}$/;
+/**
+ * A niche is a short phrase. The middle dot is in the set because a blended persona names itself
+ * after the presets behind it — "ai tools · indie hacking · productivity".
+ */
+export const NICHE_PATTERN = /^[a-z0-9][a-z0-9 &'\-/·]{0,39}$/;
 /** An interest is one keyword or one hashtag: letters, digits, and the joining punctuation. */
 const TERM_PATTERN = /^#?[a-z0-9][a-z0-9 ._-]{0,39}$/;
 
 export const LIMITS = {
-    terms: 40,
+    /**
+     * Interests and avoid terms, per list. Eighty rather than forty since presets can be blended:
+     * three niches at ten interests each plus the operator's own additions has to fit without the
+     * third preset's terms being silently dropped at the cap.
+     */
+    terms: 80,
+    /** How many presets one persona may record as its source. */
+    presets: 8,
     activeHours: 6,
     /** Per-session engagement counts. A cap here is the last line against a runaway payload. */
     budget: { min: 0, max: 200 },
@@ -180,6 +202,24 @@ export function normaliseTerms(value: unknown, name: string): string[] {
     return terms;
 }
 
+/** The `presets` field: known ids only, de-duplicated, order kept. */
+function presetIds(value: unknown, fallback: string[] | undefined): string[] | undefined {
+    if (value === undefined || value === null || value === '') return fallback ? [...fallback] : undefined;
+    const raw = typeof value === 'string'
+        ? value.split(',')
+        : Array.isArray(value) ? value : (() => { throw new PersonaError('Presets must be a list'); })();
+    const ids: string[] = [];
+    for (const entry of raw) {
+        if (typeof entry !== 'string') throw new PersonaError('Presets must be a list of preset ids');
+        const id = entry.trim();
+        if (!id) continue;
+        if (!PRESET_IDS.includes(id)) throw new PersonaError(`"${id}" is not one of the presets`);
+        if (!ids.includes(id)) ids.push(id);
+    }
+    if (ids.length > LIMITS.presets) throw new PersonaError(`A persona may be blended from at most ${LIMITS.presets} presets`);
+    return ids.length ? ids : undefined;
+}
+
 function hourRanges(value: unknown, fallback: HourRange[]): HourRange[] {
     if (value === undefined || value === null) return fallback.map((entry) => ({ ...entry }));
     // The editor posts "08:00-23:00, 07:00-09:00"; the API may post the structured form.
@@ -236,6 +276,8 @@ export function validatePersona(handleInput: unknown, value: unknown): Persona {
     const interests = input.interests === undefined ? base.interests : normaliseTerms(input.interests, 'interest');
     if (!interests.length) throw new PersonaError('A persona needs at least one interest');
 
+    const presets = presetIds(input.presets, undefined);
+
     return {
         handle,
         niche,
@@ -260,6 +302,8 @@ export function validatePersona(handleInput: unknown, value: unknown): Persona {
                 LIMITS.followSessions.min, LIMITS.followSessions.max, base.followRule.withinSessions,
             ),
         },
+        // Absent stays absent: an old personas.json entry round-trips without growing a key.
+        ...(presets ? { presets } : {}),
     };
 }
 

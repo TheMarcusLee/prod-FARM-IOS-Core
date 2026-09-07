@@ -21,7 +21,8 @@ import {
     type Persona,
 } from '../../persona/model.js';
 import { readMemory, summariseMemory, type MemorySummary } from '../../persona/memory.js';
-import { PERSONA_PRESETS, applyPreset, findPreset } from '../../persona/presets.js';
+import { PERSONA_PRESETS, findPreset, presetsByCategory } from '../../persona/presets.js';
+import { blendPresets, presetLabels } from '../../persona/blend.js';
 import { NETWORK_IDS, networkLabel, type NetworkId } from '../../content/networks.js';
 import { parseCreatorAccountInput, parseCreatorInput } from '../../content/validate.js';
 import type { ContentStore } from '../../content/store.js';
@@ -67,6 +68,9 @@ export function personaFromForm(body: FormBody): Record<string, unknown> {
         warmth: text(body, 'warmth'),
         curiosity: text(body, 'curiosity'),
         activeHours: text(body, 'activeHours'),
+        // The picker's hidden field: which presets the form in front of the operator was built
+        // from. Validated as known ids like everything else, and ignored by every routine.
+        presets: text(body, 'presets'),
         budgets: {
             likes: pair(body, 'likesMin', 'likesMax'),
             saves: pair(body, 'savesMin', 'savesMax'),
@@ -91,10 +95,10 @@ export interface PanelState {
     note?: string;
     tone?: 'ok' | 'bad';
     /**
-     * The preset the form in front of the operator was filled from. Nothing has been saved: the
-     * panel is showing what pressing Save would store, which is the point of "Apply".
+     * The presets the form in front of the operator was blended from. Nothing has been saved: the
+     * panel is showing what pressing Save would store, which is the point of the picker.
      */
-    preset?: string;
+    presets?: string[];
 }
 
 function field(label: string, control: string, hint = ''): string {
@@ -149,27 +153,67 @@ export function renderMemorySummary(summary: MemorySummary): string {
 <div><span>What matched</span><span class="bl-chip-row">${matched}</span></div></div>${sessions}`;
 }
 
-/** The select behind "Start from a preset", for an account that already has values in the form. */
-function presetChooser(action: string, chosen?: string): string {
-    const options = PERSONA_PRESETS.map((preset) =>
-        `<option value="${escapeHtml(preset.id)}"${preset.id === chosen ? ' selected' : ''}>${escapeHtml(preset.label)}</option>`).join('');
-    return `<form class="bl-persona-presets" hx-get="${action}" hx-target="closest section" hx-swap="outerHTML">
-<label class="bl-field"><span>Start from a preset</span>
-<select class="bl-select" name="preset">${options}</select></label>
-<button class="bl-btn" type="submit">Apply</button>
-<span class="bl-faint">Fills the form in. Nothing is stored until you press Save persona.</span></form>`;
-}
+/* ---- The preset picker ------------------------------------------------- */
 
 /**
- * What an account with no persona sees instead of twenty empty fields: the niches, one line each,
- * one press to fill the form in with one. The blank form is still there, folded away.
+ * The library, as a searchable list grouped by category, with the chosen presets as chips above it.
+ *
+ * Every option and every chip is a submit button carrying the *whole* selection it would produce —
+ * "these three plus me", or "these three without me" — so the picker works with no script at all:
+ * one click is one htmx swap and the server does the blending. `personas.js` only narrows the list
+ * as you type, which is the one thing a round trip would be silly for.
  */
-function presetPicker(action: string): string {
-    const cards = PERSONA_PRESETS.map((preset) => `<button class="bl-btn bl-persona-preset" type="submit" name="preset"
- value="${escapeHtml(preset.id)}"><strong>${escapeHtml(preset.label)}</strong>
-<span class="bl-faint">${escapeHtml(preset.description)}</span></button>`).join('');
-    return `<p class="bl-muted">Start from a preset — pick the one closest to this account and adjust it.</p>
-<form class="bl-persona-picker" hx-get="${action}" hx-target="closest section" hx-swap="outerHTML">${cards}</form>`;
+function presetPicker(action: string, chosen: readonly string[], open: boolean): string {
+    const without = (id: string) => chosen.filter((entry) => entry !== id).join(',');
+    const chips = chosen.length
+        ? chosen.map((id) => {
+            const label = presetLabels([id])[0] ?? id;
+            return `<span class="bl-chip bl-chip-sm">${escapeHtml(label)}`
+                + `<button type="submit" class="bl-linkish" name="presets" value="${escapeHtml(without(id))}"`
+                + ` aria-label="Remove ${escapeHtml(label)}">×</button></span>`;
+        }).join('')
+        : '<span class="bl-faint">nothing picked yet</span>';
+
+    // A hundred options is a lot of markup to send forty times over for a page of forty accounts,
+    // so a panel that is not already picking fetches the list the first time it is opened.
+    const library = open
+        ? `<div data-preset-library>${presetLibrary(chosen)}</div>`
+        : `<div data-preset-library hx-get="${action}/library?presets=${encodeURIComponent(chosen.join(','))}"`
+            + ' hx-trigger="toggle once from:closest details" hx-swap="innerHTML">'
+            + '<p class="bl-faint">Reading the presets…</p></div>';
+
+    return `<form class="bl-persona-presets" hx-get="${action}" hx-target="closest section" hx-swap="outerHTML">
+<div class="bl-persona-chosen"><span class="bl-faint">Built from</span><span class="bl-chip-row">${chips}</span></div>
+<p class="bl-muted">Start from a preset — pick the ones closest to this account and adjust them. Several
+at once blends them: the interests join up, the dials average out, and the account is awake for all
+of their hours. Nothing is stored until you press Save persona.</p>
+<details class="bl-persona-library"${open ? ' open' : ''}>
+<summary>${PERSONA_PRESETS.length} presets</summary>
+${library}</details></form>`;
+}
+
+/** The list itself: a search box and every preset under its category heading. */
+export function presetLibrary(chosen: readonly string[]): string {
+    const without = (id: string) => chosen.filter((entry) => entry !== id).join(',');
+    const groups = presetsByCategory().map(({ category, presets }) => {
+        const cards = presets.map((preset) => {
+            const picked = chosen.includes(preset.id);
+            const value = picked ? without(preset.id) : [...chosen, preset.id].join(',');
+            // What the search box matches on: the label, the line under it, and the interests.
+            const terms = [preset.label, preset.description, ...preset.persona.interests].join(' ').toLowerCase();
+            return `<button class="bl-btn bl-persona-preset${picked ? ' is-picked' : ''}" type="submit" name="presets"
+ value="${escapeHtml(value)}" data-preset-terms="${escapeHtml(terms)}"${picked ? ' aria-pressed="true"' : ''}>
+<strong>${escapeHtml(preset.label)}</strong>
+<span class="bl-faint">${escapeHtml(preset.description)}</span></button>`;
+        }).join('');
+        return `<div class="bl-persona-group" data-preset-group>
+<div class="bl-persona-group-head">${escapeHtml(category)}</div>
+<div class="bl-persona-picker">${cards}</div></div>`;
+    }).join('');
+    return `<input class="bl-input bl-persona-search" type="search" placeholder="Search presets — niche, interest, hashtag"
+ data-preset-search aria-label="Search presets" autocomplete="off">
+<p class="bl-faint" data-preset-empty hidden>Nothing matches that.</p>
+${groups}`;
 }
 
 export function renderPersonaPanel(persona: Persona, summary: MemorySummary, state: PanelState): string {
@@ -179,8 +223,12 @@ export function renderPersonaPanel(persona: Persona, summary: MemorySummary, sta
     const note = state.note
         ? `<p class="bl-muted${state.tone === 'bad' ? ' bl-persona-bad' : ''}" role="status">${escapeHtml(state.note)}</p>`
         : `<p class="bl-muted">${state.stored ? 'This persona is set up.' : 'No persona set up yet — these values are derived from the handle.'}</p>`;
+    const chosen = state.presets ?? persona.presets ?? [];
     // Nothing has been stored yet and nothing has been picked: offer the niches, not a blank form.
-    const picking = !state.stored && !state.preset;
+    const picking = !state.stored && !chosen.length;
+    // The library stays open while the operator is picking — one press should not close the list
+    // they are in the middle of choosing from — and starts closed on a panel that just loaded.
+    const browsing = picking || Boolean(state.presets?.length);
     const languages = LANGUAGES.map((code) =>
         `<option value="${code}"${code === persona.language ? ' selected' : ''}>${code}</option>`).join('');
 
@@ -190,9 +238,10 @@ export function renderPersonaPanel(persona: Persona, summary: MemorySummary, sta
 <div class="bl-panel-body">
 ${note}
 <div class="bl-chip-row">${chips}</div>
-${picking ? presetPicker(action) : presetChooser(action, state.preset)}
+${presetPicker(action, chosen, browsing)}
 ${picking ? '<details class="bl-persona-byhand"><summary>Or fill it in by hand</summary>' : ''}
 <form hx-post="${action}" hx-target="closest section" hx-swap="outerHTML" class="bl-persona-form">
+<input type="hidden" name="presets" value="${escapeHtml(chosen.join(','))}">
 ${field('Niche', `<input class="bl-input" type="text" name="niche" value="${escapeHtml(persona.niche)}" maxlength="40">`,
         'A short name for what this account is into.')}
 ${field('Interests', `<input class="bl-input" type="text" name="interests" value="${escapeHtml(persona.interests.join(', '))}">`,
@@ -256,7 +305,15 @@ const PERSONA_STYLE = `<style>
 .bl-persona-slider output { color: var(--bl-text-3); font-size: 12.5px; min-width: 30px; }
 .bl-persona-memory { margin-top: 16px; border-top: 1px solid var(--bl-line); padding-top: 12px; }
 .bl-persona-bad { color: var(--bl-bad); }
-.bl-persona-presets { align-items: end; display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.bl-persona-presets { display: block; margin-top: 12px; }
+.bl-persona-chosen { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; font-size: 12.5px; }
+.bl-persona-chosen .bl-chip button { margin-left: 4px; }
+.bl-persona-library { margin: 10px 0 4px; }
+.bl-persona-library > summary { cursor: pointer; color: var(--bl-text-3); font-size: 12.5px; }
+.bl-persona-search { margin: 10px 0 4px; max-width: 340px; }
+.bl-persona-group-head { color: var(--bl-text-3); font-size: 11.5px; font-weight: 600; letter-spacing: .04em;
+ text-transform: uppercase; margin-top: 12px; }
+.bl-persona-preset.is-picked { border-color: var(--bl-accent); background: var(--bl-accent-soft); }
 .bl-persona-picker { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin: 10px 0 14px; }
 .bl-persona-preset { display: block; height: auto; padding: 8px 10px; text-align: left; }
 .bl-persona-preset strong { display: block; font-size: 12.5px; }
@@ -269,22 +326,40 @@ export function personaHead(): string {
     return PERSONA_STYLE;
 }
 
+/**
+ * The ids in a `?preset=` or `?presets=a,b,c` query. A whitelist lookup, not a value: an id nobody
+ * ships is dropped rather than reported as an error nobody asked a question to get.
+ */
+function presetsFromQuery(query: { preset?: string; presets?: string }): string[] {
+    const raw = `${query.presets ?? ''},${query.preset ?? ''}`.split(',');
+    const ids: string[] = [];
+    for (const entry of raw) {
+        const preset = findPreset(entry);
+        if (preset && !ids.includes(preset.id)) ids.push(preset.id);
+    }
+    return ids;
+}
+
 async function panelFor(handle: string, directory: string | undefined, state: Omit<PanelState, 'stored'>): Promise<string> {
     const key = normaliseHandle(handle);
     const personas = await loadPersonas(directory);
-    // A chosen preset fills the form and is not stored; the stored persona is what is shown otherwise.
-    const preset = findPreset(state.preset);
-    const persona = preset ? applyPreset(key, preset.id) : personas[key] ?? defaultPersona(key);
+    // Chosen presets fill the form and store nothing; the stored persona is what is shown otherwise.
+    const chosen = state.presets ?? [];
+    const persona = chosen.length ? blendPresets(key, chosen) : personas[key] ?? defaultPersona(key);
     const summary = summariseMemory(await readMemory(key, directory));
     return renderPersonaPanel(persona, summary, {
         ...state,
-        ...(preset ? { preset: preset.id, note: state.note ?? presetNote(preset.label), tone: state.tone ?? 'ok' } : {}),
+        ...(chosen.length ? { note: state.note ?? presetNote(chosen), tone: state.tone ?? 'ok' } : {}),
         stored: Object.hasOwn(personas, key),
     });
 }
 
-function presetNote(label: string): string {
-    return `Filled in from the ${label} preset — press Save persona to keep it.`;
+function presetNote(ids: readonly string[]): string {
+    const labels = presetLabels(ids);
+    return labels.length === 1
+        ? `Filled in from the ${labels[0]} preset — press Save persona to keep it.`
+        : `Blended from ${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`
+            + ' — press Save persona to keep it.';
 }
 
 /** `reply.type` is set before the body is built, so the JSON error resets it or Fastify refuses it. */
@@ -427,13 +502,21 @@ export function registerPersonaRoutes(app: FastifyInstance, options: PersonaRout
         return sendCreators(reply);
     });
 
-    app.get<{ Params: { handle: string }; Querystring: { preset?: string } }>('/accounts/:handle/persona', async (request, reply) => {
+    app.get<{ Params: { handle: string }; Querystring: { preset?: string; presets?: string } }>('/accounts/:handle/persona', async (request, reply) => {
         try {
-            // `preset` is a whitelist lookup, not a value: an unknown one falls back to the panel
-            // as it was, rather than being reported as an error nobody asked a question to get.
-            const preset = findPreset(request.query.preset)?.id;
-            const html = await panelFor(request.params.handle, directory, { ...(preset ? { preset } : {}) });
+            const presets = presetsFromQuery(request.query);
+            const html = await panelFor(request.params.handle, directory, { ...(presets.length ? { presets } : {}) });
             return reply.type('text/html').send(html);
+        } catch (error) {
+            return badHandle(reply, error);
+        }
+    });
+
+    /** The picker's list, fetched the first time an operator opens it on a configured account. */
+    app.get<{ Params: { handle: string }; Querystring: { presets?: string } }>('/accounts/:handle/persona/library', async (request, reply) => {
+        try {
+            normaliseHandle(request.params.handle);
+            return reply.type('text/html').send(presetLibrary(presetsFromQuery(request.query)));
         } catch (error) {
             return badHandle(reply, error);
         }
@@ -462,12 +545,33 @@ export function registerPersonaRoutes(app: FastifyInstance, options: PersonaRout
     /**
      * The same "start from a preset", server-side and in one call: applies it and stores it. The
      * body is one whitelisted field, and the value has to be one of the shipped preset ids.
+     * `presets: [...]` blends several the same way the picker does.
      */
-    app.post<{ Params: { handle: string }; Body: { preset?: unknown } }>('/api/accounts/:handle/persona/preset', async (request, reply) => {
+    app.post<{ Params: { handle: string }; Body: { preset?: unknown; presets?: unknown } }>('/api/accounts/:handle/persona/preset', async (request, reply) => {
         try {
             const handle = normaliseHandle(request.params.handle);
-            const persona = applyPreset(handle, (request.body ?? {}).preset);
+            const body = request.body ?? {};
+            const persona = blendPresets(handle, body.presets ?? body.preset);
             return reply.send(await savePersona(handle, persona as unknown as Record<string, unknown>, directory));
+        } catch (error) {
+            return badHandle(reply, error);
+        }
+    });
+
+    /**
+     * The blend itself, without storing it: what the panel would put in the form. The editor uses
+     * the htmx route above; this is the same answer as JSON, for a script seeding a batch of
+     * accounts that wants to see the numbers before it commits to them.
+     */
+    app.post<{ Params: { handle: string }; Body: { presets?: unknown; language?: unknown; niche?: unknown } }>('/api/personas/:handle/blend', async (request, reply) => {
+        try {
+            const handle = normaliseHandle(request.params.handle);
+            const body = request.body ?? {};
+            const persona = blendPresets(handle, body.presets, {
+                ...(typeof body.language === 'string' && body.language ? { language: body.language } : {}),
+                ...(typeof body.niche === 'string' && body.niche ? { niche: body.niche } : {}),
+            });
+            return reply.send(persona);
         } catch (error) {
             return badHandle(reply, error);
         }
@@ -475,7 +579,10 @@ export function registerPersonaRoutes(app: FastifyInstance, options: PersonaRout
 
     /** What the picker offers, for anything that wants to build its own. */
     app.get('/api/persona-presets', async () => ({
-        presets: PERSONA_PRESETS.map(({ id, label, description }) => ({ id, label, description })),
+        presets: PERSONA_PRESETS.map(({ id, label, description, category }) => ({ id, label, description, category })),
+        categories: presetsByCategory().map(({ category, presets }) => ({
+            category, presets: presets.map(({ id }) => id),
+        })),
     }));
 
     app.delete<{ Params: { handle: string } }>('/accounts/:handle/persona', async (request, reply) => {

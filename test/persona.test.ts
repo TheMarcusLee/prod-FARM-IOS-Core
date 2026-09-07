@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -12,8 +12,8 @@ import type { SchedulerRepository } from '../src/scheduler/repository.js';
 import type { DeviceDriver, MediaFile, Point, Rect, TimedPoint, UiNode } from '../src/drivers/types.js';
 import type { OcrWord } from '../src/drivers/verify.js';
 import {
-    LANGUAGES, defaultPersona, deletePersona, loadPersonas, personaFor, savePersona, validatePersona,
-    type Persona,
+    LANGUAGES, LIMITS, NICHE_PATTERN, defaultPersona, deletePersona, loadPersonas, personaFor, savePersona,
+    validatePersona, type Persona,
 } from '../src/persona/model.js';
 import { videoFromTexts, videoFromTree, videoFromWords, findWordBounds, readVideo } from '../src/persona/observe.js';
 import {
@@ -25,7 +25,10 @@ import {
     emptyMemory,
 } from '../src/persona/memory.js';
 import { beginSession, finishSession, noteDecision } from '../src/persona/session.js';
-import { PERSONA_PRESETS, applyPreset, findPreset } from '../src/persona/presets.js';
+import {
+    PERSONA_PRESETS, PRESET_CATEGORIES, applyPreset, findPreset, presetsByCategory,
+} from '../src/persona/presets.js';
+import { blendNiche, blendPresets, mergeHourRanges } from '../src/persona/blend.js';
 import { personaFromForm } from '../src/api/routes/personas.js';
 import { doomscrollOnAndroid } from '../src/tiktok/android/doomscroll.js';
 import { createTikTokPlugin } from '../src/tiktok-plugin.js';
@@ -721,4 +724,247 @@ test('the Accounts page offers the presets, fills the form with one, and applies
 
     const listed = await inject(app, { method: 'GET', url: '/api/persona-presets' });
     assert.equal((listed.json() as { presets: unknown[] }).presets.length, PERSONA_PRESETS.length);
+});
+
+/* ---- The library ------------------------------------------------------- */
+
+test('the preset library is categorised, and every preset in it is a usable persona', () => {
+    assert.ok(PERSONA_PRESETS.length >= 80, `expected a library, got ${PERSONA_PRESETS.length} presets`);
+    const ids = PERSONA_PRESETS.map(({ id }) => id);
+    assert.equal(new Set(ids).size, ids.length, 'preset ids are unique');
+
+    // The twenty that shipped first are still there, under the ids anything stored already names.
+    for (const id of ['fitness', 'home-gym', 'running', 'cooking', 'baking', 'beauty', 'skincare', 'fashion',
+        'tech-gadgets', 'personal-finance', 'real-estate', 'travel', 'parenting', 'gaming', 'comedy', 'pets',
+        'diy-home', 'cars', 'study-productivity', 'mindfulness']) {
+        assert.ok(findPreset(id), `${id} was dropped from the library`);
+    }
+
+    const grouped = presetsByCategory();
+    assert.deepEqual(grouped.map(({ category }) => category), [...PRESET_CATEGORIES],
+        'every category has presets in it, in the order the picker shows them');
+    assert.equal(grouped.reduce((total, { presets }) => total + presets.length, 0), PERSONA_PRESETS.length);
+
+    for (const preset of PERSONA_PRESETS) {
+        assert.ok((PRESET_CATEGORIES as readonly string[]).includes(preset.category), `${preset.id} has no category`);
+        // Applying it is a full validation pass: a typo in a preset fails here, not on a phone.
+        const persona = applyPreset('@farm.one', preset.id);
+        assert.ok(persona.interests.length >= 8, `${preset.id} has only ${persona.interests.length} interests`);
+        assert.ok(persona.avoid.length >= 1, `${preset.id} avoids nothing`);
+        assert.deepEqual(persona.presets, [preset.id], `${preset.id} does not record itself`);
+        assert.match(persona.niche, NICHE_PATTERN);
+    }
+});
+
+/* ---- Blends ------------------------------------------------------------ */
+
+test('a blend joins the interests, drops the vetoes the others want, and averages the dials', () => {
+    const ai = applyPreset('@farm.one', 'ai-tools');
+    const indie = applyPreset('@farm.one', 'indie-hacking');
+    const blended = blendPresets('@farm.one', ['ai-tools', 'indie-hacking', 'saas-productivity']);
+
+    // Union in order, de-duplicated, the first preset's terms first.
+    assert.deepEqual(blended.interests.slice(0, ai.interests.length), ai.interests);
+    for (const interest of indie.interests) assert.ok(blended.interests.includes(interest));
+    assert.equal(new Set(blended.interests).size, blended.interests.length, 'no duplicated interests');
+    assert.deepEqual(blended.presets, ['ai-tools', 'indie-hacking', 'saas-productivity']);
+
+    // Means, rounded: two dials and one budget is enough to show the arithmetic.
+    const dials = ['ai-tools', 'indie-hacking', 'saas-productivity'].map((id) => applyPreset('@farm.one', id));
+    const mean = (values: number[]) => values.reduce((total, value) => total + value, 0) / values.length;
+    assert.equal(blended.curiosity, Math.round(mean(dials.map((one) => one.curiosity)) * 100) / 100);
+    assert.equal(blended.warmth, Math.round(mean(dials.map((one) => one.warmth)) * 100) / 100);
+    assert.equal(blended.budgets.likes.max, Math.round(mean(dials.map((one) => one.budgets.likes.max))));
+    assert.equal(blended.watch.match.min, Math.round(mean(dials.map((one) => one.watch.match.min))));
+
+    // The most conservative follow rule of the three: the most likes, inside the fewest sessions.
+    assert.equal(blended.followRule.likes, Math.max(...dials.map((one) => one.followRule.likes)));
+    assert.equal(blended.followRule.withinSessions, Math.min(...dials.map((one) => one.followRule.withinSessions)));
+
+    // One preset's avoid list must not veto another preset's interest.
+    const money = blendPresets('@farm.one', ['personal-finance', 'crypto-web3']);
+    assert.ok(money.interests.includes('crypto'));
+    assert.ok(!money.avoid.includes('crypto'), 'crypto is an interest of the blend, not a veto in it');
+    assert.ok(money.avoid.includes('gambling'), 'a veto both presets keep survives');
+
+    // A single id is still a blend, and matches what applying that preset alone would give.
+    const alone = blendPresets('@farm.one', ['running']);
+    assert.deepEqual(alone.interests, applyPreset('@farm.one', 'running').interests);
+    assert.equal(alone.niche, 'running');
+
+    assert.throws(() => blendPresets('@farm.one', ['ai-tools', 'nonsense']), /not one of the presets/);
+    assert.throws(() => blendPresets('@farm.one', []), /at least one preset/);
+});
+
+test('a blend caps the interests without silently losing the last preset', () => {
+    const ids = PERSONA_PRESETS.slice(0, 8).map(({ id }) => id);
+    const blended = blendPresets('@farm.one', ids);
+    assert.ok(blended.interests.length <= LIMITS.terms);
+    assert.ok(blended.avoid.length <= LIMITS.terms);
+    // Eighty terms is enough for the three-preset blend the picker is for: nothing is dropped.
+    const three = blendPresets('@farm.one', ['ai-tools', 'indie-hacking', 'saas-productivity']);
+    for (const id of ['ai-tools', 'indie-hacking', 'saas-productivity']) {
+        for (const interest of applyPreset('@farm.one', id).interests) {
+            assert.ok(three.interests.includes(interest), `${interest} was dropped at the cap`);
+        }
+    }
+    assert.throws(() => blendPresets('@farm.one', PERSONA_PRESETS.slice(0, 9).map(({ id }) => id)), /at most/);
+});
+
+test('active hours are unioned, overlaps merged and the widest kept', () => {
+    assert.deepEqual(mergeHourRanges([{ start: 8, end: 12 }, { start: 11, end: 15 }]), [{ start: 8, end: 15 }]);
+    assert.deepEqual(mergeHourRanges([{ start: 22, end: 2 }, { start: 1, end: 4 }]), [{ start: 22, end: 4 }]);
+    assert.deepEqual(mergeHourRanges([{ start: 6, end: 9 }, { start: 18, end: 23 }]),
+        [{ start: 6, end: 9 }, { start: 18, end: 23 }]);
+    assert.deepEqual(mergeHourRanges([{ start: 0, end: 12 }, { start: 12, end: 24 }]), [{ start: 0, end: 24 }]);
+
+    // Seven windows do not fit in a persona; the six widest survive, in clock order.
+    const many = mergeHourRanges([
+        { start: 1, end: 2 }, { start: 3, end: 5 }, { start: 6, end: 8 }, { start: 9, end: 12 },
+        { start: 13, end: 16 }, { start: 17, end: 20 }, { start: 21, end: 24 },
+    ]);
+    assert.equal(many.length, LIMITS.activeHours);
+    assert.deepEqual([...many].sort((a, b) => a.start - b.start), many);
+    assert.ok(!many.some(({ start }) => start === 1), 'the one-hour window is the one that goes');
+
+    const blended = blendPresets('@farm.one', ['running', 'gaming', 'sleep']);
+    assert.ok(blended.activeHours.length <= LIMITS.activeHours);
+    assert.ok(blended.activeHours.some(({ start }) => start === 5), 'the runner is still up at five');
+});
+
+test('a blended niche names its presets and still fits what a niche may hold', () => {
+    assert.equal(blendNiche(['AI tools', 'Indie hacking', 'Productivity']), 'ai tools · indie hacking · productivity');
+    const long = blendNiche(['Restaurants and food travel', 'Cleaning and organising', 'Board games and TTRPG']);
+    assert.match(long, NICHE_PATTERN);
+    assert.match(long, /more$/);
+    for (const preset of PERSONA_PRESETS) {
+        assert.match(blendNiche([preset.label, 'Sleep', 'Cats']), NICHE_PATTERN, `${preset.id} blends into a bad niche`);
+    }
+});
+
+test('a persona file written before blends existed still loads', async (context) => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'persona-old-'));
+    context.after(async () => rm(directory, { recursive: true, force: true }));
+
+    // Exactly what an older Backline wrote: every field of the day, and no `presets` key.
+    const old = {
+        '@homegym.dan': {
+            handle: '@homegym.dan', niche: 'home gym', interests: ['kettlebell', '#homegym'], avoid: ['makeup'],
+            language: 'en', curiosity: 0.2, warmth: 0.6,
+            budgets: { likes: { min: 4, max: 10 }, saves: { min: 2, max: 6 }, follows: { min: 0, max: 1 }, searches: { min: 1, max: 3 } },
+            watch: { match: { min: 18, max: 45 }, other: { min: 2, max: 5 } },
+            sessionMinutes: { min: 10, max: 25 }, activeHours: [{ start: 6, end: 8 }],
+            followRule: { likes: 3, withinSessions: 5 },
+        },
+    };
+    await writeFile(path.join(directory, 'personas.json'), JSON.stringify(old, null, 2));
+
+    const loaded = await loadPersonas(directory);
+    const persona = loaded['@homegym.dan'];
+    assert.ok(persona, 'the old entry loaded');
+    assert.deepEqual(persona.interests, ['kettlebell', '#homegym']);
+    assert.equal(persona.presets, undefined, 'nothing was invented for it');
+    assert.ok(!Object.hasOwn(persona, 'presets'), 'and no empty key was added either');
+
+    // Saving it back keeps it that way; blending is what puts the field there.
+    await savePersona('@homegym.dan', persona as unknown as Record<string, unknown>, directory);
+    assert.ok(!Object.hasOwn((await loadPersonas(directory))['@homegym.dan']!, 'presets'));
+
+    assert.throws(() => validatePersona('@homegym.dan', { ...persona, presets: ['no-such-preset'] }),
+        /not one of the presets/);
+    assert.deepEqual(validatePersona('@homegym.dan', { ...persona, presets: 'home-gym, running' }).presets,
+        ['home-gym', 'running']);
+});
+
+test('the editor blends from the picker and the API answers with the same body', async (context) => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'persona-blend-'));
+    const previous = process.env.SCHEDULER_DATA_DIR;
+    process.env.SCHEDULER_DATA_DIR = directory;
+    context.after(async () => {
+        if (previous === undefined) delete process.env.SCHEDULER_DATA_DIR; else process.env.SCHEDULER_DATA_DIR = previous;
+        await rm(directory, { recursive: true, force: true });
+    });
+
+    const app = await createApp({
+        plugins: new PluginRegistry([]), scheduler: {} as SchedulerRepository, dashboardTheme: defaultDashboardTheme,
+    });
+    context.after(() => app.close());
+    const url = `/accounts/${encodeURIComponent('@farm.one')}/persona`;
+
+    // The picker is grouped, searchable, and every option carries the selection it would produce.
+    const fresh = await inject(app, { method: 'GET', url });
+    assert.match(fresh.body, /Tech &amp; product/);
+    assert.match(fresh.body, /data-preset-search/);
+    assert.match(fresh.body, /data-preset-terms/);
+
+    const blended = await inject(app, { method: 'GET', url: `${url}?presets=ai-tools,indie-hacking,saas-productivity` });
+    assert.equal(blended.statusCode, 200);
+    assert.match(blended.body, /Blended from AI tools, Indie hacking and Productivity apps/);
+    assert.match(blended.body, /building in public/);
+    assert.match(blended.body, /name="presets" value="ai-tools,indie-hacking,saas-productivity"/);
+    assert.deepEqual(await loadPersonas(directory), {}, 'a blend saves nothing');
+
+    // An unknown id in the list is dropped, not an error nobody asked a question to get.
+    const partial = await inject(app, { method: 'GET', url: `${url}?presets=ai-tools,nonsense` });
+    assert.equal(partial.statusCode, 200);
+    assert.match(partial.body, /Filled in from the AI tools preset/);
+
+    // The same blend as JSON, still without storing it.
+    const preview = await inject(app, {
+        method: 'POST', url: '/api/personas/%40farm.one/blend',
+        payload: { presets: ['ai-tools', 'indie-hacking', 'saas-productivity'] },
+    });
+    assert.equal(preview.statusCode, 200);
+    const body = preview.json() as Persona;
+    assert.deepEqual(body, blendPresets('@farm.one', ['ai-tools', 'indie-hacking', 'saas-productivity']));
+    assert.deepEqual(await loadPersonas(directory), {}, 'the preview saves nothing either');
+    assert.equal((await inject(app, {
+        method: 'POST', url: '/api/personas/%40farm.one/blend', payload: { presets: ['nonsense'] },
+    })).statusCode, 400);
+
+    // Saving the form the picker filled keeps the chips with it.
+    const saved = await inject(app, {
+        method: 'POST', url,
+        payload: new URLSearchParams({
+            niche: body.niche, interests: body.interests.join(', '), avoid: body.avoid.join(', '), language: 'en',
+            warmth: String(body.warmth), curiosity: String(body.curiosity),
+            likesMin: '5', likesMax: '12', sessionMin: '14', sessionMax: '33',
+            activeHours: '08-10, 21-24', followLikes: '4', followSessions: '4',
+            presets: 'ai-tools,indie-hacking,saas-productivity',
+        }).toString(),
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    });
+    assert.equal(saved.statusCode, 200);
+    const stored = (await loadPersonas(directory))['@farm.one'];
+    assert.deepEqual(stored?.presets, ['ai-tools', 'indie-hacking', 'saas-productivity']);
+    // And the panel comes back with those chips on it, ready to be blended again. Its copy of the
+    // library is a placeholder: a page of forty configured accounts does not carry forty copies.
+    assert.match(saved.body, /value="ai-tools,indie-hacking,saas-productivity"/);
+    assert.doesNotMatch(saved.body, /data-preset-terms/);
+    const library = await inject(app, {
+        method: 'GET', url: `${url}/library?presets=ai-tools,indie-hacking`,
+    });
+    assert.equal(library.statusCode, 200);
+    assert.match(library.body, /Garage racks, adjustable dumbbells/);
+    assert.match(library.body, /data-preset-search/);
+    // An option already picked offers the selection without it; the others offer it with them.
+    assert.match(library.body, /value="indie-hacking" data-preset-terms="ai tools/);
+    assert.match(library.body, /value="ai-tools,indie-hacking,yoga"/);
+
+    // The one-call endpoint blends and stores.
+    const applied = await inject(app, {
+        method: 'POST', url: '/api/accounts/%40farm.two/persona/preset', payload: { presets: ['yoga', 'coffee'] },
+    });
+    assert.equal(applied.statusCode, 200);
+    assert.deepEqual((applied.json() as Persona).presets, ['yoga', 'coffee']);
+    assert.deepEqual((await loadPersonas(directory))['@farm.two']!.presets, ['yoga', 'coffee']);
+
+    const listed = await inject(app, { method: 'GET', url: '/api/persona-presets' });
+    const catalogue = listed.json() as {
+        presets: Array<{ id: string; category: string }>;
+        categories: Array<{ category: string; presets: string[] }>;
+    };
+    assert.equal(catalogue.presets.length, PERSONA_PRESETS.length);
+    assert.deepEqual(catalogue.categories.map(({ category }) => category), [...PRESET_CATEGORIES]);
+    assert.ok(catalogue.categories.every(({ presets }) => presets.length > 0));
 });
