@@ -144,6 +144,41 @@ so an agent's tool loop is bounded without being throttled. See the table in
 | `list_upload_dirs` | — | The directories `upload_asset`'s `path` may read from |
 | `list_plugins` | — | Loaded plugins and their task types/versions |
 
+### Driving a phone
+
+These are what the [calibration agent](agent.md) uses, and what any agent uses to look at a screen
+rather than at a screenshot. They need a deployment that exposes device control over MCP; without
+one they answer with a single sentence saying so.
+
+| Tool | Arguments | Notes |
+| --- | --- | --- |
+| `read_screen` | `udid`, `limit?` (≤1000, default 300), `screenshot?` (default true) | The accessibility tree flattened to `{id, text, description, class, bounds, clickable}`, plus a downscaled PNG. Empty layout nodes are dropped. |
+| `find_on_screen` | `udid`, `query`, `limit?` (≤100, default 20) | Nodes whose id, text or content-desc contain the query, each with the `tapAt` point a tap would land on |
+| `tap` | `udid`, and either `x` + `y` or `selector` (`{id}` or `{text, exact?}`) | A selector taps the nearest clickable ancestor of the match, which is what a finger hits |
+| `swipe` | `udid`, `fromX`, `fromY`, `toX`, `toY`, `durationMs?` (default 300) | |
+| `press_key` | `udid`, `key` (`home`\|`back`\|`enter`\|`delete`\|`recents`\|`power`\|`wake`) | |
+| `type_text` | `udid`, `text` (≤4000) | Types into whatever has focus — tap the field first. adb-driven phones take printable ASCII only |
+| `launch_app` | `udid`, `appId` | Android package name or iOS bundle id |
+
+The five input tools are counted per device at `RATE_LIMIT_ACTION` (default ten a second), the
+same ceiling the dashboard's `/remote/action` route uses. Over the HTTP transport they are also
+inside the `mcp` request bucket; over stdio this per-device limit is the only one there is, which
+is why it lives in the tool set rather than in a Fastify hook.
+
+### Selectors
+
+| Tool | Arguments | Notes |
+| --- | --- | --- |
+| `list_selectors` | `plugin`, `udid?` (default `*`) | Every control an Android routine looks for, with its built-in alternates, whether it is still an unconfirmed guess, and any recorded override |
+| `list_unverified_selectors` | `plugin`, `udid?` | Just the guesses with nothing confirmed — the work list for a calibration pass |
+| `record_selector` | `plugin`, `udid` (or `*`), `name`, `entry` (`{id}` or `{text, exact?}`), `note?`, `confirmedBy?` | Writes an override. Refused for a name the plugin does not have |
+| `forget_selector` | `plugin`, `udid`, `name` | Removes one, putting the routine back on its built-in alternates |
+| `list_selector_overrides` | `plugin?`, `udid?` | Everything recorded, with who confirmed it and when |
+
+Overrides live in `<SCHEDULER_DATA_DIR>/selector-overrides.json` and are tried *before* the
+routine's built-in alternates, never instead of them. See [the agent doc](agent.md) for the file
+format and how a confirmed selector eventually becomes a code change.
+
 `timing` is one of:
 
 ```jsonc

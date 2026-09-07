@@ -1,4 +1,6 @@
 import path from 'node:path';
+import { resolveTable } from '../../drivers/selector-overrides.js';
+import { THREADS_PLUGIN_ID } from '../../plugin-ids.js';
 import { fileURLToPath } from 'node:url';
 
 import type { DeviceDriver } from '../../drivers/types.js';
@@ -56,6 +58,17 @@ export const FEED_SELECTORS = {
     searchField: [{ id: 'action_bar_search_edit_text' }, { id: 'search_input' }, { text: 'Search', exact: false }] as SelectorList,
 } as const;
 
+/**
+ * What the flow below actually reads.
+ *
+ * It starts as the built-in guesses and is replaced, once per run, by the same table with any
+ * confirmed overrides for this phone in front (src/drivers/selector-overrides.ts). A selector an
+ * operator or the calibration agent has verified against a real device therefore wins without
+ * anybody editing this file, and an override that has itself gone stale still falls through to
+ * the alternates below it.
+ */
+let selectors: typeof FEED_SELECTORS = FEED_SELECTORS;
+
 export interface WarmupOnAndroidOptions {
     /** Absent with a persona means "ask the persona how long it feels like browsing". */
     durationMinutes?: number;
@@ -104,7 +117,7 @@ async function ensureFeed(
     sleep: (ms: number) => Promise<void>,
 ): Promise<void> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
-        if (await tapIfPresent(driver, 'Home tab', FEED_SELECTORS.homeTab, tapping)) {
+        if (await tapIfPresent(driver, 'Home tab', selectors.homeTab, tapping)) {
             console.log('On the feed');
             return;
         }
@@ -113,7 +126,7 @@ async function ensureFeed(
         await sleep(900);
     }
     try {
-        await waitForAny(driver, 'the Threads feed', FEED_SELECTORS.homeTab, { timeoutMs: 8_000 });
+        await waitForAny(driver, 'the Threads feed', selectors.homeTab, { timeoutMs: 8_000 });
         console.log('On the feed');
     } catch (error) {
         console.log(`Could not confirm the feed; browsing anyway. ${error instanceof Error ? error.message : String(error)}`);
@@ -126,6 +139,9 @@ export function sessionMinutes(requested: number, random: () => number): number 
 }
 
 export async function warmupOnAndroid(driver: DeviceDriver, options: WarmupOnAndroidOptions): Promise<WarmupSummary> {
+    // One read of the override store per run, before the first tap: the flow below then uses
+    // the corrected table exactly as it used the built-in one.
+    selectors = await resolveTable(THREADS_PLUGIN_ID, driver.udid, FEED_SELECTORS);
     const { likeEnabled, repostEnabled, signal } = options;
     const random = options.random ?? Math.random;
     const now = options.now ?? Date.now;
@@ -197,18 +213,18 @@ export async function warmupOnAndroid(driver: DeviceDriver, options: WarmupOnAnd
 
     /** Repost is a two-step gesture: the icon raises a sheet whose first row is the repost itself. */
     const repost = async (): Promise<boolean> => {
-        if (!await tapIfPresent(driver, 'Repost', FEED_SELECTORS.repost, tapping)) return false;
+        if (!await tapIfPresent(driver, 'Repost', selectors.repost, tapping)) return false;
         await sleep(motion.pause('afterLike'));
         // Some builds repost straight from the icon; then there is no sheet to confirm.
-        await tapIfPresent(driver, 'the repost sheet', FEED_SELECTORS.repostConfirm, tapping);
+        await tapIfPresent(driver, 'the repost sheet', selectors.repostConfirm, tapping);
         return true;
     };
 
     /** Search, then come back. Two Back presses land on the feed the run came from. */
     const runSearch = async (term: string): Promise<boolean> => {
-        if (!await tapIfPresent(driver, 'Search', FEED_SELECTORS.searchEntry, tapping)) return false;
+        if (!await tapIfPresent(driver, 'Search', selectors.searchEntry, tapping)) return false;
         await sleep(1_200);
-        await tapIfPresent(driver, 'the search field', FEED_SELECTORS.searchField, tapping);
+        await tapIfPresent(driver, 'the search field', selectors.searchField, tapping);
         await driver.type(term);
         await driver.pressKey('enter');
         await sleep(2_500);
@@ -236,7 +252,7 @@ export async function warmupOnAndroid(driver: DeviceDriver, options: WarmupOnAnd
 
         if (likeEnabled && decision.like) {
             await sleep(clampToDeadline(now(), deadline, motion.pause('beforeLike')));
-            if (await tapIfPresent(driver, 'Like', FEED_SELECTORS.like, tapping)) likes += 1;
+            if (await tapIfPresent(driver, 'Like', selectors.like, tapping)) likes += 1;
         }
         // The persona's "keep this" signal; on Threads that gesture is a repost.
         if (repostEnabled && decision.save && running()) {
@@ -245,7 +261,7 @@ export async function warmupOnAndroid(driver: DeviceDriver, options: WarmupOnAnd
         }
         if (followEnabled && decision.follow && running()) {
             await sleep(clampToDeadline(now(), deadline, motion.pause('beforeLike')));
-            if (await tapIfPresent(driver, 'Follow', FEED_SELECTORS.follow, tapping)) follows += 1;
+            if (await tapIfPresent(driver, 'Follow', selectors.follow, tapping)) follows += 1;
         }
         noteDecision(session, post, decision);
         if (!running()) break;

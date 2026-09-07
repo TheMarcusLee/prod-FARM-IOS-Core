@@ -27,7 +27,8 @@ export interface ThreadsPluginConfiguration {
     packageName?: string;
 }
 
-export const THREADS_PLUGIN_ID = 'com.backline.threads';
+export { THREADS_PLUGIN_ID } from './plugin-ids.js';
+import { THREADS_PLUGIN_ID } from './plugin-ids.js';
 export const THREADS_IOS_BUNDLE_ID = 'com.burbn.barcelona';
 export const THREADS_ANDROID_PACKAGE = 'com.instagram.barcelona';
 

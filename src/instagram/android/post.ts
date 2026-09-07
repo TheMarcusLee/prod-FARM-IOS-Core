@@ -1,4 +1,6 @@
 import { readFile } from 'node:fs/promises';
+import { resolveTable } from '../../drivers/selector-overrides.js';
+import { INSTAGRAM_PLUGIN_ID } from '../../plugin-ids.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -91,6 +93,17 @@ export const POST_SELECTORS = {
     galleryCellDescriptions: ['photo', 'video', 'image'] as readonly string[],
 } as const;
 
+/**
+ * What the flow below actually reads.
+ *
+ * It starts as the built-in guesses and is replaced, once per run, by the same table with any
+ * confirmed overrides for this phone in front (src/drivers/selector-overrides.ts). A selector an
+ * operator or the calibration agent has verified against a real device therefore wins without
+ * anybody editing this file, and an override that has itself gone stale still falls through to
+ * the alternates below it.
+ */
+let selectors: typeof POST_SELECTORS = POST_SELECTORS;
+
 export interface PostOnAndroidOptions {
     /** Android package; overridden with INSTAGRAM_PACKAGE from the environment. */
     packageName?: string;
@@ -161,10 +174,10 @@ export function assertCaptionIsTypeable(driver: DeviceDriver, caption: string): 
 /** Picker cells, ordered the way they are laid out: top-left (newest) first. */
 export function galleryCells(root: UiNode): UiNode[] {
     const matches = [...walk(root)].filter((node) => {
-        const byId = POST_SELECTORS.galleryCellIds.some((id) => node.id === id || node.id.endsWith(`:id/${id}`));
+        const byId = selectors.galleryCellIds.some((id) => node.id === id || node.id.endsWith(`:id/${id}`));
         const description = node.description.toLowerCase();
         const byDescription = description.length > 0
-            && POST_SELECTORS.galleryCellDescriptions.some((word) => description.includes(word));
+            && selectors.galleryCellDescriptions.some((word) => description.includes(word));
         return byId || byDescription;
     });
     const seen = new Set<string>();
@@ -202,7 +215,7 @@ async function pushAllMedia(driver: DeviceDriver, manifest: InstagramPostManifes
 export async function switchAccount(driver: DeviceDriver, handle: string, options: PostOnAndroidOptions = {}): Promise<void> {
     const timing = timingOf(options);
     console.log(`Switching to Instagram account "${handle}"`);
-    await tapFirst(driver, 'Profile tab', POST_SELECTORS.profileTab, tapping(options));
+    await tapFirst(driver, 'Profile tab', selectors.profileTab, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
 
     const handleSelector: SelectorList = [{ text: handle }];
@@ -213,7 +226,7 @@ export async function switchAccount(driver: DeviceDriver, handle: string, option
         return;
     }
 
-    await tapFirst(driver, 'account switcher', POST_SELECTORS.accountSwitcher, tapping(options));
+    await tapFirst(driver, 'account switcher', selectors.accountSwitcher, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
     await waitForAny(driver, `the account row for ${handle}`, handleSelector, {
         timeoutMs: timing.screenTimeoutMs, intervalMs: timing.pollIntervalMs, ...(timing.signal ? { signal: timing.signal } : {}),
@@ -222,7 +235,7 @@ export async function switchAccount(driver: DeviceDriver, handle: string, option
     // Instagram reloads app state after a switch.
     await driver.pause(timing.settleMs * 2, timing.signal);
 
-    await tapFirst(driver, 'Profile tab (verify)', POST_SELECTORS.profileTab, tapping(options));
+    await tapFirst(driver, 'Profile tab (verify)', selectors.profileTab, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
     const root = await driver.uiTree();
     if (!findByText(root, { text: handle })) {
@@ -238,18 +251,18 @@ export async function switchAccount(driver: DeviceDriver, handle: string, option
  */
 async function chooseSurface(driver: DeviceDriver, format: InstagramFormat, options: PostOnAndroidOptions): Promise<void> {
     const timing = timingOf(options);
-    const selectors = format === 'reel' ? POST_SELECTORS.reelTab : POST_SELECTORS.postTab;
-    await tapIfPresent(driver, format === 'reel' ? 'REEL tab' : 'POST tab', selectors, tapping(options));
+    const tab = format === 'reel' ? selectors.reelTab : selectors.postTab;
+    await tapIfPresent(driver, format === 'reel' ? 'REEL tab' : 'POST tab', tab, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
     // Builds that open the camera instead of the grid need one more tap to get to the gallery.
-    await tapIfPresent(driver, 'Gallery', POST_SELECTORS.gallery, tapping(options));
+    await tapIfPresent(driver, 'Gallery', selectors.gallery, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
 }
 
 async function selectMedia(driver: DeviceDriver, count: number, options: PostOnAndroidOptions): Promise<void> {
     const timing = timingOf(options);
     if (count > 1) {
-        await tapIfPresent(driver, 'Select multiple', POST_SELECTORS.selectMultiple, tapping(options));
+        await tapIfPresent(driver, 'Select multiple', selectors.selectMultiple, tapping(options));
         await driver.pause(timing.settleMs, timing.signal);
     }
     const root = await driver.uiTree();
@@ -276,16 +289,16 @@ async function selectMedia(driver: DeviceDriver, count: number, options: PostOnA
 async function advanceToCaptionScreen(driver: DeviceDriver, options: PostOnAndroidOptions, maxSteps = 4): Promise<void> {
     const timing = timingOf(options);
     for (let step = 1; step <= maxSteps; step += 1) {
-        if (await isPresent(driver, POST_SELECTORS.captionField)) {
+        if (await isPresent(driver, selectors.captionField)) {
             console.log('Reached the caption screen');
             return;
         }
         // "Add audio" / "Try a template" prompts sit on top of Next on some reel builds.
-        await tapIfPresent(driver, 'an optional prompt', POST_SELECTORS.dismissAudio, tapping(options));
-        await tapFirst(driver, `Next (${step})`, POST_SELECTORS.next, tapping(options));
+        await tapIfPresent(driver, 'an optional prompt', selectors.dismissAudio, tapping(options));
+        await tapFirst(driver, `Next (${step})`, selectors.next, tapping(options));
         await driver.pause(timing.settleMs, timing.signal);
     }
-    if (await isPresent(driver, POST_SELECTORS.captionField)) {
+    if (await isPresent(driver, selectors.captionField)) {
         console.log('Reached the caption screen');
         return;
     }
@@ -294,7 +307,7 @@ async function advanceToCaptionScreen(driver: DeviceDriver, options: PostOnAndro
 
 async function addCaption(driver: DeviceDriver, caption: string, options: PostOnAndroidOptions): Promise<void> {
     const timing = timingOf(options);
-    await tapFirst(driver, 'caption field', POST_SELECTORS.captionField, tapping(options));
+    await tapFirst(driver, 'caption field', selectors.captionField, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
     await driver.type(caption);
     // Back closes the soft keyboard without leaving the share form.
@@ -312,6 +325,9 @@ async function addCaption(driver: DeviceDriver, caption: string, options: PostOn
 export async function postOnAndroid(
     driver: DeviceDriver, manifest: InstagramPostManifest, options: PostOnAndroidOptions = {},
 ): Promise<void> {
+    // One read of the override store per run, before the first tap: the flow below then uses
+    // the corrected table exactly as it used the built-in one.
+    selectors = await resolveTable(INSTAGRAM_PLUGIN_ID, driver.udid, POST_SELECTORS);
     const timing = timingOf(options);
     const packageName = options.packageName ?? INSTAGRAM_ANDROID_PACKAGE;
 
@@ -329,7 +345,7 @@ export async function postOnAndroid(
     const account = manifest.account?.trim();
     if (account) await switchAccount(driver, account, options);
 
-    await tapFirst(driver, 'Create', POST_SELECTORS.create, tapping(options));
+    await tapFirst(driver, 'Create', selectors.create, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
     await chooseSurface(driver, manifest.format, options);
 
@@ -340,17 +356,17 @@ export async function postOnAndroid(
 
     const publishing = manifest.destination === 'publish';
     if (publishing) {
-        await tapFirst(driver, 'Share', POST_SELECTORS.share, tapping(options));
+        await tapFirst(driver, 'Share', selectors.share, tapping(options));
         console.log('Instagram post submitted');
     } else {
         // There is no Drafts button on the share screen; backing out of it is what offers one.
         await driver.pressKey('back');
         await driver.pause(timing.settleMs, timing.signal);
-        await tapFirst(driver, 'Save draft', POST_SELECTORS.saveDraft, tapping(options));
+        await tapFirst(driver, 'Save draft', selectors.saveDraft, tapping(options));
         console.log('Instagram draft submitted');
     }
 
-    const confirmation = publishing ? POST_SELECTORS.publishSuccess : POST_SELECTORS.draftSuccess;
+    const confirmation = publishing ? selectors.publishSuccess : selectors.draftSuccess;
     const confirmed = await waitForAny(driver, publishing ? 'the upload confirmation' : 'the draft confirmation', confirmation, {
         timeoutMs: timing.successTimeoutMs, intervalMs: timing.pollIntervalMs, ...(timing.signal ? { signal: timing.signal } : {}),
     });

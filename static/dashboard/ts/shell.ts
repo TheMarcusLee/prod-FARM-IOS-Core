@@ -280,12 +280,41 @@ function initAlerts(): void {
     window.addEventListener('beforeunload', () => stream.close());
 }
 
+/**
+ * "Calibrate with agent" / "Ask the agent to calibrate". The same button appears on a device
+ * page's Selectors block and on the failure card of a run that could not find a control, so it is
+ * bound once here, delegated, rather than in each page's own script.
+ */
+function initCalibrate(): void {
+    document.addEventListener('click', (event) => {
+        const button = (event.target as Element | null)?.closest<HTMLButtonElement>('[data-calibrate]');
+        if (!button) return;
+        const { plugin, flow, udid } = button.dataset;
+        if (!plugin || !flow || !udid) return;
+        const result = pick<HTMLElement>('#calibrate-result');
+        const label = button.textContent ?? 'Calibrate with agent';
+        button.disabled = true;
+        button.textContent = 'Booking…';
+        void send('/api/agent/calibrate', { plugin, flow, udid })
+            .then(() => {
+                button.textContent = 'Queued';
+                if (result) result.textContent = `Calibration queued for ${plugin} ${flow} on ${udid}. Follow it in this phone's activity.`;
+            })
+            .catch((error: unknown) => {
+                button.disabled = false;
+                button.textContent = label;
+                if (result) result.textContent = errorMessage(error);
+            });
+    });
+}
+
 export function initShell(): void {
     if (window.__blShell) return;
     window.__blShell = true;
     initRegistry();
     initCopy();
     initAlerts();
+    initCalibrate();
 }
 
 initShell();

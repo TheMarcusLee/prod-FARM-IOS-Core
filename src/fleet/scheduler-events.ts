@@ -1,6 +1,7 @@
 import type { TaskDefinition } from '../plugin.js';
-import type { TaskEnvelope } from '../types.js';
+import type { JsonObject, TaskEnvelope } from '../types.js';
 import type { SchedulerEventHook, SchedulerLifecycleEvent } from '../scheduler/repository.js';
+import { calibrationHint } from '../agent/failure.js';
 import type { EventInput, EventKind, EventSeverity } from './events.js';
 import type { EventRecorder } from './recorder.js';
 
@@ -43,6 +44,10 @@ export function lifecycleEventInput(event: SchedulerLifecycleEvent, fixUrl?: str
                 ...(attempt === undefined ? {} : { attempt }),
                 ...(execution.error ? { error: execution.error } : {}),
                 ...(kind === 'execution.failed' && safeFixUrl(fixUrl) ? { fixUrl: safeFixUrl(fixUrl)! } : {}),
+                // A missing on-screen control is repairable by an agent rather than by a person,
+                // so the failure carries what a calibration pass would need: which plugin and
+                // flow, which phone, which selector, and the screenshot taken at the time.
+                ...(kind === 'execution.failed' ? calibrateDetail(execution) : {}),
             },
         };
     }
@@ -57,6 +62,12 @@ export function lifecycleEventInput(event: SchedulerLifecycleEvent, fixUrl?: str
             nextRunAt: schedule.nextRunAt?.toISOString() ?? null,
         },
     };
+}
+
+/** `{ calibrate: {...} }` when this failure is a control the routine could not see, else nothing. */
+function calibrateDetail(execution: { pluginId: string; taskType: string; deviceUdid: string; error?: string | null }): JsonObject {
+    const hint = calibrationHint(execution);
+    return hint ? { calibrate: { ...hint } } : {};
 }
 
 /** A plugin that has been uninstalled, or a task that offers no repair, simply has no link. */

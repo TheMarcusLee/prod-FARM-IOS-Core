@@ -1,4 +1,6 @@
 import { readFile } from 'node:fs/promises';
+import { resolveTable } from '../../drivers/selector-overrides.js';
+import { TIKTOK_PLUGIN_ID } from '../../plugin-ids.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -93,6 +95,17 @@ export const POST_SELECTORS = {
     galleryCellDescriptions: ['video', 'photo', 'image'] as readonly string[],
 } as const;
 
+/**
+ * What the flow below actually reads.
+ *
+ * It starts as the built-in guesses and is replaced, once per run, by the same table with any
+ * confirmed overrides for this phone in front (src/drivers/selector-overrides.ts). A selector an
+ * operator or the calibration agent has verified against a real device therefore wins without
+ * anybody editing this file, and an override that has itself gone stale still falls through to
+ * the alternates below it.
+ */
+let selectors: typeof POST_SELECTORS = POST_SELECTORS;
+
 export interface PostOnAndroidOptions {
     /** Android package; overridden with TIKTOK_PACKAGE from the environment. */
     packageName?: string;
@@ -163,10 +176,10 @@ export function assertCaptionIsTypeable(driver: DeviceDriver, caption: string): 
 /** Picker cells, ordered the way they are laid out: top-left (newest) first. */
 export function galleryCells(root: UiNode): UiNode[] {
     const matches = [...walk(root)].filter((node) => {
-        const byId = POST_SELECTORS.galleryCellIds.some((id) => node.id === id || node.id.endsWith(`:id/${id}`));
+        const byId = selectors.galleryCellIds.some((id) => node.id === id || node.id.endsWith(`:id/${id}`));
         const description = node.description.toLowerCase();
         const byDescription = description.length > 0
-            && POST_SELECTORS.galleryCellDescriptions.some((word) => description.includes(word));
+            && selectors.galleryCellDescriptions.some((word) => description.includes(word));
         return byId || byDescription;
     });
     const seen = new Set<string>();
@@ -204,7 +217,7 @@ async function pushAllMedia(driver: DeviceDriver, manifest: PostManifest): Promi
 export async function switchAccount(driver: DeviceDriver, handle: string, options: PostOnAndroidOptions = {}): Promise<void> {
     const timing = timingOf(options);
     console.log(`Switching to TikTok account "${handle}"`);
-    await tapFirst(driver, 'Profile tab', POST_SELECTORS.profileTab, tapping(options));
+    await tapFirst(driver, 'Profile tab', selectors.profileTab, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
 
     const handleSelector: SelectorList = [{ text: handle }];
@@ -215,7 +228,7 @@ export async function switchAccount(driver: DeviceDriver, handle: string, option
         return;
     }
 
-    await tapFirst(driver, 'account switcher', POST_SELECTORS.accountSwitcher, tapping(options));
+    await tapFirst(driver, 'account switcher', selectors.accountSwitcher, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
     await waitForAny(driver, `the account row for ${handle}`, handleSelector, {
         timeoutMs: timing.screenTimeoutMs, intervalMs: timing.pollIntervalMs, ...(timing.signal ? { signal: timing.signal } : {}),
@@ -224,7 +237,7 @@ export async function switchAccount(driver: DeviceDriver, handle: string, option
     // TikTok reloads app state after a switch.
     await driver.pause(timing.settleMs * 2, timing.signal);
 
-    await tapFirst(driver, 'Profile tab (verify)', POST_SELECTORS.profileTab, tapping(options));
+    await tapFirst(driver, 'Profile tab (verify)', selectors.profileTab, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
     const root = await driver.uiTree();
     if (!findByText(root, { text: handle })) {
@@ -236,7 +249,7 @@ export async function switchAccount(driver: DeviceDriver, handle: string, option
 async function selectMedia(driver: DeviceDriver, count: number, options: PostOnAndroidOptions): Promise<void> {
     const timing = timingOf(options);
     if (count > 1) {
-        await tapIfPresent(driver, 'Select multiple', POST_SELECTORS.selectMultiple, tapping(options));
+        await tapIfPresent(driver, 'Select multiple', selectors.selectMultiple, tapping(options));
         await driver.pause(timing.settleMs, timing.signal);
     }
     const root = await driver.uiTree();
@@ -261,7 +274,7 @@ async function selectMedia(driver: DeviceDriver, count: number, options: PostOnA
  */
 async function openPhotoTab(driver: DeviceDriver, options: PostOnAndroidOptions): Promise<void> {
     const timing = timingOf(options);
-    if (await tapIfPresent(driver, 'picker Photos tab', POST_SELECTORS.photoTab, tapping(options))) {
+    if (await tapIfPresent(driver, 'picker Photos tab', selectors.photoTab, tapping(options))) {
         await driver.pause(timing.settleMs, timing.signal);
     }
 }
@@ -276,12 +289,12 @@ async function openPhotoTab(driver: DeviceDriver, options: PostOnAndroidOptions)
  */
 async function openPhotoEditor(driver: DeviceDriver, options: PostOnAndroidOptions): Promise<void> {
     const timing = timingOf(options);
-    await tapFirst(driver, 'Next (picker)', POST_SELECTORS.next, tapping(options));
+    await tapFirst(driver, 'Next (picker)', selectors.next, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
-    if (await tapIfPresent(driver, 'photo mode toggle', POST_SELECTORS.photoMode, tapping(options))) {
+    if (await tapIfPresent(driver, 'photo mode toggle', selectors.photoMode, tapping(options))) {
         await driver.pause(timing.settleMs, timing.signal);
     }
-    if (await tapIfPresent(driver, 'photo template chooser', POST_SELECTORS.photoTemplateSkip, tapping(options))) {
+    if (await tapIfPresent(driver, 'photo template chooser', selectors.photoTemplateSkip, tapping(options))) {
         await driver.pause(timing.settleMs, timing.signal);
     }
 }
@@ -290,14 +303,14 @@ async function openPhotoEditor(driver: DeviceDriver, options: PostOnAndroidOptio
 async function advanceToCaptionScreen(driver: DeviceDriver, options: PostOnAndroidOptions, maxSteps = 3): Promise<void> {
     const timing = timingOf(options);
     for (let step = 1; step <= maxSteps; step += 1) {
-        if (await isPresent(driver, POST_SELECTORS.captionField)) {
+        if (await isPresent(driver, selectors.captionField)) {
             console.log('Reached the caption screen');
             return;
         }
-        await tapFirst(driver, `Next (${step})`, POST_SELECTORS.next, tapping(options));
+        await tapFirst(driver, `Next (${step})`, selectors.next, tapping(options));
         await driver.pause(timing.settleMs, timing.signal);
     }
-    if (await isPresent(driver, POST_SELECTORS.captionField)) {
+    if (await isPresent(driver, selectors.captionField)) {
         console.log('Reached the caption screen');
         return;
     }
@@ -306,7 +319,7 @@ async function advanceToCaptionScreen(driver: DeviceDriver, options: PostOnAndro
 
 async function addCaption(driver: DeviceDriver, caption: string, options: PostOnAndroidOptions): Promise<void> {
     const timing = timingOf(options);
-    await tapFirst(driver, 'caption field', POST_SELECTORS.captionField, tapping(options));
+    await tapFirst(driver, 'caption field', selectors.captionField, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
     await driver.type(caption);
     // Back closes the soft keyboard without leaving the publish form.
@@ -321,6 +334,9 @@ async function addCaption(driver: DeviceDriver, caption: string, options: PostOn
  * then confirm. Exported so it can be tested without spawning the entrypoint below.
  */
 export async function postOnAndroid(driver: DeviceDriver, manifest: PostManifest, options: PostOnAndroidOptions = {}): Promise<void> {
+    // One read of the override store per run, before the first tap: the flow below then uses
+    // the corrected table exactly as it used the built-in one.
+    selectors = await resolveTable(TIKTOK_PLUGIN_ID, driver.udid, POST_SELECTORS);
     const timing = timingOf(options);
     const packageName = options.packageName ?? TIKTOK_ANDROID_PACKAGE;
 
@@ -340,9 +356,9 @@ export async function postOnAndroid(driver: DeviceDriver, manifest: PostManifest
     const account = manifest.account?.trim();
     if (account) await switchAccount(driver, account, options);
 
-    await tapFirst(driver, 'Create', POST_SELECTORS.create, tapping(options));
+    await tapFirst(driver, 'Create', selectors.create, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
-    await tapFirst(driver, 'Upload', POST_SELECTORS.upload, tapping(options));
+    await tapFirst(driver, 'Upload', selectors.upload, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
 
     if (photos) await openPhotoTab(driver, options);
@@ -353,10 +369,10 @@ export async function postOnAndroid(driver: DeviceDriver, manifest: PostManifest
     if (manifest.caption) await addCaption(driver, manifest.caption, options);
 
     const publishing = manifest.destination === 'publish';
-    await tapFirst(driver, publishing ? 'Post' : 'Drafts', publishing ? POST_SELECTORS.post : POST_SELECTORS.drafts, tapping(options));
+    await tapFirst(driver, publishing ? 'Post' : 'Drafts', publishing ? selectors.post : selectors.drafts, tapping(options));
     console.log(publishing ? 'TikTok post submitted' : 'TikTok draft submitted');
 
-    const confirmation = publishing ? POST_SELECTORS.publishSuccess : POST_SELECTORS.draftSuccess;
+    const confirmation = publishing ? selectors.publishSuccess : selectors.draftSuccess;
     const confirmed = await waitForAny(driver, publishing ? 'the upload confirmation' : 'the draft confirmation', confirmation, {
         timeoutMs: timing.successTimeoutMs, intervalMs: timing.pollIntervalMs, ...(timing.signal ? { signal: timing.signal } : {}),
     });

@@ -88,6 +88,13 @@
             <div class="bl-panel-body bl-muted">Reading runbooks…</div>
         </section>
 
+        <!-- What the Android routines look for on this phone, and the agent that can go and check. -->
+        <section id="selectors" class="bl-panel"
+            hx-get="/api/devices/__DEVICE_UDID__/fragments/selectors" hx-trigger="load" hx-swap="outerHTML">
+            <div class="bl-panel-head">Selectors</div>
+            <div class="bl-panel-body bl-muted">Reading selectors…</div>
+        </section>
+
         __PLUGIN_PANELS__
 
         <section class="bl-panel bl-danger">

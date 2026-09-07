@@ -110,6 +110,11 @@ dashboard's calibration dialog; edit the profile.
 
 ## Selectors to verify
 
+Selectors marked GUESS have never been checked against a real device. You can confirm them by hand
+and record them as data rather than as a code change — or have a cheap agent walk the flow and do it
+for you: see [the calibration agent](agent.md).
+
+
 Dump the tree on a real phone and correct the tables:
 
 ```sh

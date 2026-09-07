@@ -94,10 +94,12 @@ test('the tool set exposes every farm tool plus the status resource and planning
     try {
         const names = (await client.listTools()).tools.map(({ name }) => name).sort();
         assert.deepEqual(names, [
-            'create_doomscroll', 'create_schedule', 'create_tiktok_post', 'discover_devices', 'get_device',
-            'get_execution', 'list_assets', 'list_devices', 'list_executions', 'list_plugins', 'list_schedules',
-            'list_upload_dirs', 'retry_execution', 'screenshot', 'set_schedule_status', 'stop_execution',
-            'upload_asset',
+            'create_doomscroll', 'create_schedule', 'create_tiktok_post', 'discover_devices', 'find_on_screen',
+            'forget_selector', 'get_device', 'get_execution', 'launch_app', 'list_assets', 'list_devices',
+            'list_executions', 'list_plugins', 'list_schedules', 'list_selector_overrides', 'list_selectors',
+            'list_unverified_selectors', 'list_upload_dirs', 'press_key', 'read_screen', 'record_selector',
+            'retry_execution', 'screenshot', 'set_schedule_status', 'stop_execution', 'swipe', 'tap',
+            'type_text', 'upload_asset',
         ]);
 
         const resources = (await client.listResources()).resources.map(({ uri }) => uri);

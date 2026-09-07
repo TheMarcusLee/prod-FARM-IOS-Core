@@ -32,7 +32,8 @@ export interface YouTubePluginConfiguration {
     packageName?: string;
 }
 
-export const YOUTUBE_PLUGIN_ID = 'com.backline.youtube';
+export { YOUTUBE_PLUGIN_ID } from './plugin-ids.js';
+import { YOUTUBE_PLUGIN_ID } from './plugin-ids.js';
 
 type PostMedia = JsonObject & {
     assetId: string;

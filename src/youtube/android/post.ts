@@ -1,4 +1,6 @@
 import { readFile } from 'node:fs/promises';
+import { resolveTable } from '../../drivers/selector-overrides.js';
+import { YOUTUBE_PLUGIN_ID } from '../../plugin-ids.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -112,6 +114,17 @@ export const POST_SELECTORS = {
     galleryCellDescriptions: ['video', 'seconds', 'photo', 'image'] as readonly string[],
 } as const;
 
+/**
+ * What the flow below actually reads.
+ *
+ * It starts as the built-in guesses and is replaced, once per run, by the same table with any
+ * confirmed overrides for this phone in front (src/drivers/selector-overrides.ts). A selector an
+ * operator or the calibration agent has verified against a real device therefore wins without
+ * anybody editing this file, and an override that has itself gone stale still falls through to
+ * the alternates below it.
+ */
+let selectors: typeof POST_SELECTORS = POST_SELECTORS;
+
 export interface PostOnAndroidOptions {
     /** Android package; overridden with YOUTUBE_PACKAGE from the environment. */
     packageName?: string;
@@ -182,10 +195,10 @@ export function assertTextIsTypeable(driver: DeviceDriver, text: string, field: 
 /** Picker cells, ordered the way they are laid out: top-left (newest) first. */
 export function galleryCells(root: UiNode): UiNode[] {
     const matches = [...walk(root)].filter((node) => {
-        const byId = POST_SELECTORS.galleryCellIds.some((id) => node.id === id || node.id.endsWith(`:id/${id}`));
+        const byId = selectors.galleryCellIds.some((id) => node.id === id || node.id.endsWith(`:id/${id}`));
         const description = node.description.toLowerCase();
         const byDescription = description.length > 0
-            && POST_SELECTORS.galleryCellDescriptions.some((word) => description.includes(word));
+            && selectors.galleryCellDescriptions.some((word) => description.includes(word));
         return byId || byDescription;
     });
     const seen = new Set<string>();
@@ -203,7 +216,7 @@ export function galleryCells(root: UiNode): UiNode[] {
 
 /** The channel named at the top of the open account sheet, or '' when no header could be read. */
 export function activeChannel(root: UiNode): string {
-    const node = findAny(root, POST_SELECTORS.activeChannel);
+    const node = findAny(root, selectors.activeChannel);
     return (node?.text || node?.description || '').trim();
 }
 
@@ -215,7 +228,7 @@ export function activeChannel(root: UiNode): string {
 export async function switchAccount(driver: DeviceDriver, handle: string, options: PostOnAndroidOptions = {}): Promise<void> {
     const timing = timingOf(options);
     console.log(`Switching to YouTube channel "${handle}"`);
-    await tapFirst(driver, 'account avatar', POST_SELECTORS.accountAvatar, tapping(options));
+    await tapFirst(driver, 'account avatar', selectors.accountAvatar, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
 
     // The sheet lists every channel on the phone, so "the handle is on screen" says nothing about
@@ -229,7 +242,7 @@ export async function switchAccount(driver: DeviceDriver, handle: string, option
     }
 
     // Some builds list every channel in the account sheet; others hide them behind "Switch account".
-    await tapIfPresent(driver, 'Switch account', POST_SELECTORS.switchAccount, tapping(options));
+    await tapIfPresent(driver, 'Switch account', selectors.switchAccount, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
 
     // Exact, so "@bob" can never land on the "@bobby" row (or on the sheet's own header).
@@ -241,7 +254,7 @@ export async function switchAccount(driver: DeviceDriver, handle: string, option
     // YouTube reloads the whole app after a channel switch.
     await driver.pause(timing.settleMs * 2, timing.signal);
 
-    await tapFirst(driver, 'account avatar (verify)', POST_SELECTORS.accountAvatar, tapping(options));
+    await tapFirst(driver, 'account avatar (verify)', selectors.accountAvatar, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
     const root = await driver.uiTree();
     // The header again where a build has one; where it has none, fall back to an exact match
@@ -278,14 +291,14 @@ async function selectNewestVideo(driver: DeviceDriver, options: PostOnAndroidOpt
 async function advanceToDetailsScreen(driver: DeviceDriver, options: PostOnAndroidOptions, maxSteps = 4): Promise<void> {
     const timing = timingOf(options);
     for (let step = 1; step <= maxSteps; step += 1) {
-        if (await isPresent(driver, POST_SELECTORS.titleField)) {
+        if (await isPresent(driver, selectors.titleField)) {
             console.log('Reached the Shorts details screen');
             return;
         }
-        await tapFirst(driver, `Next (${step})`, POST_SELECTORS.next, tapping(options));
+        await tapFirst(driver, `Next (${step})`, selectors.next, tapping(options));
         await driver.pause(timing.settleMs, timing.signal);
     }
-    if (await isPresent(driver, POST_SELECTORS.titleField)) {
+    if (await isPresent(driver, selectors.titleField)) {
         console.log('Reached the Shorts details screen');
         return;
     }
@@ -313,18 +326,18 @@ async function typeInto(
  */
 async function setPublicVisibility(driver: DeviceDriver, options: PostOnAndroidOptions): Promise<void> {
     const timing = timingOf(options);
-    if (!await tapIfPresent(driver, 'Visibility', POST_SELECTORS.visibility, tapping(options))) {
+    if (!await tapIfPresent(driver, 'Visibility', selectors.visibility, tapping(options))) {
         console.log('No visibility row on the details screen; leaving YouTube on its default');
         return;
     }
     await driver.pause(timing.settleMs, timing.signal);
-    if (!await tapIfPresent(driver, 'Public', POST_SELECTORS.publicOption, tapping(options))) {
+    if (!await tapIfPresent(driver, 'Public', selectors.publicOption, tapping(options))) {
         console.log('The visibility sheet did not offer Public; leaving it as it was');
         return;
     }
     await driver.pause(timing.settleMs, timing.signal);
     // Some builds need the sheet confirmed with a Done/Next before it closes.
-    await tapIfPresent(driver, 'Done (visibility)', POST_SELECTORS.next, tapping(options));
+    await tapIfPresent(driver, 'Done (visibility)', selectors.next, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
 }
 
@@ -335,24 +348,24 @@ async function setPublicVisibility(driver: DeviceDriver, options: PostOnAndroidO
  */
 export async function answerAudience(driver: DeviceDriver, madeForKids: boolean, options: PostOnAndroidOptions): Promise<boolean> {
     const timing = timingOf(options);
-    const answer = madeForKids ? POST_SELECTORS.madeForKids : POST_SELECTORS.notMadeForKids;
+    const answer = madeForKids ? selectors.madeForKids : selectors.notMadeForKids;
     const label = madeForKids ? '"made for kids"' : '"not made for kids"';
 
     // The answer is sometimes right there on the details screen; otherwise it is behind a row.
     if (await tapIfPresent(driver, label, answer, tapping(options))) {
         await driver.pause(timing.settleMs, timing.signal);
-        await tapIfPresent(driver, 'Done (audience)', POST_SELECTORS.next, tapping(options));
+        await tapIfPresent(driver, 'Done (audience)', selectors.next, tapping(options));
         await driver.pause(timing.settleMs, timing.signal);
         return true;
     }
-    if (!await tapIfPresent(driver, 'Audience', POST_SELECTORS.audience, tapping(options))) {
+    if (!await tapIfPresent(driver, 'Audience', selectors.audience, tapping(options))) {
         console.log('No audience question on this screen; the channel has probably already answered it');
         return false;
     }
     await driver.pause(timing.settleMs, timing.signal);
     const answered = await tapIfPresent(driver, label, answer, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
-    await tapIfPresent(driver, 'Done (audience)', POST_SELECTORS.next, tapping(options));
+    await tapIfPresent(driver, 'Done (audience)', selectors.next, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
     if (!answered) console.log('The audience screen did not offer the expected answer; left as it was');
     return answered;
@@ -365,6 +378,9 @@ export async function answerAudience(driver: DeviceDriver, madeForKids: boolean,
  * draft), then confirm and go Home. Exported so it can be tested without spawning the entrypoint.
  */
 export async function postOnAndroid(driver: DeviceDriver, manifest: YouTubePostManifest, options: PostOnAndroidOptions = {}): Promise<void> {
+    // One read of the override store per run, before the first tap: the flow below then uses
+    // the corrected table exactly as it used the built-in one.
+    selectors = await resolveTable(YOUTUBE_PLUGIN_ID, driver.udid, POST_SELECTORS);
     const timing = timingOf(options);
     const packageName = options.packageName ?? YOUTUBE_ANDROID_PACKAGE;
 
@@ -387,19 +403,19 @@ export async function postOnAndroid(driver: DeviceDriver, manifest: YouTubePostM
     const account = manifest.account?.trim();
     if (account) await switchAccount(driver, account, options);
 
-    await tapFirst(driver, 'Create', POST_SELECTORS.create, tapping(options));
+    await tapFirst(driver, 'Create', selectors.create, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
-    await tapFirst(driver, 'Upload a video', POST_SELECTORS.upload, tapping(options));
+    await tapFirst(driver, 'Upload a video', selectors.upload, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
 
     await selectNewestVideo(driver, options);
     await advanceToDetailsScreen(driver, options);
 
-    await typeInto(driver, 'title field', POST_SELECTORS.titleField, manifest.title, options);
+    await typeInto(driver, 'title field', selectors.titleField, manifest.title, options);
     if (manifest.caption) {
         // Not every build shows a description box on the Shorts details screen.
-        if (await isPresent(driver, POST_SELECTORS.descriptionField)) {
-            await typeInto(driver, 'description field', POST_SELECTORS.descriptionField, manifest.caption, options);
+        if (await isPresent(driver, selectors.descriptionField)) {
+            await typeInto(driver, 'description field', selectors.descriptionField, manifest.caption, options);
         } else {
             console.log('No description box on this details screen; the Short goes out with its title only');
         }
@@ -411,11 +427,11 @@ export async function postOnAndroid(driver: DeviceDriver, manifest: YouTubePostM
 
     await tapFirst(
         driver, publishing ? 'Upload Short' : 'Save draft',
-        publishing ? POST_SELECTORS.uploadShort : POST_SELECTORS.saveDraft, tapping(options),
+        publishing ? selectors.uploadShort : selectors.saveDraft, tapping(options),
     );
     console.log(publishing ? 'YouTube Short submitted' : 'YouTube Short kept as a draft');
 
-    const confirmation = publishing ? POST_SELECTORS.publishSuccess : POST_SELECTORS.draftSuccess;
+    const confirmation = publishing ? selectors.publishSuccess : selectors.draftSuccess;
     const confirmed = await waitForAny(driver, publishing ? 'the upload confirmation' : 'the draft confirmation', confirmation, {
         timeoutMs: timing.successTimeoutMs, intervalMs: timing.pollIntervalMs, ...(timing.signal ? { signal: timing.signal } : {}),
     });

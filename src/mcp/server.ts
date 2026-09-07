@@ -7,12 +7,14 @@ import { z } from 'zod';
 
 import type { CreateTaskInput, JsonObject, ScheduleTiming } from '../types.js';
 import type { McpDependencies, DeviceLike } from './types.js';
+import { registerDeviceControlTools } from './device-tools.js';
 import { resolveUploadPath, uploadDirectories } from './uploads.js';
 import {
     abortUpload, chunkLength, completeUpload, createUpload, uploadChunkBytes, writeChunk,
 } from '../content/uploads.js';
 
-export const TIKTOK_PLUGIN_ID = 'com.git-agni.tiktok';
+export { TIKTOK_PLUGIN_ID } from '../plugin-ids.js';
+import { TIKTOK_PLUGIN_ID } from '../plugin-ids.js';
 /**
  * The name this server introduces itself by in the MCP handshake. The key an operator writes in
  * their client's config stays `phone-farm` for compatibility (see apps/desktop mcp-config.ts).
@@ -472,6 +474,8 @@ export function createFarmMcpServer(dependencies: McpDependencies): McpServer {
     registerTikTokTools(server, dependencies);
     registerExecutionTools(server, dependencies);
     registerAssetTools(server, dependencies);
+    // Reading a screen, tapping it, and writing down which selector was right — see docs/agent.md.
+    registerDeviceControlTools(server, dependencies);
 
     server.registerResource('farm-status', 'farm://status', {
         title: 'Fleet status',

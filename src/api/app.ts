@@ -60,6 +60,9 @@ import { registerUploadRoutes } from './routes/uploads.js';
 import { registerLiveRoutes } from './routes/live.js';
 import { registerFleetRoutes } from './routes/fleet.js';
 import { registerMcpRoutes } from './routes/mcp.js';
+import { calibratablePlugins } from '../agent/catalog.js';
+import { renderSelectorsPanel, selectorPanelInput } from '../agent/page.js';
+import { AGENT_PLUGIN_ID } from '../plugin-ids.js';
 import { personaHead, registerPersonaRoutes, renderCreatorsSection, renderPersonaSection } from './routes/personas.js';
 import { registerPushRoutes } from './routes/push.js';
 import { registerScheduleRoutes } from './routes/schedule.js';
@@ -158,7 +161,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 
 /** The repo documents the Rig page may link to. An explicit list — never a path from a request. */
 const DOC_PAGES: readonly string[] = [
-    'getting-started', 'operations', 'android-dashboard', 'fleet-and-alerts', 'auth', 'mcp', 'runbooks',
+    'getting-started', 'operations', 'android-dashboard', 'fleet-and-alerts', 'auth', 'mcp', 'runbooks', 'agent',
     'personas',
 ];
 
@@ -923,6 +926,49 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         );
         return reply.code(201).send(schedule);
     });
+    /**
+     * The Selectors block on a device page. Reading it is a plugin-by-plugin walk over the Android
+     * selector tables plus the override store; there is no database in it, so it stays a fragment.
+     */
+    app.get<{ Params: { udid: string } }>('/api/devices/:udid/fragments/selectors', async (request, reply) => {
+        const device = (await loadRegisteredDevices()).find(({ udid }) => udid === request.params.udid);
+        if (!device) return reply.code(404).type('text/html').send('<section id="selectors" class="bl-panel"><div class="bl-panel-body bl-muted">This phone is not registered.</div></section>');
+        const loaded = new Set(options.plugins.list().map(({ id }) => id));
+        const input = await selectorPanelInput(
+            device.udid,
+            calibratablePlugins().filter((plugin) => loaded.has(plugin)),
+            loaded.has(AGENT_PLUGIN_ID),
+        );
+        return reply.type('text/html').send(renderSelectorsPanel(input));
+    });
+
+    /**
+     * "Ask the agent to calibrate": one button, on the device page's Selectors block and on the
+     * failure card of any run that could not find a control. It books the calibrate task the way
+     * every other task is booked — same device, same queue, same run window.
+     */
+    app.post<{ Body: { udid?: string; plugin?: string; flow?: string; maxMinutes?: number } }>('/api/agent/calibrate', async (request, reply) => {
+        const { udid, plugin, flow } = request.body ?? {};
+        if (!udid || !plugin || (flow !== 'post' && flow !== 'warmup')) {
+            return reply.code(400).send({ error: "udid, plugin and flow ('post' or 'warmup') are required" });
+        }
+        if (!options.plugins.list().some(({ id }) => id === AGENT_PLUGIN_ID)) {
+            return reply.code(409).send({ error: 'The calibration agent plugin is not loaded' });
+        }
+        const device = (await loadRegisteredDevices()).find((entry) => entry.udid === udid);
+        if (!device) return reply.code(404).send({ error: 'Device not found' });
+        if (device.disabled) return reply.code(409).send({ error: 'This device is disabled — activate it before scheduling automation' });
+        const schedule = await options.scheduler.createTask({
+            deviceUdid: device.udid,
+            task: {
+                pluginId: AGENT_PLUGIN_ID, taskType: 'calibrate', taskVersion: 1,
+                payload: { plugin, flow, udid: device.udid, ...(request.body?.maxMinutes ? { maxMinutes: request.body.maxMinutes } : {}) },
+            },
+            timing: { kind: 'now' },
+        }, device.pluginData[AGENT_PLUGIN_ID] ?? {}, new Date(), []);
+        return reply.code(201).send(schedule);
+    });
+
     app.patch<{
         Params: { id: string };
         Body: { timing?: ScheduleTiming; runWindowMinutes?: number; recurringPublishConfirmed?: boolean };

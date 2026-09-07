@@ -1,4 +1,6 @@
 import path from 'node:path';
+import { resolveTable } from '../../drivers/selector-overrides.js';
+import { INSTAGRAM_PLUGIN_ID } from '../../plugin-ids.js';
 import { fileURLToPath } from 'node:url';
 
 import type { DeviceDriver } from '../../drivers/types.js';
@@ -55,6 +57,17 @@ export const FEED_SELECTORS = {
     /** The first result card. GUESS. */
     searchResult: [{ id: 'image_button' }, { id: 'media_thumbnail' }, { id: 'gallery_grid_item_thumbnail' }] as SelectorList,
 } as const;
+
+/**
+ * What the flow below actually reads.
+ *
+ * It starts as the built-in guesses and is replaced, once per run, by the same table with any
+ * confirmed overrides for this phone in front (src/drivers/selector-overrides.ts). A selector an
+ * operator or the calibration agent has verified against a real device therefore wins without
+ * anybody editing this file, and an override that has itself gone stale still falls through to
+ * the alternates below it.
+ */
+let selectors: typeof FEED_SELECTORS = FEED_SELECTORS;
 
 export type WarmupSurface = 'feed' | 'reels' | 'both';
 
@@ -113,10 +126,10 @@ async function ensureSurface(
     driver: DeviceDriver, surface: 'feed' | 'reels', tapping: TapOptions | undefined,
     sleep: (ms: number) => Promise<void>,
 ): Promise<void> {
-    const selectors = surface === 'reels' ? FEED_SELECTORS.reelsTab : FEED_SELECTORS.homeTab;
+    const tab = surface === 'reels' ? selectors.reelsTab : selectors.homeTab;
     const label = surface === 'reels' ? 'Reels tab' : 'Home tab';
     for (let attempt = 0; attempt < 3; attempt += 1) {
-        if (await tapIfPresent(driver, label, selectors, tapping)) {
+        if (await tapIfPresent(driver, label, tab, tapping)) {
             console.log(`On the ${surface}`);
             await sleep(1_200);
             return;
@@ -126,7 +139,7 @@ async function ensureSurface(
         await sleep(900);
     }
     try {
-        await waitForAny(driver, `the Instagram ${surface}`, selectors, { timeoutMs: 8_000 });
+        await waitForAny(driver, `the Instagram ${surface}`, tab, { timeoutMs: 8_000 });
         console.log(`On the ${surface}`);
     } catch (error) {
         console.log(`Could not confirm the ${surface}; scrolling anyway. ${error instanceof Error ? error.message : String(error)}`);
@@ -143,6 +156,9 @@ export function sessionMinutes(requested: number, random: () => number): number 
 }
 
 export async function warmupOnAndroid(driver: DeviceDriver, options: WarmupOnAndroidOptions): Promise<WarmupSummary> {
+    // One read of the override store per run, before the first tap: the flow below then uses
+    // the corrected table exactly as it used the built-in one.
+    selectors = await resolveTable(INSTAGRAM_PLUGIN_ID, driver.udid, FEED_SELECTORS);
     const { likeEnabled, saveEnabled, signal, persona } = options;
     const random = options.random ?? Math.random;
     const now = options.now ?? Date.now;
@@ -230,13 +246,13 @@ export async function warmupOnAndroid(driver: DeviceDriver, options: WarmupOnAnd
      * posts is what a person does, and two Back presses land on the surface the run came from.
      */
     const runSearch = async (term: string): Promise<boolean> => {
-        if (!await tapIfPresent(driver, 'Search', FEED_SELECTORS.searchEntry, tapping)) return false;
+        if (!await tapIfPresent(driver, 'Search', selectors.searchEntry, tapping)) return false;
         await sleep(1_200);
-        await tapIfPresent(driver, 'Search field', FEED_SELECTORS.searchField, tapping);
+        await tapIfPresent(driver, 'Search field', selectors.searchField, tapping);
         await driver.type(term);
         await driver.pressKey('enter');
         await sleep(2_500);
-        if (await tapIfPresent(driver, 'Top result', FEED_SELECTORS.searchResult, tapping)) {
+        if (await tapIfPresent(driver, 'Top result', selectors.searchResult, tapping)) {
             await sleep(2_000);
             for (let index = 0; index < 3 && running(); index += 1) {
                 await swipeToNextPost(driver, motion);
@@ -272,15 +288,15 @@ export async function warmupOnAndroid(driver: DeviceDriver, options: WarmupOnAnd
 
             if (likeEnabled && decision.like) {
                 await sleep(clampToDeadline(now(), deadline, motion.pause('beforeLike')));
-                if (await tapIfPresent(driver, 'Like', FEED_SELECTORS.like, tapping)) likes += 1;
+                if (await tapIfPresent(driver, 'Like', selectors.like, tapping)) likes += 1;
             }
             if (saveEnabled && decision.save && running()) {
                 await sleep(clampToDeadline(now(), deadline, motion.pause('afterLike')));
-                if (await tapIfPresent(driver, 'Save', FEED_SELECTORS.save, tapping)) saves += 1;
+                if (await tapIfPresent(driver, 'Save', selectors.save, tapping)) saves += 1;
             }
             if (followEnabled && decision.follow && running()) {
                 await sleep(clampToDeadline(now(), deadline, motion.pause('beforeLike')));
-                if (await tapIfPresent(driver, 'Follow', FEED_SELECTORS.follow, tapping)) follows += 1;
+                if (await tapIfPresent(driver, 'Follow', selectors.follow, tapping)) follows += 1;
             }
             noteDecision(session, post, decision);
             if (!running()) break;
@@ -311,14 +327,14 @@ export async function warmupOnAndroid(driver: DeviceDriver, options: WarmupOnAnd
         if (likeEnabled && decideLike(profile, random)) {
             await sleep(clampToDeadline(now(), deadline, motion.pause('beforeLike')));
             if (!running()) break;
-            if (await tapIfPresent(driver, 'Like', FEED_SELECTORS.like, tapping)) likes += 1;
+            if (await tapIfPresent(driver, 'Like', selectors.like, tapping)) likes += 1;
         }
         if (!running()) break;
 
         if (saveEnabled && decideSave(profile, random)) {
             await sleep(clampToDeadline(now(), deadline, motion.pause('afterLike')));
             if (!running()) break;
-            if (await tapIfPresent(driver, 'Save', FEED_SELECTORS.save, tapping)) saves += 1;
+            if (await tapIfPresent(driver, 'Save', selectors.save, tapping)) saves += 1;
         }
         if (!running()) break;
 

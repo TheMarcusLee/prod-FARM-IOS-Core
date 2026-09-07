@@ -11,7 +11,8 @@ import { replayRunbook, RunbookStepError } from './runbook/replay.js';
 import { registerRunbookRoutes } from './runbook/routes.js';
 import { mutateRunbook, readRunbook, runbookExists, writeFailureScreenshot } from './runbook/store.js';
 
-export const RUNBOOK_PLUGIN_ID = 'com.farm.runbook';
+export { RUNBOOK_PLUGIN_ID } from './plugin-ids.js';
+import { RUNBOOK_PLUGIN_ID } from './plugin-ids.js';
 
 export interface RunbookPluginConfiguration {
     /** Overrides SCHEDULER_DATA_DIR/runbooks. */

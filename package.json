@@ -23,6 +23,7 @@
     "./instagram": "./src/instagram-plugin.ts",
     "./threads": "./src/threads-plugin.ts",
     "./youtube": "./src/youtube-plugin.ts",
+    "./agent": "./src/agent-plugin.ts",
     "./example-plugin": "./src/example-plugin.ts",
     "./server": "./src/api/server.ts",
     "./worker": "./src/scheduler/worker.ts"

@@ -3,6 +3,8 @@ import {
     type Recognize, type WaitOptions,
 } from '../../drivers/verify.js';
 import { DriverError, type DeviceDriver, type Point, type UiNode } from '../../drivers/types.js';
+import { missingControlError } from '../../drivers/missing-control.js';
+import { selectorNameOf } from '../../drivers/selector-overrides.js';
 import { driverMotion, type MotionSource } from '../../motion/source.js';
 
 /**
@@ -103,10 +105,10 @@ export async function locate(driver: DeviceDriver, selectors: SelectorList, reco
 export async function tapFirst(driver: DeviceDriver, label: string, selectors: SelectorList, options: TapOptions = {}): Promise<void> {
     const point = await locate(driver, selectors, options.recognize);
     if (!point) {
-        throw new DriverError(
-            `YouTube control not found: ${label} (tried ${describe(selectors)}). `
-            + `Screen showed: ${screenSummary(await driver.uiTree())}`,
-        );
+        // A selector list that no longer matches is the routine's most common failure. The error
+        // names the control, the alternates, the screen, the table key and a screenshot, which is
+        // everything the calibration agent needs to correct it.
+        throw await missingControlError(driver, 'YouTube', label, selectors);
     }
     const landed = await humanTapAt(driver, point, options.motion);
     console.log(`Tapped ${label} at (${Math.round(landed.x)}, ${Math.round(landed.y)})`);
@@ -129,7 +131,10 @@ export async function waitForAny(driver: DeviceDriver, label: string, selectors:
     try {
         return await waitForNode(driver, (root) => findAny(root, selectors), options);
     } catch (error) {
-        throw new DriverError(`Timed out waiting for ${label} (tried ${describe(selectors)}). ${error instanceof Error ? error.message : String(error)}`);
+        // Same marker as `missingControlError`: a control that never appeared is as much a wrong
+        // selector as one that was never there.
+        const name = selectorNameOf(selectors);
+        throw new DriverError(`Timed out waiting for ${label} (tried ${describe(selectors)}). ${error instanceof Error ? error.message : String(error)}${name ? ` [selector ${name}]` : ''}`);
     }
 }
 

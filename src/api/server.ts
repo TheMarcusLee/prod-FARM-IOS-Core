@@ -5,6 +5,7 @@ import { configuredPluginModules, loadAuthProvider, loadPlugins } from '../loade
 import { PluginRegistry } from '../registry.js';
 import { createSchedulerRuntime } from '../scheduler/runtime.js';
 import { assertSafeBind } from '../security.js';
+import { createAgentPlugin } from '../agent-plugin.js';
 import { createRunbookPlugin } from '../runbook-plugin.js';
 import { createTikTokPlugin } from '../tiktok-plugin.js';
 import { createInstagramPlugin } from '../instagram-plugin.js';
@@ -35,6 +36,7 @@ export async function defaultPlugins(): Promise<PhoneFarmPlugin[]> {
             ...(process.env.YOUTUBE_PACKAGE ? { packageName: process.env.YOUTUBE_PACKAGE } : {}),
         }),
         createRunbookPlugin(),
+        createAgentPlugin(),
         ...await loadPlugins(configuredPluginModules()),
     ];
 }
