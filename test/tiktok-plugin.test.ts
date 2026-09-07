@@ -76,10 +76,11 @@ test('the post task refuses a video and images in the same post', () => {
     assert.throws(() => validatePost({
         media: [CLIP, shot(1)], destination: 'draft', account: '@internal',
     }), /one video or a set of images, never both/);
-    assert.throws(() => validatePost({
+    // Two clips are one video post: TikTok's composer stitches them.
+    assert.equal(validatePost({
         media: [CLIP, { assetId: 'asset-2', name: 'b.mp4', mimeType: 'video/mp4' }],
         destination: 'draft', account: '@internal',
-    }), /one video, not several/);
+    }).format, 'video');
     // A cover on a video is a caller confusing the two formats.
     assert.throws(() => validatePost({ media: [CLIP], cover: 0, destination: 'draft', account: '@internal' }),
         /only applies to a slideshow/);

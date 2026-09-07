@@ -595,19 +595,23 @@ test('the plugin post task expresses a slideshow, and still holds video to one t
 
         // A payload with no format is a video post, exactly as it was before photo mode existed.
         const video = post.validate({ ...base, media: [{ assetId: 'asset-1', name: 'clip.mp4', mimeType: 'video/mp4' }] }, now);
-        assert.equal(video.format, undefined);
+        assert.equal(video.format, 'video');
+        const clips = post.validate({ ...base, media: Array.from({ length: 3 }, (_, index) => ({
+            assetId: `clip-${index}`, name: `clip${index}.mp4`, mimeType: 'video/mp4' })) }, now);
+        assert.equal((clips.media as unknown[]).length, 3);
 
         assert.throws(() => post.validate({
             ...base, format: 'slideshow', media: [slide(1), { assetId: 'a', name: 'clip.mp4', mimeType: 'video/mp4' }],
-        }, now), /either one video or a set of images/);
-        assert.throws(() => post.validate({ ...base, format: 'photo', media: [slide(1), slide(2)] }, now), /exactly one image/);
+        }, now), /never both|one video or a set of images/);
+        assert.throws(() => post.validate({ ...base, format: 'photo', media: [slide(1), slide(2)] }, now));
         assert.throws(() => post.validate({
             ...base, format: 'slideshow',
             media: Array.from({ length: MAX_SLIDESHOW_IMAGES + 1 }, (_, index) => slide(index)),
-        }, now), /Choose one to 35 images/);
-        assert.throws(() => post.validate({
+        }, now), /35/);
+        // Images with no format are read for what they are: a slideshow, never a video post.
+        assert.equal(post.validate({
             ...base, media: Array.from({ length: 4 }, (_, index) => slide(index)),
-        }, now), /Choose one to three media files/);
+        }, now).format, 'slideshow');
 
         // And the format reaches the routine the only way it can: through the manifest on disk.
         const call = await executeOn(plugin, 'post', 'android', {

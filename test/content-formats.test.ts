@@ -46,14 +46,16 @@ test('the format of a post is read off its files', () => {
     assert.equal(inferFormat([]), null);
     // No format at all, which is what a caller has to reject rather than guess at.
     assert.equal(inferFormat([video(), image('a.jpg')]), null);
-    assert.equal(inferFormat([video('one.mp4'), video('two.mp4')]), null);
+    // Several clips are still a video post; how many a network takes is its table's business.
+    assert.equal(inferFormat([video('one.mp4'), video('two.mp4')]), 'video');
 });
 
 test('mixed media is named as mixed media, not as a count problem', () => {
     const message = refusal(() => validatePostMedia({ network: 'tiktok', files: [video(), image('a.jpg')] }));
     assert.match(message, /one video or a set of images, never both/);
-    assert.match(refusal(() => validatePostMedia({ network: 'tiktok', files: [video('a.mp4'), video('b.mp4')] })),
-        /one video, not several/);
+    // TikTok stitches up to three clips; Instagram takes exactly one.
+    assert.deepEqual(validatePostMedia({ network: 'tiktok', files: [video('a.mp4'), video('b.mp4')] }), { format: 'video' });
+    assert.throws(() => validatePostMedia({ network: 'instagram', files: [video('a.mp4'), video('b.mp4')] }));
 });
 
 test('TikTok takes one video, one photo, and 2 to 35 slideshow images', () => {

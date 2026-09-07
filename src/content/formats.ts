@@ -75,8 +75,10 @@ export const NETWORKS = {
     tiktok: {
         label: 'TikTok',
         formats: {
+            // TikTok's composer stitches up to three clips into one video, and the phone routines
+            // already select more than one, so the old one-to-three allowance stays.
             video: {
-                mediaKind: 'video', minFiles: 1, maxFiles: 1, mimeTypes: VIDEO_MIME_TYPES,
+                mediaKind: 'video', minFiles: 1, maxFiles: 3, mimeTypes: VIDEO_MIME_TYPES,
                 recommendedRatios: [RATIO_9_16],
             },
             photo: {
@@ -159,7 +161,8 @@ export interface MediaFile {
  */
 export function inferFormat(files: readonly MediaFile[]): PostFormat | null {
     if (!files.length) return null;
-    if (files.every(({ mimeType }) => isVideoMimeType(mimeType))) return files.length === 1 ? 'video' : null;
+    // Several clips are still a video post; whether the network stitches them is its table's call.
+    if (files.every(({ mimeType }) => isVideoMimeType(mimeType))) return 'video';
     if (files.every(({ mimeType }) => isImageMimeType(mimeType))) return files.length === 1 ? 'photo' : 'slideshow';
     return null;
 }
@@ -200,7 +203,6 @@ export function validatePostMedia(input: ValidatePostInput): ValidatedPost {
     if (!inferred) {
         const videos = files.filter(({ mimeType }) => isVideoMimeType(mimeType)).length;
         if (videos && videos < files.length) fail('A post is one video or a set of images, never both');
-        if (videos > 1) fail('A post carries one video, not several');
         fail('Every file in a post must be an image this network accepts');
     }
     const format = input.format === undefined || input.format === null || input.format === ''
