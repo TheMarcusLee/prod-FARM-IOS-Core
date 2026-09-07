@@ -72,6 +72,8 @@ export class LivePlayer {
     private stopped = true;
     private streamSize: Size | undefined;
     private codec: string | undefined;
+    /** The last config message, so a decoder can be rebuilt after a decode error. */
+    private lastConfig: LiveConfigMessage | undefined;
     /** SPS/PPS arrive on their own; H.264 wants them in front of the next keyframe. */
     private parameters: Uint8Array | undefined;
     private painted = false;
@@ -110,6 +112,13 @@ export class LivePlayer {
         this.socket?.close();
         this.socket = undefined;
         this.closeDecoder();
+        this.codec = undefined;
+        this.decodedKey = false;
+    }
+
+    /** The operator asked for live again: forget the sockets that failed before. */
+    reset(): void {
+        this.failures = 0;
     }
 
     private closeDecoder(): void {
@@ -135,8 +144,9 @@ export class LivePlayer {
             let message: ServerMessage;
             try { message = JSON.parse(event.data) as ServerMessage; } catch { return; }
             if (message.type === 'config') this.configure(message);
-            // "unavailable" and "ended" both mean this phone has no video for now.
-            else this.giveUp();
+            // "unavailable" and "ended" both mean this phone has no video for now; anything else
+            // the farm may say some day is not a reason to stop watching.
+            else if (message.type === 'unavailable' || message.type === 'ended') this.giveUp();
             return;
         }
         this.decodeChunk(new Uint8Array(event.data));
@@ -150,6 +160,7 @@ export class LivePlayer {
     }
 
     private configure(message: LiveConfigMessage): void {
+        this.lastConfig = message;
         if (message.width && message.height) {
             this.streamSize = { width: message.width, height: message.height };
             this.options.canvas.width = message.width;
@@ -198,9 +209,15 @@ export class LivePlayer {
         }
     }
 
-    /** A decode error means the stream is not decodable from here; ask for a fresh keyframe. */
+    /**
+     * A decode error means the stream is not decodable from here: rebuild the decoder from the
+     * last config and ask the farm for a fresh keyframe, which is what a restarted stream opens with.
+     */
     private recover(): void {
         this.closeDecoder();
+        this.codec = undefined;
+        this.decodedKey = false;
+        if (this.lastConfig) this.configure(this.lastConfig);
         if (this.socket?.readyState === WebSocket.OPEN) {
             this.socket.send(JSON.stringify({ type: 'keyframe' }));
         }

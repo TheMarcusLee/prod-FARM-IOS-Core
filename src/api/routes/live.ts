@@ -91,7 +91,7 @@ export async function registerLiveRoutes(app: FastifyInstance, options: LiveRout
                 id,
                 quality: qualityProfile(request.query.profile),
                 config(config: LiveConfig) {
-                    send(socket, { type: 'config', ...config });
+                    send(socket, { ...config, type: 'config' });
                 },
                 frame(frame: LiveFrame) {
                     if (socket.readyState !== socket.OPEN) return;

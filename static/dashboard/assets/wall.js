@@ -99,6 +99,15 @@ function applyQuality() {
     const wanted = preference();
     if (qualityValue)
         qualityValue.textContent = VIEW_MODE_LABELS[wanted];
+    // Moving the slider to Live is a fresh request: sockets that failed earlier are forgiven.
+    if (wanted === 'live') {
+        for (const tile of tiles) {
+            tile.failures = 0;
+            tile.player?.reset();
+        }
+        inspectorFailures = 0;
+        inspectorPlayer?.reset();
+    }
     for (const tile of tiles)
         tile.pump?.setRate(STILLS_FPS);
     refreshFrames();

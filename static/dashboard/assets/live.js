@@ -40,6 +40,8 @@ export class LivePlayer {
     stopped = true;
     streamSize;
     codec;
+    /** The last config message, so a decoder can be rebuilt after a decode error. */
+    lastConfig;
     /** SPS/PPS arrive on their own; H.264 wants them in front of the next keyframe. */
     parameters;
     painted = false;
@@ -76,6 +78,12 @@ export class LivePlayer {
         this.socket?.close();
         this.socket = undefined;
         this.closeDecoder();
+        this.codec = undefined;
+        this.decodedKey = false;
+    }
+    /** The operator asked for live again: forget the sockets that failed before. */
+    reset() {
+        this.failures = 0;
     }
     closeDecoder() {
         try {
@@ -110,8 +118,9 @@ export class LivePlayer {
             }
             if (message.type === 'config')
                 this.configure(message);
-            // "unavailable" and "ended" both mean this phone has no video for now.
-            else
+            // "unavailable" and "ended" both mean this phone has no video for now; anything else
+            // the farm may say some day is not a reason to stop watching.
+            else if (message.type === 'unavailable' || message.type === 'ended')
                 this.giveUp();
             return;
         }
@@ -124,6 +133,7 @@ export class LivePlayer {
         this.options.onFallback();
     }
     configure(message) {
+        this.lastConfig = message;
         if (message.width && message.height) {
             this.streamSize = { width: message.width, height: message.height };
             this.options.canvas.width = message.width;
@@ -172,9 +182,16 @@ export class LivePlayer {
             frame.close();
         }
     }
-    /** A decode error means the stream is not decodable from here; ask for a fresh keyframe. */
+    /**
+     * A decode error means the stream is not decodable from here: rebuild the decoder from the
+     * last config and ask the farm for a fresh keyframe, which is what a restarted stream opens with.
+     */
     recover() {
         this.closeDecoder();
+        this.codec = undefined;
+        this.decodedKey = false;
+        if (this.lastConfig)
+            this.configure(this.lastConfig);
         if (this.socket?.readyState === WebSocket.OPEN) {
             this.socket.send(JSON.stringify({ type: 'keyframe' }));
         }

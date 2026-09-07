@@ -87,6 +87,9 @@ export interface SessionManagerOptions {
     /** Injected by the tests so they need no real clock. */
     setTimer?: (run: () => void, ms: number) => unknown;
     clearTimer?: (handle: unknown) => void;
+    now?: () => number;
+    /** A watcher joining a stream whose last keyframe is older than this gets the stream restarted. */
+    freshKeyframeMs?: number;
     /** Where the parameter sets become a WebCodecs codec string. */
     decoderCodec?: (sps: Uint8Array | undefined) => string | undefined;
     parameterSets?: (data: Uint8Array) => { sps?: Uint8Array; pps?: Uint8Array };
@@ -110,6 +113,8 @@ interface Session {
     config?: LiveConfig;
     stopTimer?: unknown;
     startedAt: number;
+    /** When the encoder last sent an IDR; 0 until it has. */
+    lastKeyframeAt: number;
     /** The last config packet, replayed to a subscriber that joins mid-stream. */
     parameterFrame?: LiveFrame;
 }
@@ -129,6 +134,8 @@ export function createSessionManager(options: SessionManagerOptions): LiveSessio
     const lingerMs = options.lingerMs ?? 4_000;
     const setTimer = options.setTimer ?? ((run, ms) => setTimeout(run, ms));
     const clearTimer = options.clearTimer ?? ((handle) => clearTimeout(handle as NodeJS.Timeout));
+    const now = options.now ?? (() => Date.now());
+    const freshKeyframeMs = options.freshKeyframeMs ?? 1_500;
     const sessions = new Map<string, Session>();
 
     const cancelStop = (session: Session) => {
@@ -139,7 +146,10 @@ export function createSessionManager(options: SessionManagerOptions): LiveSessio
 
     const handlersFor = (session: Session): LiveStreamHandlers => ({
         codec(info) {
-            session.config = { ...(session.config ?? {}), ...info };
+            // Only the picture's facts: the parser's event also carries a `type` field, which must
+            // never leak into the browser's config message.
+            const { codec, width, height } = info;
+            session.config = { ...(session.config ?? {}), codec, width, height };
             for (const subscriber of session.subscribers.values()) subscriber.config(session.config!);
         },
         frame(frame) {
@@ -161,6 +171,7 @@ export function createSessionManager(options: SessionManagerOptions): LiveSessio
                 };
                 for (const subscriber of session.subscribers.values()) subscriber.config(session.config);
             }
+            if (frame.keyframe) session.lastKeyframeAt = now();
             for (const subscriber of session.subscribers.values()) subscriber.frame(live);
         },
         end(reason) {
@@ -184,7 +195,8 @@ export function createSessionManager(options: SessionManagerOptions): LiveSessio
         session.starting = (async () => {
             if (previous) await previous.stop();
             session.stream = await options.start(session.udid, quality, handlersFor(session));
-            session.startedAt = Date.now();
+            session.startedAt = now();
+            session.lastKeyframeAt = 0;
         })();
         try {
             await session.starting;
@@ -202,13 +214,19 @@ export function createSessionManager(options: SessionManagerOptions): LiveSessio
                         `${maxStreams} phones are already streaming live video — close one first`);
                 }
                 session = {
-                    udid, quality: subscriber.quality, subscribers: new Map(), startedAt: 0,
+                    udid, quality: subscriber.quality, subscribers: new Map(), startedAt: 0, lastKeyframeAt: 0,
                 };
                 sessions.set(udid, session);
             }
             cancelStop(session);
             session.subscribers.set(subscriber.id, subscriber);
             const wanted = qualityFor([...session.subscribers.values()].map(({ quality }) => quality));
+            // A stream that has been running a while sends nothing until the screen changes, and
+            // a newcomer cannot decode before the next keyframe anyway; restarting it hands them a
+            // picture right now instead of a stale still that lasts until someone touches the phone.
+            const stale = session.stream !== undefined && sameQuality(session.quality, wanted)
+                && now() - Math.max(session.startedAt, session.lastKeyframeAt) > freshKeyframeMs;
+            if (stale) session.quality = { maxSize: 0, maxFps: 0 };
             try {
                 await ensureStream(session, wanted);
             } catch (error) {

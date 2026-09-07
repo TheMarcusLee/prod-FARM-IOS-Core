@@ -160,10 +160,11 @@ interface FakeStream {
     stopped: boolean;
 }
 
-function fakeRunner() {
+function fakeRunner(rigOptions: { now?: () => number; freshKeyframeMs?: number } = {}) {
     const started: FakeStream[] = [];
     const timers: Array<{ run: () => void; ms: number }> = [];
     const manager = (options: { maxStreams?: number } = {}) => createSessionManager({
+        ...rigOptions,
         ...options,
         lingerMs: 4_000,
         setTimer: (run, ms) => {
@@ -272,6 +273,35 @@ test('asking for a keyframe restarts the stream, which is how scrcpy sends an ID
     // A phone nobody is watching has nothing to restart.
     await sessions.requestKeyframe('udid-none');
     assert.equal(rig.started.length, 2);
+});
+
+test('the parser event is a session packet on the wire: its own type never reaches the browser', async () => {
+    const rig = fakeRunner();
+    const sessions = rig.manager();
+    const configs: Array<Record<string, unknown>> = [];
+    await sessions.subscribe('udid-a', {
+        ...watcher('one').subscriber, config(config) { configs.push({ ...config }); },
+    });
+    // What the scrcpy parser emits carries `type: 'codec'`; a rotation re-sends it mid-stream.
+    rig.started[0]!.handlers.codec({ type: 'codec', codec: 'h264', width: 720, height: 1600 } as never);
+    assert.deepEqual(configs, [{ codec: 'h264', width: 720, height: 1600 }]);
+    assert.equal('type' in configs[0]!, false, 'the config message keeps its own type');
+});
+
+test('a watcher joining a stream that has gone quiet gets it restarted, so it has a picture at once', async () => {
+    let clock = 0;
+    const rig = fakeRunner({ now: () => clock, freshKeyframeMs: 1_500 });
+    const sessions = rig.manager();
+    await sessions.subscribe('udid-a', watcher('one').subscriber);
+    rig.started[0]!.handlers.frame({ data: new Uint8Array(1), keyframe: true, config: false, ptsUs: 0 });
+    clock = 1_000;
+    await sessions.subscribe('udid-a', watcher('two').subscriber);
+    assert.equal(rig.started.length, 1, 'a keyframe a second ago is fresh enough');
+    clock = 5_000;
+    await sessions.subscribe('udid-a', watcher('three').subscriber);
+    assert.equal(rig.started.length, 2, 'a stream quiet for seconds is restarted for the newcomer');
+    assert.equal(rig.started[0]!.stopped, true);
+    assert.deepEqual(rig.started[1]!.quality, WALL_QUALITY, 'at the quality the watchers already had');
 });
 
 test('a stream that ends tells its watchers, and the session is forgotten', async () => {
