@@ -153,6 +153,26 @@
 .bl-lib-actions { display: flex; gap: 6px; margin-top: auto; }
 .bl-lib-actions .bl-btn { flex: 1; }
 
+/* A slideshow is one post made of several pictures, so the tray reads as a
+   numbered strip: position, thumbnail, name, and the cover marked in place. */
+.bl-tagchip.is-slideshow { border-color: var(--bl-accent); color: var(--bl-accent); background: var(--bl-accent-soft); }
+.bl-set-actions { display: flex; gap: 6px; }
+/* On the poster, not in the actions row: a 122px card has room for two buttons. */
+.bl-lib-pick { position: absolute; top: 5px; right: 5px; width: 22px; height: 22px; padding: 0; display: flex; align-items: center; justify-content: center; border: 0; border-radius: 7px; background: rgba(30, 36, 48, .72); color: #fff; opacity: 0; }
+.bl-lib-card:hover .bl-lib-pick, .bl-lib-pick:focus-visible { opacity: 1; }
+.bl-lib-pick:hover { background: var(--bl-accent); }
+.bl-slides { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.bl-slides:empty { margin: 0; }
+.bl-slide { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 10px; border: 1.5px solid var(--bl-line); background: var(--bl-panel); }
+.bl-slide.is-cover { border-color: var(--bl-accent); background: var(--bl-accent-soft); }
+.bl-slide-index { flex: none; width: 20px; text-align: center; font-size: 11.5px; font-weight: 600; color: var(--bl-text-3); }
+.bl-slide.is-cover .bl-slide-index { color: var(--bl-accent); }
+.bl-slide-thumb { flex: none; width: 30px; height: 40px; border-radius: 6px; object-fit: cover; background: var(--bl-panel-2); display: block; }
+.bl-slide-name { flex: 1; min-width: 0; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bl-slide-actions { flex: none; display: flex; gap: 4px; }
+.bl-slide-actions .bl-btn { padding: 0 7px; }
+.bl-slide-actions .bl-btn[aria-pressed="true"] { background: var(--bl-ink); border-color: var(--bl-ink); color: var(--bl-ink-text); }
+
 .bl-rule { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--bl-line); }
 .bl-rule:last-child { border-bottom: 0; }
 .bl-rule-head { display: flex; align-items: center; gap: 10px; font-size: 13px; }

@@ -29,7 +29,7 @@ function dripRule(overrides: Partial<DripRuleRow> = {}): DripRuleRow {
     return {
         id: 'rule-1', deviceUdid: 'device-1', account: '@handle', enabled: true, postsPerDay: 2,
         windowStart: '09:00', windowEnd: '21:00', timezone: 'UTC', minGapMinutes: 120,
-        destination: 'draft', source: 'tag', setId: null, tag: 'fitness', captionTemplateId: null,
+        destination: 'draft', source: 'tag', format: 'any', setId: null, tag: 'fitness', captionTemplateId: null,
         pickOrder: 'random', avoidReuseDays: 30, lastPlannedDate: null,
         createdAt: new Date('2026-02-01T00:00:00Z'), updatedAt: new Date('2026-02-01T00:00:00Z'),
         ...overrides,
@@ -37,8 +37,16 @@ function dripRule(overrides: Partial<DripRuleRow> = {}): DripRuleRow {
 }
 
 /** Mirrors the fake-repository style of test/app.test.ts — no database anywhere. */
-function fakeStore(): { store: ContentStore; state: { items: ContentItemRow[]; rules: DripRuleRow[] } } {
-    const state = { items: [contentItem()], rules: [] as DripRuleRow[] };
+function fakeStore(): {
+    store: ContentStore;
+    state: {
+        items: ContentItemRow[]; rules: DripRuleRow[]; sets: ContentSetRow[]; members: Map<string, string[]>;
+    };
+} {
+    const state = {
+        items: [contentItem()], rules: [] as DripRuleRow[], sets: [] as ContentSetRow[],
+        members: new Map<string, string[]>(),
+    };
     const unused = () => { throw new Error('not used by these tests'); };
     const store = {
         insertAsset: unused,
@@ -59,12 +67,24 @@ function fakeStore(): { store: ContentStore; state: { items: ContentItemRow[]; r
             return state.items.length < before;
         },
         listSets: async () => [] as Array<ContentSetRow & { itemCount: number }>,
-        createSet: async (values: { name: string; notes?: string | null }) => ({
-            id: 'set-1', name: values.name, notes: values.notes ?? null, createdAt: new Date(),
-        }) as ContentSetRow,
+        set: async (id: string) => state.sets.find((entry) => entry.id === id) ?? null,
+        createSet: async (values: Partial<ContentSetRow> & { name: string }) => {
+            const row = {
+                id: `set-${state.sets.length + 1}`, notes: null, kind: 'pool', coverIndex: 0,
+                createdAt: new Date(), ...values,
+            } as ContentSetRow;
+            state.sets.push(row);
+            return row;
+        },
+        updateSet: async (id: string, patch: Partial<ContentSetRow>) => {
+            const index = state.sets.findIndex((entry) => entry.id === id);
+            if (index < 0) return null;
+            state.sets[index] = { ...state.sets[index] as ContentSetRow, ...patch };
+            return state.sets[index] as ContentSetRow;
+        },
         deleteSet: async () => false,
         setItems: async () => [],
-        setSetItems: async () => {},
+        setSetItems: async (setId: string, itemIds: string[]) => { state.members.set(setId, itemIds); },
         listTemplates: async () => [] as CaptionTemplateRow[],
         template: async () => null,
         createTemplate: async (values: { name: string; template: string }) => ({
@@ -295,7 +315,8 @@ test('library, set, template and rule fragments escape every stored value', asyn
     assert.match(library.body, /data-caption="&quot;&gt;&lt;img/);
 
     assert.equal(renderSets([{
-        id: 'set-1', name: payload, notes: payload, createdAt: new Date(0), itemCount: 1,
+        id: 'set-1', name: payload, notes: payload, kind: 'pool', coverIndex: 0,
+        createdAt: new Date(0), itemCount: 1,
     }]).includes('<img src=x'), false);
     assert.equal(renderTemplates([{
         id: 'tpl-1', name: payload, template: payload, createdAt: new Date(0),
@@ -359,4 +380,61 @@ test('editing a rule releases its unrun posts so the change reaches today', asyn
     });
     assert.equal(invalid.statusCode, 400);
     assert.match(invalid.json().error, /IANA time zone/);
+});
+
+test('a set can be marked a slideshow, given a cover, and read back in order', async () => {
+    const { app, state } = await contentApi();
+
+    const created = await app.inject({
+        method: 'POST', url: '/api/content/sets',
+        payload: { name: 'Monday carousel', kind: 'slideshow', coverIndex: 2 },
+    });
+    assert.equal(created.statusCode, 201);
+    assert.equal(created.json().kind, 'slideshow');
+    assert.equal(created.json().coverIndex, 2);
+    const id = created.json().id as string;
+
+    // A pool created without a kind stays a pool — the default is the old behaviour.
+    const pool = await app.inject({ method: 'POST', url: '/api/content/sets', payload: { name: 'B-roll' } });
+    assert.equal(pool.json().kind, 'pool');
+    assert.equal(pool.json().coverIndex, 0);
+
+    // The builder writes membership in slide order.
+    const order = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'];
+    const members = await app.inject({ method: 'PUT', url: `/api/content/sets/${id}/items`, payload: { itemIds: order } });
+    assert.equal(members.statusCode, 200);
+    assert.deepEqual(state.members.get(id), order);
+
+    // Moving the cover is a PATCH; the set is read back whole for the builder.
+    const moved = await app.inject({ method: 'PATCH', url: `/api/content/sets/${id}`, payload: { coverIndex: 0 } });
+    assert.equal(moved.json().coverIndex, 0);
+    assert.equal(moved.json().kind, 'slideshow', 'a patch names only what changes');
+    const read = await app.inject({ method: 'GET', url: `/api/content/sets/${id}` });
+    assert.equal(read.statusCode, 200);
+    assert.equal(read.json().name, 'Monday carousel');
+
+    assert.equal((await app.inject({ method: 'GET', url: '/api/content/sets/set-404' })).statusCode, 404);
+    const nonsense = await app.inject({ method: 'PATCH', url: `/api/content/sets/${id}`, payload: { kind: 'carousel' } });
+    assert.equal(nonsense.statusCode, 400);
+    assert.match(nonsense.json().error, /pool, slideshow/);
+});
+
+test('a drip rule carries a format filter, defaulting to any', async () => {
+    const { app } = await contentApi();
+    const base = {
+        deviceUdid: 'device-1', account: '@handle', source: 'tag', tag: 'fitness',
+        postsPerDay: 1, minGapMinutes: 0,
+    };
+
+    const plain = await app.inject({ method: 'POST', url: '/api/drip/rules', payload: base });
+    assert.equal(plain.json().format, 'any');
+
+    const slideshows = await app.inject({
+        method: 'POST', url: '/api/drip/rules', payload: { ...base, format: 'slideshow' },
+    });
+    assert.equal(slideshows.json().format, 'slideshow');
+
+    const wrong = await app.inject({ method: 'POST', url: '/api/drip/rules', payload: { ...base, format: 'carousel' } });
+    assert.equal(wrong.statusCode, 400);
+    assert.match(wrong.json().error, /any, video, photo, slideshow/);
 });

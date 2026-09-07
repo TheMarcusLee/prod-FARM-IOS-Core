@@ -45,6 +45,9 @@ export function renderLibrary(items: ContentItemRow[]): string {
             + `${escapeHtml(item.status === 'failed' ? item.error ?? 'processing failed' : item.status)}</span>`;
         return `<article class="bl-lib-card${item.status === 'failed' ? ' is-failed' : ''}" data-item="${escapeHtml(item.id)}">
 <div class="bl-lib-poster"><img src="/api/assets/${encodeURIComponent(item.assetId)}/thumbnail?w=240" alt="" loading="lazy" onerror="this.remove()">
+${item.kind === 'image' && item.status === 'ready'
+        ? `<button type="button" class="bl-lib-pick" data-add-slide="${escapeHtml(item.id)}" data-asset="${escapeHtml(item.assetId)}" data-name="${escapeHtml(title)}" title="Add to the slideshow being built" aria-label="Add to the slideshow being built">${icon('plus', 12)}</button>`
+        : ''}
 <span class="bl-lib-badge">${escapeHtml(duration(item))}</span></div>
 <div class="bl-lib-title" title="${escapeHtml(title)}">${escapeHtml(title)}</div>
 <div class="bl-lib-meta"><span>${item.width}×${item.height}</span><span>${escapeHtml(usedLabel(item))}</span>${item.normalized ? '<span>normalised</span>' : ''}</div>
@@ -59,13 +62,23 @@ ${state}
     return `<div id="content-library" class="bl-lib-grid">${cards}</div>`;
 }
 
+/** A slideshow posts whole and in order; a pool is drawn from one item at a time. */
+function setKindChip(set: ContentSetRow & { itemCount: number }): string {
+    if (set.kind !== 'slideshow') return '<span class="bl-tagchip">pool</span>';
+    const cover = set.coverIndex > 0 ? ` · cover ${set.coverIndex + 1}` : '';
+    return `<span class="bl-tagchip is-slideshow">${set.itemCount} slides${escapeHtml(cover)}</span>`;
+}
+
 export function renderSets(sets: Array<ContentSetRow & { itemCount: number }>): string {
     if (!sets.length) return '<div id="content-sets" class="bl-empty">No sets yet. A set is a pool a drip rule can post from.</div>';
     const rows = sets.map((set) => `<tr><td>${escapeHtml(set.name)}</td>`
+        + `<td>${setKindChip(set)}</td>`
         + `<td class="bl-muted">${escapeHtml(set.notes ?? '')}</td>`
         + `<td>${set.itemCount}</td>`
-        + `<td><button type="button" class="bl-btn bl-btn-sm" data-delete-set="${escapeHtml(set.id)}">Delete</button></td></tr>`).join('');
-    return `<div id="content-sets"><table class="bl-table"><thead><tr><th>Set</th><th>Notes</th><th>Items</th><th></th></tr></thead>`
+        + `<td class="bl-set-actions">`
+        + `<button type="button" class="bl-btn bl-btn-sm" data-edit-set="${escapeHtml(set.id)}" data-name="${escapeHtml(set.name)}">Open</button>`
+        + `<button type="button" class="bl-btn bl-btn-sm" data-delete-set="${escapeHtml(set.id)}">Delete</button></td></tr>`).join('');
+    return `<div id="content-sets"><table class="bl-table"><thead><tr><th>Set</th><th>Kind</th><th>Notes</th><th>Items</th><th></th></tr></thead>`
         + `<tbody>${rows}</tbody></table></div>`;
 }
 
@@ -117,7 +130,8 @@ function ruleRow(view: RuleView, colour: AccountColour): string {
 <button type="button" class="bl-btn bl-btn-sm" data-delete-rule="${escapeHtml(rule.id)}">Delete</button>
 </span></div>
 <p class="bl-rule-meta">${rule.postsPerDay}× a day between ${escapeHtml(rule.windowStart)} and ${escapeHtml(rule.windowEnd)} ${escapeHtml(rule.timezone)},
- at least ${rule.minGapMinutes} minutes apart · ${escapeHtml(rule.destination)} · ${source} · ${escapeHtml(rule.pickOrder)} · reuse after ${rule.avoidReuseDays} days</p>
+ at least ${rule.minGapMinutes} minutes apart · ${escapeHtml(rule.destination)} · ${source}
+ · ${rule.format === 'any' ? 'any format' : `${escapeHtml(rule.format)} only`} · ${escapeHtml(rule.pickOrder)} · reuse after ${rule.avoidReuseDays} days</p>
 ${windowBar(rule, colour)}
 <div class="bl-rule-next">${next || '<span>Nothing planned yet.</span>'}</div>
 </article>`;
@@ -189,6 +203,7 @@ function rulesForm(): string {
 <label class="bl-field"><span>Avoid reuse (days)</span><input id="rule-reuse" name="avoidReuseDays" type="number" class="bl-input" min="0" max="3650" value="30"></label>
 <label class="bl-field"><span>Destination</span><select id="rule-destination" name="destination" class="bl-select"><option value="draft">Draft</option><option value="publish">Publish</option></select></label>
 <label class="bl-field"><span>Source</span><select id="rule-source" name="source" class="bl-select"><option value="tag">Tag</option><option value="set">Set</option></select></label>
+<label class="bl-field"><span>Format</span><select id="rule-format" name="format" class="bl-select"><option value="any">Any</option><option value="video">Video</option><option value="photo">Photo</option><option value="slideshow">Slideshow</option></select></label>
 <label class="bl-field"><span>Tag</span><input id="rule-tag" name="tag" type="text" class="bl-input" placeholder="fitness"></label>
 <label class="bl-field"><span>Set</span><select id="rule-set" name="setId" class="bl-select"><option value="">—</option></select></label>
 <label class="bl-field"><span>Caption template</span><select id="rule-template" name="captionTemplateId" class="bl-select"><option value="">—</option></select></label>
@@ -198,6 +213,30 @@ function rulesForm(): string {
 <button id="plan-now" class="bl-btn" type="button">Plan now</button></div>
 <p id="rule-result" class="bl-muted" aria-live="polite"></p>
 </form>`;
+}
+
+/**
+ * The slideshow builder. It holds an ordered tray of image items — added with the
+ * "Slide" button on a library card — and saves it as a set marked `slideshow`.
+ * The order in the tray is the order the post goes out in, and the cover is the
+ * slide TikTok leads with. The list itself is drawn by static/dashboard/ts/content.ts;
+ * this is its frame.
+ */
+function slideshowPanel(): string {
+    return `<section class="bl-panel" id="slideshow-panel"><div class="bl-panel-head">Slideshow
+<span style="margin-left:auto" class="bl-faint" id="slideshow-count">no slides yet</span></div>
+<div class="bl-panel-body">
+<form id="slideshow-form">
+<label class="bl-field"><span>Name</span><input id="slideshow-name" name="name" type="text" class="bl-input" placeholder="Monday carousel" required></label>
+<ol class="bl-slides" id="slideshow-list"></ol>
+<p class="bl-faint" id="slideshow-hint">Press <strong>+</strong> on an image in the library to add it. Two to 35 slides make a post; the cover is the one TikTok leads with.</p>
+<div class="bl-form-actions">
+<button class="bl-btn bl-btn-primary" type="submit">Save slideshow</button>
+<button class="bl-btn" type="button" id="slideshow-clear">Clear</button>
+</div>
+<p id="slideshow-result" class="bl-muted" aria-live="polite"></p>
+</form>
+</div></section>`;
 }
 
 /**
@@ -222,9 +261,11 @@ ${load('/api/drip/rules', 'drip-rules')}</section>
 ${panel('Sets', `<form id="set-form" class="bl-inline-form">
 <label class="bl-field"><span>Name</span><input name="name" type="text" class="bl-input" placeholder="Gym b-roll" required></label>
 <label class="bl-field"><span>Notes</span><input name="notes" type="text" class="bl-input"></label>
+<label class="bl-field"><span>Kind</span><select name="kind" class="bl-select"><option value="pool">Pool</option><option value="slideshow">Slideshow</option></select></label>
 <button class="bl-btn" type="submit">Create set</button></form>
-<p class="bl-faint">One to three images post as a single slideshow; anything larger is a pool of individual posts.</p>
+<p class="bl-faint">A pool posts one item at a time. A slideshow posts every image it holds as one post, in order.</p>
 ${load('/api/content/sets', 'content-sets')}`)}
+${slideshowPanel()}
 ${panel('Caption templates', `<form id="template-form" class="bl-inline-form">
 <label class="bl-field"><span>Name</span><input name="name" type="text" class="bl-input" placeholder="Hook" required></label>
 <label class="bl-field"><span>Template</span><input name="template" type="text" class="bl-input" placeholder="{title} {hashtags}" required></label>

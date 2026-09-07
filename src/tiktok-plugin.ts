@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 
+import { validatePostMedia, type PostFormat } from './content/formats.js';
 import type { PhoneFarmPlugin, TaskDefinition, TaskExecutionContext } from './plugin.js';
 import type { JsonObject, JsonValue, ScheduleTiming } from './types.js';
 import { farmEntryPath } from './runtime/farm-entry.js';
@@ -43,6 +44,10 @@ type PostMedia = JsonObject & {
 
 type PostPayload = JsonObject & {
     media: PostMedia[];
+    /** `video` (one clip), `photo` (one image) or `slideshow` (the images, in order). */
+    format: PostFormat;
+    /** Index into `media` of the slide the post leads with. Slideshow only. */
+    cover?: number;
     destination: 'draft' | 'publish';
     account: string;
     caption?: string;
@@ -144,15 +149,19 @@ function createPostTask(configuration: TikTokPluginConfiguration): TaskDefinitio
         type: 'post', version: 1, displayName: 'TikTok post',
         validate(value, context) {
             const input = objectPayload(value);
-            if (!Array.isArray(input.media) || input.media.length < 1 || input.media.length > 3) {
-                throw new Error('Choose one to three media files');
-            }
+            if (!Array.isArray(input.media) || !input.media.length) throw new Error('Choose at least one media file');
             const media = input.media.map((item) => {
                 const candidate = objectPayload(item);
                 if (typeof candidate.assetId !== 'string' || typeof candidate.name !== 'string' || typeof candidate.mimeType !== 'string') {
                     throw new Error('Invalid media item');
                 }
                 return { assetId: candidate.assetId, name: candidate.name, mimeType: candidate.mimeType };
+            });
+            // The shared table decides the count, the types, the cover and — the
+            // reason it runs before anything else — that video and images were
+            // not mixed into one post.
+            const { format, cover } = validatePostMedia({
+                network: 'tiktok', files: media, format: input.format, cover: input.cover,
             });
             if (input.destination !== 'draft' && input.destination !== 'publish') throw new Error('Invalid post destination');
             if (typeof input.account !== 'string' || !input.account.trim()) throw new Error('Choose a TikTok account');
@@ -170,12 +179,14 @@ function createPostTask(configuration: TikTokPluginConfiguration): TaskDefinitio
                 throw new Error('Recurring public posts require explicit confirmation');
             }
             return {
-                media, destination: input.destination, account: input.account,
+                media, format, destination: input.destination, account: input.account,
+                ...(cover === undefined ? {} : { cover }),
                 ...(caption ? { caption } : {}), ...(musicUrl ? { musicUrl } : {}),
                 ...(input.recurringPublishConfirmed === true ? { recurringPublishConfirmed: true } : {}),
             };
         },
-        summarize: (payload) => `Post · ${payload.destination === 'publish' ? 'public' : 'draft'} · ${payload.media.length} media`,
+        summarize: (payload) => `Post · ${payload.destination === 'publish' ? 'public' : 'draft'} · `
+            + `${payload.format}${payload.format === 'slideshow' ? ` · ${payload.media.length} slides` : ''}`,
         estimateDurationMs: () => 60_000,
         retryPolicy: () => ({ retryLimit: 0, retryDelaySeconds: 0, retryBackoff: false }),
         supportsStop: () => false,
@@ -188,7 +199,9 @@ function createPostTask(configuration: TikTokPluginConfiguration): TaskDefinitio
             });
             const manifestPath = path.join(context.workspaceDirectory, 'manifest.json');
             await writeFile(manifestPath, JSON.stringify({
-                device: context.device, files, destination: payload.destination, account: payload.account,
+                device: context.device, files, format: payload.format,
+                destination: payload.destination, account: payload.account,
+                ...(payload.cover === undefined ? {} : { cover: payload.cover }),
                 ...(payload.caption ? { caption: payload.caption } : {}),
                 ...(payload.musicUrl ? { musicUrl: payload.musicUrl } : {}),
             }));
@@ -294,12 +307,11 @@ export function createTikTokPlugin(configuration: TikTokPluginConfiguration = {}
                         if (part.file.truncated) throw new Error(`${name} exceeds the upload limit`);
                         files.push({ path: filePath, name, mimeType: part.mimetype });
                     }
-                    if (files.length < 1 || files.length > 3) throw new Error('Choose one to three media files');
-                    const videos = files.filter(({ mimeType }) => mimeType.startsWith('video/'));
-                    const images = files.filter(({ mimeType }) => mimeType.startsWith('image/'));
-                    if (!((videos.length === 1 && files.length === 1) || images.length === files.length)) {
-                        throw new Error('Upload exactly one video, or upload only slideshow images');
-                    }
+                    // Same gate as the task's own `validate`, run here so a bad
+                    // upload is refused before any bytes are registered as assets.
+                    const { format, cover } = validatePostMedia({
+                        network: 'tiktok', files, format: fields.get('format'), cover: fields.get('cover'),
+                    });
                     const destination = fields.get('destination');
                     if (destination !== 'draft' && destination !== 'publish') throw new Error('Choose Draft or Post');
                     const account = fields.get('account')?.trim();
@@ -320,7 +332,8 @@ export function createTikTokPlugin(configuration: TikTokPluginConfiguration = {}
                             pluginId: 'com.git-agni.tiktok', taskType: 'post', taskVersion: 1,
                             payload: {
                                 media: stored.map(({ id, name, mimeType }) => ({ assetId: id, name, mimeType })),
-                                destination, account,
+                                format, destination, account,
+                                ...(cover === undefined ? {} : { cover }),
                                 ...(fields.get('caption')?.trim() ? { caption: fields.get('caption')!.trim() } : {}),
                                 ...(fields.get('musicUrl')?.trim() ? { musicUrl: fields.get('musicUrl')!.trim() } : {}),
                                 ...(fields.get('recurringPublishConfirmed') === 'true' ? { recurringPublishConfirmed: true } : {}),

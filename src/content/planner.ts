@@ -1,11 +1,32 @@
-import type { ContentItemRow, DripPlanRow, DripRuleRow } from '../database/schema.js';
+import type { ContentItemRow, DripFormat, DripPlanRow, DripRuleRow } from '../database/schema.js';
+import type { PostFormat } from './formats.js';
 import { clampCaption, renderCaptionTemplate } from './templates.js';
 import { addDays, isTimeZone, localDate, windowForDate } from './time.js';
 
 const MINUTE_MS = 60_000;
 
-/** One post's worth of media: a single clip, or 1–3 images making a slideshow. */
+/** One post's worth of media: a single clip, a single image, or the ordered slides of a slideshow. */
 export type ContentGroup = ContentItemRow[];
+
+/**
+ * What a group of library items posts as. It mirrors `inferFormat` in
+ * `./formats.js`, which reads MIME types; here the items already carry the
+ * `kind` ingest decided, so there is nothing to parse. A group that is neither
+ * all video nor all image has no format and is never planned.
+ */
+export function groupFormat(group: ContentGroup): PostFormat | null {
+    if (!group.length) return null;
+    if (group.every((item) => item.kind === 'video')) return group.length === 1 ? 'video' : null;
+    if (group.every((item) => item.kind === 'image')) return group.length === 1 ? 'photo' : 'slideshow';
+    return null;
+}
+
+/** A rule set to `any` takes whatever the pool holds; anything else narrows it to one format. */
+export function matchesFormat(group: ContentGroup, filter: DripFormat): boolean {
+    const format = groupFormat(group);
+    if (!format) return false;
+    return filter === 'any' || filter === format;
+}
 
 /**
  * Random posting times inside a window, never closer together than
@@ -70,6 +91,8 @@ export function orderCandidates(
 export interface PlannedPost {
     rule: DripRuleRow;
     items: ContentGroup;
+    /** Decided from the items, never from the rule: the rule only filters. */
+    format: PostFormat;
     date: string;
     runAt: Date;
     caption?: string;
@@ -147,7 +170,12 @@ export async function planDripRules(ports: PlannerPorts): Promise<PlanReport> {
         if (!open.length) continue;
 
         const reuseCutoff = new Date(ports.now.getTime() - Math.max(0, rule.avoidReuseDays) * 86_400_000);
-        const pool = orderCandidates(await ports.candidates(rule, reuseCutoff), rule.pickOrder, ports.random);
+        const available = (await ports.candidates(rule, reuseCutoff)).filter((group) => matchesFormat(group, rule.format));
+        if (!available.length && rule.format !== 'any') {
+            report.skipped.push(`${rule.id}: no unused ${rule.format} content matches this rule`);
+            continue;
+        }
+        const pool = orderCandidates(available, rule.pickOrder, ports.random);
         const template = rule.captionTemplateId
             ? (await ports.captionTemplate(rule.captionTemplateId))?.template ?? null
             : null;
@@ -172,8 +200,12 @@ export async function planDripRules(ports: PlannerPorts): Promise<PlanReport> {
                 const group = pool[cursor];
                 if (!group) { exhausted = true; break; }
                 cursor += 1;
+                const format = groupFormat(group);
+                // `matchesFormat` already dropped anything unpostable; this keeps
+                // the type honest rather than asserting it away.
+                if (!format) continue;
                 const caption = captionFor(group, template, rule, ports.random, date);
-                const post: PlannedPost = { rule, items: group, date, runAt, ...(caption ? { caption } : {}) };
+                const post: PlannedPost = { rule, items: group, format, date, runAt, ...(caption ? { caption } : {}) };
                 const result = await ports.createPost(post);
                 if (!result) continue;
                 await ports.recordPlan(post, result.scheduleId);

@@ -1,4 +1,6 @@
-import type { ContentStatus, DripOrder, DripSource, PostDestination } from '../database/schema.js';
+import type {
+    ContentSetKind, ContentStatus, DripFormat, DripOrder, DripSource, PostDestination,
+} from '../database/schema.js';
 import { isLocalTime, isTimeZone, minutesOfDay } from './time.js';
 
 /**
@@ -115,9 +117,38 @@ export function parseIngestUrl(body: unknown): { url: string; tags?: string[]; c
     return { url: parsed.toString(), ...(tags ? { tags } : {}), ...(crop === undefined ? {} : { crop }) };
 }
 
-export function parseSetInput(body: unknown): { name: string; notes?: string | null } {
+export interface SetInput {
+    name: string;
+    notes: string | null;
+    kind: ContentSetKind;
+    coverIndex: number;
+}
+
+/** A slideshow's cover is an index into its own items; 35 is the largest post any network takes. */
+const MAX_COVER_INDEX = 34;
+
+export function parseSetInput(body: unknown): SetInput {
     const input = asObject(body);
-    return { name: requiredText(input.name, 'name', 120), notes: optionalText(input.notes, 'notes', 1000) ?? null };
+    return {
+        name: requiredText(input.name, 'name', 120),
+        notes: optionalText(input.notes, 'notes', 1000) ?? null,
+        kind: oneOf(input.kind, 'kind', ['pool', 'slideshow'] as const) ?? 'pool',
+        coverIndex: boundedInteger(input.coverIndex, 'coverIndex', 0, MAX_COVER_INDEX) ?? 0,
+    };
+}
+
+/** A PATCH names only what changes; an untouched field is left out rather than defaulted. */
+export function parseSetPatch(body: unknown): Partial<SetInput> {
+    const input = asObject(body);
+    const patch: Partial<SetInput> = {};
+    if ('name' in input) patch.name = requiredText(input.name, 'name', 120);
+    if ('notes' in input) patch.notes = optionalText(input.notes, 'notes', 1000) ?? null;
+    const kind = oneOf(input.kind, 'kind', ['pool', 'slideshow'] as const);
+    if (kind) patch.kind = kind;
+    const coverIndex = boundedInteger(input.coverIndex, 'coverIndex', 0, MAX_COVER_INDEX);
+    if (coverIndex !== undefined) patch.coverIndex = coverIndex;
+    if (!Object.keys(patch).length) fail('Nothing to update');
+    return patch;
 }
 
 export function parseSetItems(body: unknown): { itemIds: string[] } {
@@ -145,6 +176,7 @@ export interface RuleInput {
     minGapMinutes: number;
     destination: PostDestination;
     source: DripSource;
+    format: DripFormat;
     setId: string | null;
     tag: string | null;
     captionTemplateId: string | null;
@@ -187,6 +219,7 @@ export function parseRuleInput(body: unknown): RuleInput {
         minGapMinutes: boundedInteger(input.minGapMinutes, 'minGapMinutes', 0, 1440) ?? 90,
         destination: oneOf(input.destination, 'destination', ['draft', 'publish'] as const) ?? 'draft',
         source: oneOf(input.source, 'source', ['set', 'tag'] as const) ?? 'tag',
+        format: oneOf(input.format, 'format', ['any', 'video', 'photo', 'slideshow'] as const) ?? 'any',
         setId: uuidOrUndefined(input.setId, 'setId') ?? null,
         tag: tagList(input.tag, 'tag', 1)?.[0] ?? null,
         captionTemplateId: uuidOrUndefined(input.captionTemplateId, 'captionTemplateId') ?? null,
@@ -211,6 +244,7 @@ export function parseRulePatch(body: unknown, current: RuleInput): RuleInput {
         minGapMinutes: input.minGapMinutes ?? current.minGapMinutes,
         destination: input.destination ?? current.destination,
         source: input.source ?? current.source,
+        format: input.format ?? current.format,
         setId: 'setId' in input ? input.setId : current.setId,
         tag: 'tag' in input ? input.tag : current.tag,
         captionTemplateId: 'captionTemplateId' in input ? input.captionTemplateId : current.captionTemplateId,

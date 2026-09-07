@@ -116,7 +116,8 @@ function queuePlan(overrides: Partial<QueuePlanRow> = {}): QueuePlanRow {
     return {
         id: 'plan-1', ruleId: 'rule-1', itemId: 'item-1', scheduleId: 'schedule-1',
         plannedFor: new Date('2026-09-06T18:00:00Z'), usedMarkedAt: null, scheduleStatus: 'paused',
-        deviceUdid: 'device-1', caption: 'day 14 of building the farm', assetId: 'asset-1', ...overrides,
+        deviceUdid: 'device-1', caption: 'day 14 of building the farm', assetId: 'asset-1',
+        format: 'video', ...overrides,
     };
 }
 
@@ -593,9 +594,26 @@ test('GET /api/content/queue returns planned posts with a thumbnail URL', async 
     const [item] = (await app.inject({ method: 'GET', url: '/api/content/queue' })).json().items;
     assert.deepEqual(item, {
         id: 'plan-1', status: 'planned', deviceUdid: 'device-1', caption: 'day 14 of building the farm',
-        assetId: 'asset-1', thumbnailUrl: '/api/assets/asset-1/thumbnail',
+        format: 'video', assetId: 'asset-1', thumbnailUrl: '/api/assets/asset-1/thumbnail',
         plannedFor: '2026-09-06T18:00:00.000Z', scheduleId: 'schedule-1',
     });
+
+    // A slideshow is one row carrying its lead item's thumbnail, and says so.
+    const slideshow = await mobileApp(context, {
+        scheduler: fakeScheduler(),
+        plugins: new PluginRegistry([]),
+        store: fakeStore({ queuePlans: async () => [queuePlan({ format: 'slideshow' })] }),
+    });
+    assert.equal((await slideshow.inject({ method: 'GET', url: '/api/content/queue' })).json().items[0].format,
+        'slideshow');
+
+    // A post planned before formats existed was a video, and still reads as one.
+    const legacy = await mobileApp(context, {
+        scheduler: fakeScheduler(),
+        plugins: new PluginRegistry([]),
+        store: fakeStore({ queuePlans: async () => [queuePlan({ format: null })] }),
+    });
+    assert.equal((await legacy.inject({ method: 'GET', url: '/api/content/queue' })).json().items[0].format, 'video');
 });
 
 test('approve resumes a held post and is a no-op the second time', async (context) => {

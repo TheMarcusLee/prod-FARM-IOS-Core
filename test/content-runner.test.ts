@@ -3,10 +3,10 @@ import test from 'node:test';
 
 import { affectsPlanning } from '../src/api/routes/content.js';
 import {
-    plannerIntervalMinutes, reconcileUsage, replanRule, runDripPlanner, startDripPlannerTick,
+    candidateGroups, plannerIntervalMinutes, reconcileUsage, replanRule, runDripPlanner, startDripPlannerTick,
 } from '../src/content/runner.js';
 import type { ContentStore } from '../src/content/store.js';
-import type { DripPlanRow, DripRuleRow } from '../src/database/schema.js';
+import type { ContentItemRow, ContentSetRow, DripPlanRow, DripRuleRow } from '../src/database/schema.js';
 import type { SchedulerRepository } from '../src/scheduler/repository.js';
 import { zonedTimeToUtc } from '../src/content/time.js';
 
@@ -22,7 +22,7 @@ function rule(overrides: Partial<DripRuleRow> = {}): DripRuleRow {
     return {
         id: 'rule-1', deviceUdid: 'device-1', account: '@handle', enabled: true, postsPerDay: 2,
         windowStart: '09:00', windowEnd: '21:00', timezone: 'UTC', minGapMinutes: 120,
-        destination: 'draft', source: 'tag', setId: null, tag: 'fitness', captionTemplateId: null,
+        destination: 'draft', source: 'tag', format: 'any', setId: null, tag: 'fitness', captionTemplateId: null,
         pickOrder: 'random', avoidReuseDays: 30, lastPlannedDate: null,
         createdAt: new Date('2026-01-01T00:00:00Z'), updatedAt: new Date('2026-01-01T00:00:00Z'),
         ...overrides,
@@ -192,4 +192,73 @@ test('the planner tick is one implementation, started by the web process and the
     assert.ok(afterStop > 0, 'the tick planned at least once');
     await new Promise((resolve) => { setTimeout(resolve, 15); });
     assert.equal(planned, afterStop, 'stop() clears the timer');
+});
+
+// ---- slideshow grouping ----------------------------------------------------
+
+function libraryItem(id: string, overrides: Partial<ContentItemRow> = {}): ContentItemRow {
+    return {
+        id, assetId: `asset-${id}`, originalAssetId: null, kind: 'image', durationMs: null,
+        width: 1080, height: 1920, normalized: true, sha256: id, tags: [], caption: null, hashtags: [],
+        posterPath: null, createdAt: new Date('2026-01-01T00:00:00Z'), usedCount: 0, lastUsedAt: null,
+        status: 'ready', error: null, ...overrides,
+    };
+}
+
+function contentSet(overrides: Partial<ContentSetRow> = {}): ContentSetRow {
+    return {
+        id: 'set-1', name: 'Monday carousel', notes: null, kind: 'slideshow', coverIndex: 0,
+        createdAt: new Date('2026-01-01T00:00:00Z'), ...overrides,
+    };
+}
+
+const setRule = rule({ source: 'set', setId: 'set-1', tag: null });
+const CUTOFF = new Date('2026-02-08T00:00:00Z');
+
+test('a set marked slideshow is one group holding every slide in its stored order', async () => {
+    const members = [libraryItem('a'), libraryItem('b'), libraryItem('c')];
+    const groups = await candidateGroups(store({
+        async candidateItems() { return [...members].reverse(); },
+        async set() { return contentSet(); },
+        async setItems() { return members; },
+    }), setRule, CUTOFF);
+    assert.equal(groups.length, 1, 'three slides are one post');
+    // The order comes from `setItems` (i.e. `position`), never from availability.
+    assert.deepEqual(groups[0]?.map(({ id }) => id), ['a', 'b', 'c']);
+});
+
+test('a set left as a pool posts its items one at a time, slideshow or not', async () => {
+    const members = [libraryItem('a'), libraryItem('b')];
+    const groups = await candidateGroups(store({
+        async candidateItems() { return members; },
+        async set() { return contentSet({ kind: 'pool' }); },
+        async setItems() { return members; },
+    }), setRule, CUTOFF);
+    assert.deepEqual(groups.map((group) => group.map(({ id }) => id)), [['a'], ['b']]);
+});
+
+test('a slideshow whose slides are not all reusable is skipped, never posted incomplete', async () => {
+    const members = [libraryItem('a'), libraryItem('b'), libraryItem('c')];
+    const partly = store({
+        // 'b' is inside its reuse window, so the whole slideshow waits.
+        async candidateItems() { return [libraryItem('a'), libraryItem('c')]; },
+        async set() { return contentSet(); },
+        async setItems() { return members; },
+    });
+    assert.deepEqual(await candidateGroups(partly, setRule, CUTOFF), []);
+
+    // The same holds for a slide that is still processing, or is a video.
+    const notReady = store({
+        async candidateItems() { return members; },
+        async set() { return contentSet(); },
+        async setItems() { return [...members, libraryItem('d', { kind: 'video' })]; },
+    });
+    assert.deepEqual(await candidateGroups(notReady, setRule, CUTOFF), []);
+});
+
+test('a tag rule is untouched by slideshows — it never reads a set', async () => {
+    const groups = await candidateGroups(store({
+        async candidateItems() { return [libraryItem('a', { kind: 'video' })]; },
+    }), rule(), CUTOFF);
+    assert.deepEqual(groups.map((group) => group.map(({ id }) => id)), [['a']]);
 });

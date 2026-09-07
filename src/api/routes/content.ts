@@ -19,7 +19,7 @@ import { replanRule, runDripPlanner, startDripPlannerTick } from '../../content/
 import { createContentStore, type ContentStore } from '../../content/store.js';
 import {
     asObject, parseIngestRequest, parseIngestUrl, parseItemPatch, parseRuleInput, parseRulePatch,
-    parseSetInput, parseSetItems, parseTemplateInput, requiredText, tagList,
+    parseSetInput, parseSetItems, parseSetPatch, parseTemplateInput, requiredText, tagList,
 } from '../../content/validate.js';
 
 export interface ContentRouteOptions {
@@ -59,7 +59,7 @@ function badRequest(reply: FastifyReply, error: unknown): FastifyReply {
 /** Fields that decide *when* and *what* a rule posts; changing one invalidates the planned queue. */
 const PLANNING_FIELDS = [
     'deviceUdid', 'account', 'postsPerDay', 'windowStart', 'windowEnd', 'timezone', 'minGapMinutes',
-    'destination', 'source', 'setId', 'tag', 'captionTemplateId', 'pickOrder', 'avoidReuseDays',
+    'destination', 'source', 'format', 'setId', 'tag', 'captionTemplateId', 'pickOrder', 'avoidReuseDays',
 ] as const satisfies ReadonlyArray<keyof DripRuleRow>;
 
 export function affectsPlanning(before: DripRuleRow, after: DripRuleRow): boolean {
@@ -242,6 +242,30 @@ export async function registerContentRoutes(app: FastifyInstance, options: Conte
         if (!active) return notConfigured(reply);
         try {
             return reply.code(201).send(await active.createSet(parseSetInput(request.body)));
+        } catch (error) {
+            return badRequest(reply, error);
+        }
+    });
+
+    /** One set with its members in order — what the slideshow builder opens. */
+    app.get<{ Params: { id: string } }>('/api/content/sets/:id', async (request, reply) => {
+        const active = store();
+        if (!active) return notConfigured(reply);
+        const found = await active.set(request.params.id);
+        if (!found) return reply.code(404).send({ error: 'Set not found' });
+        return { ...found, items: await active.setItems(found.id) };
+    });
+
+    /**
+     * Turning a set into a slideshow, or moving its cover. Membership and order
+     * go through `PUT …/items`; this is the set's own shape.
+     */
+    app.patch<{ Params: { id: string } }>('/api/content/sets/:id', async (request, reply) => {
+        const active = store();
+        if (!active) return notConfigured(reply);
+        try {
+            const updated = await active.updateSet(request.params.id, parseSetPatch(request.body));
+            return updated ?? reply.code(404).send({ error: 'Set not found' });
         } catch (error) {
             return badRequest(reply, error);
         }

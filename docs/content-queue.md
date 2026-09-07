@@ -9,7 +9,8 @@ posts. It does three things:
    a TikTok-safe copy (9:16, H.264 + AAC, ≤ 1080×1920, ≤ 180 s, metadata
    stripped, `faststart`). The original is kept untouched.
 2. **Organise** — items carry tags, a title/caption seed and hashtags. Sets group
-   items; caption templates render the text each post uses.
+   items — as a pool to draw from, or as one ordered **slideshow**; caption
+   templates render the text each post uses.
 3. **Drip** — a rule says "two posts a day for `@handle` on this phone, between
    09:00 and 21:00 local, at least two hours apart, from the `fitness` tag". A
    planner turns that into ordinary one-off schedules through the existing
@@ -121,6 +122,79 @@ picks one branch. An unknown `{token}` is left in place so a typo is visible
 rather than silently blank. `POST /api/content/templates/preview` renders one
 without saving it.
 
+## Post formats
+
+A post is one of three things, and every part of the pipeline calls them by the
+same three names:
+
+| Format | What it carries | TikTok | Instagram |
+| --- | --- | --- | --- |
+| `video` | one clip | 1 | 1 |
+| `photo` | one image | 1 | 1 |
+| `slideshow` | images, **in order** | 2–35 | 2–20 (carousel) |
+
+Images must be `jpeg`, `png`, `webp` or `heic`/`heif`. GIF and AVIF are refused
+rather than silently posted as a still. Video stays as permissive as it always
+was: any `video/*`, because ingest normalises it to mp4 anyway. A post is never
+a video *and* images — that is refused by name, so the operator gets the real
+reason instead of a count error.
+
+Shape is advice, not law. TikTok wants 9:16 or 3:4 and Instagram's feed crops
+outside 4:5 … 1.91:1, but a deliberate 1:1 is posted rather than rejected: a
+farm that refuses what its operator chose is a farm they work around.
+
+The one place all of this lives is `src/content/formats.ts` — one table keyed by
+network, with the counts, the accepted types, the recommended ratios and the
+band each network really enforces. `validatePostMedia()` is the gate every
+caller goes through: the TikTok post task, the multipart post route, the drip
+runner, the MCP tool and the dashboard forms. Adding a network is adding an
+entry to `NETWORKS`; the Instagram row is already there for the plugin being
+built alongside this one. `test/content-formats.test.ts` covers it.
+
+### On the wire
+
+The scheduled task's payload and the manifest the phone reads carry the same
+two fields:
+
+```jsonc
+{
+  "media":  [ /* one video, or the images in slide order */ ],
+  "format": "slideshow",   // absent means "video" — every post predating formats was one
+  "cover":  2              // index into media of the lead slide; slideshow only
+}
+```
+
+`format` is **optional everywhere**. Left off, it is read from the files: one
+video is a `video`, one image a `photo`, several images a `slideshow`. Naming it
+turns a wrong upload into an error instead of a wrong post — declaring
+`slideshow` over a single image usually means an image failed to upload, and it
+is refused rather than quietly downgraded.
+
+`PostManifest` (`src/tiktok/post-manifest.ts`) is the phone-side shape: `files`
+in slide order, plus `format?` and `cover?`.
+
+### Slideshows in the library
+
+A **set** is either a pool or a slideshow — `content_sets.kind`. A pool is drawn
+from one item at a time, the way every set behaved before. A slideshow is one
+post carrying every image in the set, in `content_set_items.position` order,
+with `content_sets.cover_index` naming the lead slide. There is no separate
+slideshows table because the ordering the feature needs was already there.
+
+A slideshow whose slides are not *all* reusable is skipped rather than posted
+incomplete: half a slideshow is a different post from the one that was built.
+
+Build one on the Content page: press **+** on an image in the library to add it
+to the tray, reorder with ↑ ↓, press **Cover** on the slide the post should
+lead with, name it and save. **Open** on an existing set loads it back into the
+same tray. The migration marks the sets that used to be implicit slideshows
+(two or three images) as `kind = 'slideshow'`, so an upgraded farm keeps posting
+them as one post.
+
+Drip rules gain a **format** filter — `any`, `video`, `photo` or `slideshow` —
+which narrows the pool before anything is planned. `any` takes whatever the pool
+holds.
+
 ## The drip planner
 
 ### Who ticks, and the lock
@@ -155,16 +229,18 @@ and tomorrow **in the rule's own timezone**:
   `repository.createTask` with the TikTok `post` payload;
 - record each `(rule, date, schedule, item)` in `drip_plans`.
 
-A set of one to three images is planned as a single slideshow post; a larger set
-is a pool of individual posts.
+A set marked `slideshow` is planned as one post carrying every slide in order;
+any other set is a pool of individual posts. Each planned post is stamped with
+the format its items actually are, and the rule's `format` filter decides which
+of them the pool offers at all.
 
 Disabling a rule cancels the schedules it planned that have not started yet.
 
 **Editing a planning-relevant field does the same and re-plans.** `PATCH
 /api/drip/rules/:id` compares the row before and after; if any of `deviceUdid`,
 `account`, `postsPerDay`, `windowStart`, `windowEnd`, `timezone`,
-`minGapMinutes`, `destination`, `source`, `setId`, `tag`, `captionTemplateId`,
-`pickOrder` or `avoidReuseDays` changed, the rule's unrun posts are cancelled
+`minGapMinutes`, `destination`, `source`, `format`, `setId`, `tag`,
+`captionTemplateId`, `pickOrder` or `avoidReuseDays` changed, the rule's unrun posts are cancelled
 and their `drip_plans` rows deleted, so the next pass rebuilds today's queue
 from the new settings. The response carries `replanned: { cancelled, released }`.
 Editing anything else (the `enabled` flag aside) leaves the queue alone. A post
@@ -178,6 +254,9 @@ is where an unattended farm says what it could not do. Lines to watch for:
 
 - `<rule>: no unused content matches this rule` — everything in the tag or set
   is inside `avoid_reuse_days`, or nothing is `ready`.
+- `<rule>: no unused slideshow content matches this rule` — the rule's `format`
+  filter matched nothing in the pool. A `slideshow` rule over a tag of clips
+  says this every tick until the filter or the tag changes.
 - `<rule>: ran out of unused content on <date> after 2 of 3 posts` — the
   **shortfall report**. The day was planned short. Silently under-posting for
   weeks is the failure mode a drip queue actually has, so a partial day is
@@ -216,7 +295,7 @@ worker.
 | `GET /api/content/items/:id/poster` | Poster frame. |
 | `POST /api/content/ingest` | `{ directory, tags?, crop? }`. |
 | `POST /api/content/ingest-url` | `{ url, tags?, crop? }` — needs `yt-dlp`. |
-| `GET/POST /api/content/sets`, `DELETE /api/content/sets/:id`, `PUT /api/content/sets/:id/items` | Sets and membership. |
+| `GET/POST /api/content/sets`, `GET/PATCH/DELETE /api/content/sets/:id`, `PUT /api/content/sets/:id/items` | Sets, their kind and cover, and membership in order. |
 | `GET/POST /api/content/templates`, `DELETE …/:id`, `POST …/preview` | Caption templates. |
 | `GET/POST /api/drip/rules`, `PATCH/DELETE /api/drip/rules/:id` | Drip rules. |
 | `GET /api/drip/plans`, `POST /api/drip/plan` | What is planned, and plan now. |
@@ -229,3 +308,6 @@ dropped rather than persisted.
 `content_items`, `content_sets`, `content_set_items`, `caption_templates`,
 `drip_rules`, `drip_plans` — all in the `scheduler` Postgres schema, defined in
 `src/database/schema-content.ts` and created by `drizzle/0002_content.sql`.
+`drizzle/0005_post-formats.sql` adds `content_sets.kind`,
+`content_sets.cover_index` and `drip_rules.format`, and marks the sets that were
+implicitly slideshows before it.

@@ -7,6 +7,7 @@ import type { SchedulerRepository } from '../scheduler/repository.js';
 import type { ContentItemRow, DripRuleRow } from '../database/schema.js';
 import type { JsonObject } from '../types.js';
 import { dataRoot } from './paths.js';
+import { limitsFor } from './formats.js';
 import { planDripRules, type ContentGroup, type PlanReport, type PlannedPost, type PlannerPorts } from './planner.js';
 import type { ContentStore } from './store.js';
 
@@ -20,10 +21,16 @@ export interface DripRunnerOptions {
     horizonDays?: number;
 }
 
+/** The most slides one post can carry, from the shared format table. */
+const MAX_SLIDES = limitsFor('tiktok', 'slideshow')?.maxFiles ?? 35;
+
 /**
- * A set of one to three images is one slideshow post; anything else in a set is
- * a pool of individual posts. A partially reusable slideshow is skipped rather
- * than posted incomplete.
+ * A set marked `slideshow` is **one** post: every image it holds, in the order
+ * `content_set_items.position` gives them. Any other set is a pool of individual
+ * posts, one item each.
+ *
+ * A partially reusable slideshow is skipped rather than posted incomplete — half
+ * a slideshow is a different post from the one the operator built.
  */
 export async function candidateGroups(
     store: ContentStore,
@@ -32,15 +39,29 @@ export async function candidateGroups(
 ): Promise<ContentGroup[]> {
     const available = await store.candidateItems(rule, reuseCutoff);
     if (rule.source === 'set' && rule.setId) {
-        const members = await store.setItems(rule.setId);
-        const slideshow = members.length >= 1 && members.length <= 3
-            && members.every((item) => item.kind === 'image' && item.status === 'ready');
-        if (slideshow) {
+        const set = await store.set(rule.setId);
+        if (set?.kind === 'slideshow') {
+            const members = await store.setItems(rule.setId);
+            const postable = members.length >= 1 && members.length <= MAX_SLIDES
+                && members.every((item) => item.kind === 'image' && item.status === 'ready');
+            if (!postable) return [];
             const ready = new Set(available.map((item) => item.id));
             return members.every((item) => ready.has(item.id)) ? [members] : [];
         }
     }
     return available.map((item) => [item]);
+}
+
+/**
+ * The slide a slideshow leads with. It is the set's own `cover_index`, clamped to
+ * what the post actually carries: a cover past the end would otherwise reach the
+ * phone as an index into nothing.
+ */
+async function coverFor(store: ContentStore, post: PlannedPost): Promise<number | undefined> {
+    if (post.format !== 'slideshow' || post.rule.source !== 'set' || !post.rule.setId) return undefined;
+    const set = await store.set(post.rule.setId);
+    if (!set || set.coverIndex <= 0) return undefined;
+    return Math.min(set.coverIndex, post.items.length - 1);
 }
 
 /**
@@ -101,13 +122,17 @@ export function dripPorts(options: DripRunnerOptions): { ports: PlannerPorts; sk
             }
             const media = [] as Array<{ assetId: string; name: string; mimeType: string }>;
             try {
+                // The order `post.items` is in is the order the slides post in.
                 for (const item of post.items) media.push(await linkPostAsset(store, item));
+                const cover = await coverFor(store, post);
                 const schedule = await scheduler.createTask({
                     deviceUdid: post.rule.deviceUdid,
                     task: {
                         pluginId: TIKTOK_PLUGIN_ID, taskType: 'post', taskVersion: 1,
                         payload: {
-                            media, destination: post.rule.destination, account: post.rule.account,
+                            media, format: post.format, destination: post.rule.destination,
+                            account: post.rule.account,
+                            ...(cover === undefined ? {} : { cover }),
                             ...(post.caption ? { caption: post.caption } : {}),
                         },
                     },
