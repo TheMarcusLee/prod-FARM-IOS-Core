@@ -620,7 +620,59 @@ function ask(title: string, fields: Field[], submitLabel: string): Promise<Answe
 
 /* ---- toolbar ---------------------------------------------------------- */
 
-const TIKTOK = 'com.git-agni.tiktok';
+/**
+ * Which networks the toolbar offers is not a list in this file — it is whatever plugins the farm
+ * has registered. `/api/plugins` reports every plugin with its tasks, so a plugin that ships a
+ * `post` task appears in Schedule a post, and one that ships a warm-up task (TikTok calls its own
+ * `doomscroll`) appears in Warm up, with no change here.
+ */
+const WARM_UP_TASKS = ['warmup', 'doomscroll'];
+
+interface PluginTask {
+    type: string;
+    version: number;
+    displayName: string;
+}
+
+interface RegisteredPlugin {
+    id: string;
+    displayName: string;
+    tasks: PluginTask[];
+}
+
+interface Network {
+    pluginId: string;
+    label: string;
+    task: PluginTask;
+}
+
+let pluginCache: RegisteredPlugin[] | undefined;
+
+async function registeredPlugins(): Promise<RegisteredPlugin[]> {
+    pluginCache ??= await request<RegisteredPlugin[]>('/api/plugins');
+    return pluginCache;
+}
+
+/** The plugins offering a given kind of task, in the order the farm registered them. */
+async function networks(taskTypes: readonly string[]): Promise<Network[]> {
+    const found: Network[] = [];
+    for (const plugin of await registeredPlugins()) {
+        const task = plugin.tasks.find(({ type }) => taskTypes.includes(type));
+        if (task) found.push({ pluginId: plugin.id, label: plugin.displayName, task });
+    }
+    return found;
+}
+
+function networkField(available: Network[]): Field {
+    return {
+        name: 'network', label: 'Network', type: 'select',
+        options: available.map(({ pluginId, label }) => [pluginId, label] as [string, string]),
+    };
+}
+
+function chosenNetwork(available: Network[], value: string | undefined): Network {
+    return available.find(({ pluginId }) => pluginId === value) ?? available[0]!;
+}
 
 function udids(): string[] {
     return selected().map(({ udid }) => udid);
@@ -647,25 +699,32 @@ async function bulk(body: unknown): Promise<void> {
 
 const ACTIONS: Record<string, (chosen: string[]) => Promise<void>> = {
     async 'schedule-post'(chosen) {
+        const available = await networks(['post']);
+        if (!available.length) return report('No installed plugin can post.');
         const answers = await ask('Schedule a post', [
+            ...(available.length > 1 ? [networkField(available)] : []),
             { name: 'media', label: 'Media', type: 'file', accept: 'video/*,image/*', multiple: true },
             { name: 'runAt', label: 'Start', type: 'datetime-local' },
             { name: 'destination', label: 'Finish as', type: 'select', options: [['draft', 'Save to drafts'], ['publish', 'Post publicly']] },
+            // YouTube Shorts need a title; TikTok has no field for one and ignores it.
+            { name: 'title', label: 'Title (YouTube)', type: 'text' },
             { name: 'caption', label: 'Caption', type: 'text' },
             { name: 'stagger', label: 'Stagger between phones, minutes', type: 'number', value: '5', min: '0' },
         ], 'Schedule on the selection');
         if (!answers) return;
         if (!answers.files.length) return report('Choose at least one clip.');
         if (!answers.values.runAt) return report('Choose when the post should go out.');
+        const network = chosenNetwork(available, answers.values.network);
         report('Uploading media');
         const uploaded = await uploadFiles(answers.files);
         await bulk({
             deviceUdids: chosen,
             task: {
-                pluginId: TIKTOK, taskType: 'post', taskVersion: 1,
+                pluginId: network.pluginId, taskType: network.task.type, taskVersion: network.task.version,
                 payload: {
                     media: uploaded.map((asset) => ({ assetId: asset.id, name: asset.name, mimeType: asset.mimeType })),
                     destination: answers.values.destination, account: '',
+                    ...(answers.values.title ? { title: answers.values.title } : {}),
                     ...(answers.values.caption ? { caption: answers.values.caption } : {}),
                 },
             },
@@ -674,19 +733,27 @@ const ACTIONS: Record<string, (chosen: string[]) => Promise<void>> = {
         });
     },
     async 'warm-up'(chosen) {
+        const available = await networks(WARM_UP_TASKS);
+        if (!available.length) return report('No installed plugin can warm a phone up.');
         const answers = await ask('Warm up', [
+            ...(available.length > 1 ? [networkField(available)] : []),
             { name: 'durationMinutes', label: 'Minutes', type: 'number', value: '10', min: '1', max: '180' },
             { name: 'personality', label: 'Personality', type: 'select', options: [['casual', 'Casual'], ['skimmer', 'Skimmer'], ['engaged', 'Engaged']] },
             { name: 'stagger', label: 'Stagger between phones, minutes', type: 'number', value: '0', min: '0' },
         ], 'Warm up the selection');
         if (!answers) return;
+        const network = chosenNetwork(available, answers.values.network);
         await bulk({
             deviceUdids: chosen,
             task: {
-                pluginId: TIKTOK, taskType: 'doomscroll', taskVersion: 1,
+                pluginId: network.pluginId, taskType: network.task.type, taskVersion: network.task.version,
                 payload: {
                     durationMinutes: Number(answers.values.durationMinutes ?? 10),
-                    personality: answers.values.personality, likeEnabled: true, saveEnabled: false,
+                    // Every warm-up task takes a duration; the personality bands and the engagement
+                    // switches are TikTok's own payload, so only its task is handed them.
+                    ...(network.task.type === 'doomscroll'
+                        ? { personality: answers.values.personality, likeEnabled: true, saveEnabled: false }
+                        : {}),
                 },
             },
             timing: { kind: 'now' },
