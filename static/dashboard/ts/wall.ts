@@ -658,7 +658,8 @@ async function networks(taskTypes: readonly string[]): Promise<Network[]> {
     const found: Network[] = [];
     for (const plugin of await registeredPlugins()) {
         const task = plugin.tasks.find(({ type }) => taskTypes.includes(type));
-        if (task) found.push({ pluginId: plugin.id, label: plugin.displayName, task });
+        // "TikTok automation" is the plugin's name; the picker wants the network's.
+        if (task) found.push({ pluginId: plugin.id, label: plugin.displayName.replace(/\s+automation$/i, ''), task });
     }
     return found;
 }
