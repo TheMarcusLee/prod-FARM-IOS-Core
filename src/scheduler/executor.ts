@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 
@@ -7,6 +8,7 @@ import { connectedDevices, type Device } from '../devices/discovery.js';
 import { loadRegisteredDevices, type RegisteredDevice } from '../devices/registry.js';
 import { passcodeForDevice } from '../devices/secrets.js';
 import { bridgePingUrl } from '../drivers/a11y-bridge.js';
+import { FAILURE_SHOT_DIR } from '../drivers/failure-shot.js';
 import { driverForDevice, driverKindOf, platformOf } from '../drivers/select.js';
 import type { DeviceDriver } from '../drivers/types.js';
 import type { ExecutionRow } from '../database/schema.js';
@@ -142,6 +144,11 @@ export function automationFromDriver(driver: DeviceDriver): DeviceAutomation {
     };
 }
 
+/** `<data dir>/failure-shots/<execution id>` — created lazily, by the first routine that needs it. */
+export function failureShotDirectory(executionId: string, dataDirectory = process.env.SCHEDULER_DATA_DIR ?? '.scheduler-data'): string {
+    return path.resolve(dataDirectory, 'failure-shots', executionId);
+}
+
 /**
  * Variables handed to the plugin child process. DEVICE_* are platform-neutral; IOS_UDID and
  * WDA_URL stay for the existing iOS routines, ANDROID_SERIAL is honoured by adb itself.
@@ -150,11 +157,16 @@ export function pluginEnvironment(
     registered: RegisteredDevice,
     passcode: string | undefined,
     motionSeed?: string,
+    executionId?: string,
 ): Record<string, string> {
     const platform = platformOf(registered);
     const profile = motionProfileFor(registered.udid, registered.motion);
     const base = {
         DEVICE_UDID: registered.udid, DEVICE_PLATFORM: platform, DEVICE_DRIVER: driverKindOf(registered),
+        // Where a routine drops a picture of the screen that beat it. One directory per execution,
+        // beside the scheduler's other state, so a failure card and the calibration agent can both
+        // point at it. See src/drivers/failure-shot.ts.
+        ...(executionId ? { [FAILURE_SHOT_DIR]: failureShotDirectory(executionId) } : {}),
         // The routine's own gestures and pauses come from this seed, so a run replays from its id.
         ...(motionSeed ? { MOTION_SEED: motionSeed } : {}),
         MOTION_HAND: profile.hand, MOTION_SPEED: profile.speed,
@@ -284,7 +296,7 @@ export async function executeAutomation(
         const passcode = platformOf(registered) === 'ios' ? await passcodeForDevice(device.udid) : undefined;
         const driver = driverForDevice(registered, { passcode, motionSeed });
         const redact = createLogRedactor([passcode, registered.android?.bridgeToken]);
-        const environment: NodeJS.ProcessEnv = { ...process.env, ...pluginEnvironment(registered, passcode, motionSeed) };
+        const environment: NodeJS.ProcessEnv = { ...process.env, ...pluginEnvironment(registered, passcode, motionSeed, execution.id) };
         const context: TaskExecutionContext = {
             executionId: execution.id,
             attempt,

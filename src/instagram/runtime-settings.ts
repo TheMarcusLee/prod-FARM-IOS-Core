@@ -1,6 +1,8 @@
 import type { JsonObject, RegisteredDevice } from '../types.js';
 
-export const INSTAGRAM_PLUGIN_ID = 'com.backline.instagram';
+import { INSTAGRAM_PLUGIN_ID } from '../plugin-ids.js';
+
+export { INSTAGRAM_PLUGIN_ID };
 
 function settings(device: RegisteredDevice | undefined): JsonObject {
     return device?.pluginData[INSTAGRAM_PLUGIN_ID] ?? {};

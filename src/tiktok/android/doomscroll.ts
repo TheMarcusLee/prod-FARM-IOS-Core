@@ -1,4 +1,6 @@
 import path from 'node:path';
+import { resolveTable } from '../../drivers/selector-overrides.js';
+import { TIKTOK_PLUGIN_ID } from '../../plugin-ids.js';
 import { fileURLToPath } from 'node:url';
 
 import type { DeviceDriver } from '../../drivers/types.js';
@@ -55,6 +57,17 @@ export const FEED_SELECTORS = {
     /** The first result card. GUESS. */
     searchResult: [{ id: 'search_result_item' }, { id: 'iv_cover' }, { id: 'video_cover' }] as SelectorList,
 } as const;
+
+/**
+ * What the flow below actually reads.
+ *
+ * It starts as the built-in guesses and is replaced, once per run, by the same table with any
+ * confirmed overrides for this phone in front (src/drivers/selector-overrides.ts). A selector an
+ * operator or the calibration agent has verified against a real device therefore wins without
+ * anybody editing this file, and an override that has itself gone stale still falls through to
+ * the alternates below it.
+ */
+let selectors: typeof FEED_SELECTORS = FEED_SELECTORS;
 
 export interface DoomscrollOnAndroidOptions {
     /** Absent with a persona means "ask the persona how long it feels like scrolling". */
@@ -113,7 +126,7 @@ async function ensureFeed(
     sleep: (ms: number) => Promise<void>,
 ): Promise<void> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
-        if (await tapIfPresent(driver, 'Home tab', FEED_SELECTORS.homeTab, tapping)) {
+        if (await tapIfPresent(driver, 'Home tab', selectors.homeTab, tapping)) {
             console.log('On the feed');
             return;
         }
@@ -122,7 +135,7 @@ async function ensureFeed(
         await sleep(900);
     }
     try {
-        await waitForAny(driver, 'the For You feed', FEED_SELECTORS.homeTab, { timeoutMs: 8_000 });
+        await waitForAny(driver, 'the For You feed', selectors.homeTab, { timeoutMs: 8_000 });
         console.log('On the feed');
     } catch (error) {
         console.log(`Could not confirm the feed; scrolling anyway. ${error instanceof Error ? error.message : String(error)}`);
@@ -139,6 +152,9 @@ export function sessionMinutes(requested: number, random: () => number): number 
 }
 
 export async function doomscrollOnAndroid(driver: DeviceDriver, options: DoomscrollOnAndroidOptions): Promise<DoomscrollSummary> {
+    // One read of the override store per run, before the first tap: the flow below then uses
+    // the corrected table exactly as it used the built-in one.
+    selectors = await resolveTable(TIKTOK_PLUGIN_ID, driver.udid, FEED_SELECTORS);
     const { personality, likeEnabled, saveEnabled, signal, persona } = options;
     const random = options.random ?? Math.random;
     const now = options.now ?? Date.now;
@@ -214,13 +230,13 @@ export async function doomscrollOnAndroid(driver: DeviceDriver, options: Doomscr
      * advances the main feed scrolls them; two Back presses land on the feed the run came from.
      */
     const runSearch = async (term: string): Promise<boolean> => {
-        if (!await tapIfPresent(driver, 'Search', FEED_SELECTORS.searchEntry, tapping)) return false;
+        if (!await tapIfPresent(driver, 'Search', selectors.searchEntry, tapping)) return false;
         await sleep(1_200);
-        await tapIfPresent(driver, 'Search field', FEED_SELECTORS.searchField, tapping);
+        await tapIfPresent(driver, 'Search field', selectors.searchField, tapping);
         await driver.type(term);
         await driver.pressKey('enter');
         await sleep(2_500);
-        if (await tapIfPresent(driver, 'Top result', FEED_SELECTORS.searchResult, tapping)) {
+        if (await tapIfPresent(driver, 'Top result', selectors.searchResult, tapping)) {
             await sleep(2_000);
             for (let index = 0; index < 3 && running(); index += 1) {
                 await swipeToNextVideo(driver, motion);
@@ -247,15 +263,15 @@ export async function doomscrollOnAndroid(driver: DeviceDriver, options: Doomscr
 
             if (likeEnabled && decision.like) {
                 await sleep(clampToDeadline(now(), deadline, motion.pause('beforeLike')));
-                if (await tapIfPresent(driver, 'Like', FEED_SELECTORS.like, tapping)) likes += 1;
+                if (await tapIfPresent(driver, 'Like', selectors.like, tapping)) likes += 1;
             }
             if (saveEnabled && decision.save && running()) {
                 await sleep(clampToDeadline(now(), deadline, motion.pause('afterLike')));
-                if (await tapIfPresent(driver, 'Save', FEED_SELECTORS.save, tapping)) saves += 1;
+                if (await tapIfPresent(driver, 'Save', selectors.save, tapping)) saves += 1;
             }
             if (followEnabled && decision.follow && running()) {
                 await sleep(clampToDeadline(now(), deadline, motion.pause('beforeLike')));
-                if (await tapIfPresent(driver, 'Follow', FEED_SELECTORS.follow, tapping)) follows += 1;
+                if (await tapIfPresent(driver, 'Follow', selectors.follow, tapping)) follows += 1;
             }
             noteDecision(session, video, decision);
             if (!running()) break;
@@ -286,14 +302,14 @@ export async function doomscrollOnAndroid(driver: DeviceDriver, options: Doomscr
         if (likeEnabled && decideLike(profile, random)) {
             await sleep(clampToDeadline(now(), deadline, motion.pause('beforeLike')));
             if (!running()) break;
-            if (await tapIfPresent(driver, 'Like', FEED_SELECTORS.like, tapping)) likes += 1;
+            if (await tapIfPresent(driver, 'Like', selectors.like, tapping)) likes += 1;
         }
         if (!running()) break;
 
         if (saveEnabled && decideSave(profile, random)) {
             await sleep(clampToDeadline(now(), deadline, motion.pause('afterLike')));
             if (!running()) break;
-            if (await tapIfPresent(driver, 'Save', FEED_SELECTORS.save, tapping)) saves += 1;
+            if (await tapIfPresent(driver, 'Save', selectors.save, tapping)) saves += 1;
         }
         if (!running()) break;
 

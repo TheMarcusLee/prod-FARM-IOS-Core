@@ -1,4 +1,6 @@
 import path from 'node:path';
+import { resolveTable } from '../../drivers/selector-overrides.js';
+import { YOUTUBE_PLUGIN_ID } from '../../plugin-ids.js';
 import { fileURLToPath } from 'node:url';
 
 import type { DeviceDriver } from '../../drivers/types.js';
@@ -66,6 +68,17 @@ export const FEED_SELECTORS = {
     /** The channel handle under the Short; read, never tapped. GUESS. */
     creatorName: [{ id: 'reel_channel_bar' }, { id: 'channel_name' }, { id: 'author' }] as SelectorList,
 } as const;
+
+/**
+ * What the flow below actually reads.
+ *
+ * It starts as the built-in guesses and is replaced, once per run, by the same table with any
+ * confirmed overrides for this phone in front (src/drivers/selector-overrides.ts). A selector an
+ * operator or the calibration agent has verified against a real device therefore wins without
+ * anybody editing this file, and an override that has itself gone stale still falls through to
+ * the alternates below it.
+ */
+let selectors: typeof FEED_SELECTORS = FEED_SELECTORS;
 
 /** Short, ASCII, unremarkable. A comment that reads like a bot is worse than no comment at all. */
 export const COMMENT_PHRASES: readonly string[] = [
@@ -152,7 +165,7 @@ async function ensureShortsFeed(
     driver: DeviceDriver, tapping: TapOptions, sleep: (ms: number) => Promise<void>,
 ): Promise<void> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
-        if (await tapIfPresent(driver, 'Shorts tab', FEED_SELECTORS.shortsTab, tapping)) {
+        if (await tapIfPresent(driver, 'Shorts tab', selectors.shortsTab, tapping)) {
             await sleep(1_500);
             console.log('On the Shorts feed');
             return;
@@ -162,7 +175,7 @@ async function ensureShortsFeed(
         await sleep(900);
     }
     try {
-        await waitForAny(driver, 'the Shorts feed', FEED_SELECTORS.shortsTab, { timeoutMs: 8_000 });
+        await waitForAny(driver, 'the Shorts feed', selectors.shortsTab, { timeoutMs: 8_000 });
         console.log('On the Shorts feed');
     } catch (error) {
         console.log(`Could not confirm the Shorts feed; browsing anyway. ${error instanceof Error ? error.message : String(error)}`);
@@ -188,6 +201,9 @@ function typeable(driver: DeviceDriver, text: string): boolean {
 }
 
 export async function warmupOnAndroid(driver: DeviceDriver, options: WarmupOnAndroidOptions): Promise<WarmupSummary> {
+    // One read of the override store per run, before the first tap: the flow below then uses
+    // the corrected table exactly as it used the built-in one.
+    selectors = await resolveTable(YOUTUBE_PLUGIN_ID, driver.udid, FEED_SELECTORS);
     const { personality, likeEnabled, subscribeEnabled, commentEnabled, signal, persona } = options;
     const random = options.random ?? Math.random;
     const now = options.now ?? Date.now;
@@ -255,9 +271,9 @@ export async function warmupOnAndroid(driver: DeviceDriver, options: WarmupOnAnd
 
     /** The comment sheet: open it, say the line, send, come back to the Short. */
     const leaveComment = async (text: string): Promise<boolean> => {
-        if (!await tapIfPresent(driver, 'Comments', FEED_SELECTORS.comment, tapping)) return false;
+        if (!await tapIfPresent(driver, 'Comments', selectors.comment, tapping)) return false;
         await sleep(motion.pause('reaction'));
-        if (!await tapIfPresent(driver, 'comment box', FEED_SELECTORS.commentField, tapping)) {
+        if (!await tapIfPresent(driver, 'comment box', selectors.commentField, tapping)) {
             await driver.pressKey('back');
             await sleep(800);
             return false;
@@ -265,7 +281,7 @@ export async function warmupOnAndroid(driver: DeviceDriver, options: WarmupOnAnd
         await sleep(motion.pause('reaction'));
         await driver.type(text);
         await sleep(motion.pause('beforeLike'));
-        const sent = await tapIfPresent(driver, 'Send comment', FEED_SELECTORS.commentSend, tapping);
+        const sent = await tapIfPresent(driver, 'Send comment', selectors.commentSend, tapping);
         await sleep(1_200);
         // Back out of the comment sheet whether or not the send landed, so the loop is on a Short.
         await driver.pressKey('back');
@@ -286,12 +302,12 @@ export async function warmupOnAndroid(driver: DeviceDriver, options: WarmupOnAnd
 
             if (likeEnabled && decision.like) {
                 await sleep(clampToDeadline(now(), deadline, motion.pause('beforeLike')));
-                if (await tapIfPresent(driver, 'Like', FEED_SELECTORS.like, tapping)) likes += 1;
+                if (await tapIfPresent(driver, 'Like', selectors.like, tapping)) likes += 1;
             }
             // Subscribing is the persona's follow: the same "it keeps enjoying this channel" rule.
             if (subscribeEnabled && decision.follow && running()) {
                 await sleep(clampToDeadline(now(), deadline, motion.pause('afterLike')));
-                if (await tapIfPresent(driver, 'Subscribe', FEED_SELECTORS.subscribe, tapping)) subscribes += 1;
+                if (await tapIfPresent(driver, 'Subscribe', selectors.subscribe, tapping)) subscribes += 1;
             }
             noteDecision(session, video, decision);
             if (!running()) break;
@@ -323,7 +339,7 @@ export async function warmupOnAndroid(driver: DeviceDriver, options: WarmupOnAnd
         if (likeEnabled && decideLike(profile, random)) {
             await sleep(clampToDeadline(now(), deadline, motion.pause('beforeLike')));
             if (!running()) break;
-            if (await tapIfPresent(driver, 'Like', FEED_SELECTORS.like, tapping)) likes += 1;
+            if (await tapIfPresent(driver, 'Like', selectors.like, tapping)) likes += 1;
         }
         if (!running()) break;
 

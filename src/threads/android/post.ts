@@ -1,4 +1,6 @@
 import { readFile } from 'node:fs/promises';
+import { resolveTable } from '../../drivers/selector-overrides.js';
+import { THREADS_PLUGIN_ID } from '../../plugin-ids.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -87,6 +89,17 @@ export const POST_SELECTORS = {
     galleryCellDescriptions: ['photo', 'image', 'video'] as readonly string[],
 } as const;
 
+/**
+ * What the flow below actually reads.
+ *
+ * It starts as the built-in guesses and is replaced, once per run, by the same table with any
+ * confirmed overrides for this phone in front (src/drivers/selector-overrides.ts). A selector an
+ * operator or the calibration agent has verified against a real device therefore wins without
+ * anybody editing this file, and an override that has itself gone stale still falls through to
+ * the alternates below it.
+ */
+let selectors: typeof POST_SELECTORS = POST_SELECTORS;
+
 export interface PostOnAndroidOptions {
     /** Android package; overridden with THREADS_PACKAGE from the environment. */
     packageName?: string;
@@ -161,10 +174,10 @@ export function assertTextIsTypeable(driver: DeviceDriver, text: string): void {
 /** Picker cells, ordered the way they are laid out: top-left (newest) first. */
 export function galleryCells(root: UiNode): UiNode[] {
     const matches = [...walk(root)].filter((node) => {
-        const byId = POST_SELECTORS.galleryCellIds.some((id) => node.id === id || node.id.endsWith(`:id/${id}`));
+        const byId = selectors.galleryCellIds.some((id) => node.id === id || node.id.endsWith(`:id/${id}`));
         const description = node.description.toLowerCase();
         const byDescription = description.length > 0
-            && POST_SELECTORS.galleryCellDescriptions.some((word) => description.includes(word));
+            && selectors.galleryCellDescriptions.some((word) => description.includes(word));
         return byId || byDescription;
     });
     const seen = new Set<string>();
@@ -199,7 +212,7 @@ async function pushAllMedia(driver: DeviceDriver, manifest: ThreadsPostManifest)
 export async function switchAccount(driver: DeviceDriver, handle: string, options: PostOnAndroidOptions = {}): Promise<void> {
     const timing = timingOf(options);
     console.log(`Switching to Threads account "${handle}"`);
-    await tapFirst(driver, 'Profile tab', POST_SELECTORS.profileTab, tapping(options));
+    await tapFirst(driver, 'Profile tab', selectors.profileTab, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
 
     const handleSelector: SelectorList = [{ text: handle }];
@@ -210,7 +223,7 @@ export async function switchAccount(driver: DeviceDriver, handle: string, option
         return;
     }
 
-    await tapFirst(driver, 'account switcher', POST_SELECTORS.accountSwitcher, tapping(options));
+    await tapFirst(driver, 'account switcher', selectors.accountSwitcher, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
     await waitForAny(driver, `the account row for ${handle}`, handleSelector, {
         timeoutMs: timing.screenTimeoutMs, intervalMs: timing.pollIntervalMs, ...(timing.signal ? { signal: timing.signal } : {}),
@@ -219,7 +232,7 @@ export async function switchAccount(driver: DeviceDriver, handle: string, option
     // Threads reloads app state after a switch.
     await driver.pause(timing.settleMs * 2, timing.signal);
 
-    await tapFirst(driver, 'Profile tab (verify)', POST_SELECTORS.profileTab, tapping(options));
+    await tapFirst(driver, 'Profile tab (verify)', selectors.profileTab, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
     const root = await driver.uiTree();
     if (!findByText(root, { text: handle })) {
@@ -232,14 +245,14 @@ export async function switchAccount(driver: DeviceDriver, handle: string, option
 async function dismissInterstitials(driver: DeviceDriver, options: PostOnAndroidOptions, rounds = 2): Promise<void> {
     const timing = timingOf(options);
     for (let round = 0; round < rounds; round += 1) {
-        if (!await tapIfPresent(driver, 'an optional prompt', POST_SELECTORS.dismissable, tapping(options))) return;
+        if (!await tapIfPresent(driver, 'an optional prompt', selectors.dismissable, tapping(options))) return;
         await driver.pause(timing.settleMs, timing.signal);
     }
 }
 
 async function attachMedia(driver: DeviceDriver, count: number, options: PostOnAndroidOptions): Promise<void> {
     const timing = timingOf(options);
-    await tapFirst(driver, 'Attach media', POST_SELECTORS.attach, tapping(options));
+    await tapFirst(driver, 'Attach media', selectors.attach, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
     // The gallery permission sheet only shows the first time media is attached on a phone.
     await dismissInterstitials(driver, options, 1);
@@ -260,13 +273,13 @@ async function attachMedia(driver: DeviceDriver, count: number, options: PostOnA
         await driver.pause(timing.settleMs, timing.signal);
     }
     // A single-tap picker may have closed itself already; confirming is optional either way.
-    await tapIfPresent(driver, 'the picker confirmation', POST_SELECTORS.pickerConfirm, tapping(options));
+    await tapIfPresent(driver, 'the picker confirmation', selectors.pickerConfirm, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
 }
 
 async function writeText(driver: DeviceDriver, text: string, options: PostOnAndroidOptions): Promise<void> {
     const timing = timingOf(options);
-    await tapFirst(driver, 'the composer', POST_SELECTORS.composerField, tapping(options));
+    await tapFirst(driver, 'the composer', selectors.composerField, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
     await driver.type(text);
     // Back closes the soft keyboard without leaving the composer.
@@ -281,11 +294,11 @@ async function writeText(driver: DeviceDriver, text: string, options: PostOnAndr
  */
 async function keepAsDraft(driver: DeviceDriver, options: PostOnAndroidOptions): Promise<void> {
     const timing = timingOf(options);
-    if (await tapIfPresent(driver, 'Save draft', POST_SELECTORS.saveDraft, tapping(options))) return;
+    if (await tapIfPresent(driver, 'Save draft', selectors.saveDraft, tapping(options))) return;
     console.log('No draft control in the composer; leaving it to raise the "keep draft?" sheet');
     await driver.pressKey('back');
     await driver.pause(timing.settleMs, timing.signal);
-    await tapFirst(driver, 'Save draft', POST_SELECTORS.saveDraft, tapping(options));
+    await tapFirst(driver, 'Save draft', selectors.saveDraft, tapping(options));
 }
 
 /**
@@ -294,6 +307,9 @@ async function keepAsDraft(driver: DeviceDriver, options: PostOnAndroidOptions):
  * confirm and go home. Exported so it can be tested without spawning the entrypoint below.
  */
 export async function postOnAndroid(driver: DeviceDriver, manifest: ThreadsPostManifest, options: PostOnAndroidOptions = {}): Promise<void> {
+    // One read of the override store per run, before the first tap: the flow below then uses
+    // the corrected table exactly as it used the built-in one.
+    selectors = await resolveTable(THREADS_PLUGIN_ID, driver.udid, POST_SELECTORS);
     const timing = timingOf(options);
     const packageName = options.packageName ?? THREADS_ANDROID_PACKAGE;
 
@@ -314,9 +330,9 @@ export async function postOnAndroid(driver: DeviceDriver, manifest: ThreadsPostM
     const account = manifest.account?.trim();
     if (account) await switchAccount(driver, account, options);
 
-    await tapFirst(driver, 'Compose', POST_SELECTORS.compose, tapping(options));
+    await tapFirst(driver, 'Compose', selectors.compose, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
-    await waitForAny(driver, 'the composer', POST_SELECTORS.composerField, {
+    await waitForAny(driver, 'the composer', selectors.composerField, {
         timeoutMs: timing.screenTimeoutMs, intervalMs: timing.pollIntervalMs, ...(timing.signal ? { signal: timing.signal } : {}),
     });
 
@@ -325,14 +341,14 @@ export async function postOnAndroid(driver: DeviceDriver, manifest: ThreadsPostM
 
     const publishing = manifest.destination === 'publish';
     if (publishing) {
-        await tapFirst(driver, 'Post', POST_SELECTORS.post, tapping(options));
+        await tapFirst(driver, 'Post', selectors.post, tapping(options));
         console.log('Thread submitted');
     } else {
         await keepAsDraft(driver, options);
         console.log('Thread kept as a draft');
     }
 
-    const confirmation = publishing ? POST_SELECTORS.publishSuccess : POST_SELECTORS.draftSuccess;
+    const confirmation = publishing ? selectors.publishSuccess : selectors.draftSuccess;
     const confirmed = await waitForAny(driver, publishing ? 'the post confirmation' : 'the draft confirmation', confirmation, {
         timeoutMs: timing.successTimeoutMs, intervalMs: timing.pollIntervalMs, ...(timing.signal ? { signal: timing.signal } : {}),
     });
