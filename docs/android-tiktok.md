@@ -83,6 +83,11 @@ variables as its iOS twin: `DOOMSCROLL_DURATION_MINUTES`, `DOOMSCROLL_PERSONALIT
 
 ## 4. The selector table
 
+Selectors marked GUESS have never been checked against a real device. You can confirm them by hand
+and record them as data rather than as a code change — or have a cheap agent walk the flow and do it
+for you: see [the calibration agent](agent.md).
+
+
 Targeting is tree-first (`resource-id`, text, `content-desc`) with an OCR fallback for screens
 TikTok draws without accessibility nodes — never recorded coordinates. Every control is a list of
 alternates tried in order, kept in one table per routine:

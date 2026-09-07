@@ -244,3 +244,10 @@
 .bl-rb-import { display: inline-flex; }
 .bl-rb-import .bl-btn { cursor: pointer; }
 .bl-rb-name .bl-field { flex: 1 1 220px; }
+
+/* Selectors: one group per routine, each a heading row over its table. */
+.bl-selector-group { margin-top: 14px; border-top: 1px solid var(--bl-line); }
+.bl-selector-group:first-of-type { margin-top: 6px; border-top: 0; }
+.bl-selector-group .bl-panel-head { padding-left: 0; padding-right: 0; }
+.bl-selector-group .bl-table { font-size: 12.5px; }
+.bl-selector-group .bl-table td { vertical-align: top; }

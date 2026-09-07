@@ -93,6 +93,21 @@ function fixLink(event: FarmEvent): string {
     return url ? `<a class="bl-btn bl-btn-sm" href="${escapeHtml(url)}">Fix it</a>` : '';
 }
 
+/**
+ * A run that died on a control it could not see is repairable by an agent rather than by a person,
+ * and `src/agent/failure.ts` has already put everything the pass needs on the event. One button,
+ * on the failure it belongs to.
+ */
+function calibrateButton(event: FarmEvent): string {
+    const hint = event.detail?.calibrate;
+    if (!hint || typeof hint !== 'object' || Array.isArray(hint)) return '';
+    const { plugin, flow, udid, selector } = hint as Record<string, unknown>;
+    if (typeof plugin !== 'string' || (flow !== 'post' && flow !== 'warmup') || typeof udid !== 'string') return '';
+    const title = typeof selector === 'string' ? ` (${selector})` : '';
+    return `<button type="button" class="bl-btn bl-btn-sm" data-calibrate data-plugin="${escapeHtml(plugin)}"
+ data-flow="${escapeHtml(flow)}" data-udid="${escapeHtml(udid)}">Ask the agent to calibrate${escapeHtml(title)}</button>`;
+}
+
 export function renderAlertsPage(events: readonly FarmEvent[], unread: number): string {
     if (!events.length) {
         return `<div class="bl-page">${panel('Alerts', empty('Nothing has gone wrong yet. Alerts appear here when a phone drops off or a task fails.'))}</div>`;
@@ -103,7 +118,7 @@ export function renderAlertsPage(events: readonly FarmEvent[], unread: number): 
 <div class="bl-alert-meta"><span class="bl-chip bl-chip-sm">${escapeHtml(event.kind)}</span>
 <span class="bl-chip bl-chip-sm">${escapeHtml(event.severity)}</span>
 ${event.deviceUdid ? `<a href="/devices/${encodeURIComponent(event.deviceUdid)}">${escapeHtml(event.deviceUdid)}</a>` : ''}
-<time>${escapeHtml(event.createdAt.toISOString())}</time></div></div>${fixLink(event)}</li>`).join('');
+<time>${escapeHtml(event.createdAt.toISOString())}</time></div></div>${calibrateButton(event)}${fixLink(event)}</li>`).join('');
     return `<div class="bl-page">
 <p class="bl-muted" id="alerts-unread">${unread} unread</p>
 <ul class="bl-alerts" id="alerts-list" data-newest="${events[0]?.id ?? 0}">${rows}</ul></div>`;

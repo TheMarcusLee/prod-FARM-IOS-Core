@@ -116,6 +116,11 @@ half-finished draft on a phone.
 
 ### Correcting a selector
 
+Selectors marked GUESS have never been checked against a real device. You can confirm them by hand
+and record them as data rather than as a code change — or have a cheap agent walk the flow and do it
+for you: see [the calibration agent](agent.md).
+
+
 Every control is a list of alternates tried in order. When a run fails, the
 error names the control, every alternate it tried, and what the phone was
 actually showing:
