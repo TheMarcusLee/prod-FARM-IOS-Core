@@ -121,6 +121,45 @@ A serial reading `unauthorized` means the prompt was not accepted.
       the post is the first cell in the picker. Check the picker actually shows
       it in that order.
 
+### 1.6 A photo post and a slideshow
+
+Nothing in TikTok's photo composer has ever been seen by this repository. This
+is the section that turns three guesses into facts. Post to **Drafts**, not
+public, until the order is right.
+
+- [ ] Upload **one** image and run **post** with format `photo`.
+- [ ] Upload **three** images and run **post** with format `slideshow`.
+- [ ] *Confirm:* the slides come out in **manifest order** — image 1 is slide 1.
+      They are pushed in reverse so file 1 is the newest cell; if the picker
+      sorts some other way the slideshow will be backwards, and that is the
+      single most likely thing to be wrong here.
+- [ ] *Confirm — picker Photos tab.* Does the picker have a Videos/Photos tab
+      row, and what is the tab labelled? Selector list `POST_SELECTORS.photoTab`
+      (**GUESS**): `#tab_photo`, `#photo_tab`, `#tv_photo`, "Photos", "Photo",
+      "Images". A run that skipped it logs `Skipped picker Photos tab: not on
+      screen`.
+- [ ] *Confirm — photo mode toggle.* Do a set of stills open in photo mode by
+      themselves, or as a clip with a switch back? What does the switch say?
+      `POST_SELECTORS.photoMode` (**GUESS**): `#photo_mode`, `#btn_photo_mode`,
+      "Switch to photo mode", "Photo mode", "Switch to photo".
+- [ ] *Confirm — template chooser.* Does a template/style chooser appear before
+      the editor, and what dismisses it? `POST_SELECTORS.photoTemplateSkip`
+      (**GUESS**): `#btn_skip`, `#tv_skip`, "Skip", "Not now", "Use original",
+      "No template".
+- [ ] *Confirm:* the caption screen and the Post/Drafts buttons are the **same**
+      controls as a video post. If photo mode has its own publish screen, the
+      caption and post selectors need photo-mode alternates too.
+- [ ] Dump the tree on each of those screens and paste the real values into
+      `POST_SELECTORS` and the table in
+      [android-tiktok.md §4](android-tiktok.md#4-the-selector-table):
+      ```sh
+      adb -s <serial> shell uiautomator dump /dev/tty
+      ```
+- [ ] Check the refusals fire on the phone path too: a manifest mixing a clip
+      and an image, and a slideshow of 36 images, should both fail **before**
+      anything is pushed (`fake.pushed` is empty in the tests; on a phone,
+      nothing new should appear in the gallery).
+
 ---
 
 ## Part 2 — the accessibility bridge APK
@@ -303,6 +342,21 @@ Only after Parts 1 and 2. This is the part with Apple in it.
 - [ ] Set the device passcode in the wizard (or `PATCH /api/devices/:udid`) and
       confirm the farm wakes a locked phone before a run.
 - [ ] Run doomscroll for 2 minutes and compare the behaviour against Android.
+- [ ] Post a **single photo** and a **3-image slideshow** to Drafts, and check
+      the slides are in manifest order (media is imported in reverse so that
+      cell 0 is the first item).
+- [ ] *Confirm — the three unverified coordinates.* `photoTab`
+      (`{ x: 244, y: 62 }`), `photoModeToggle` (`{ x: 96, y: 566 }`) and
+      `photoTemplateSkip` (`{ x: 335, y: 62 }`) on the `iphone8` profile are
+      **guesses**. Each is probed through accessibility first and skipped when
+      the control is absent, so a wrong value shows up in the log as
+      `Skipped <control>: not on screen` rather than as a stray tap. Screenshot
+      each screen, read off the centres, and either fix
+      `src/devices/coordinates.ts` + `src/tiktok/coordinates.ts` or set
+      per-device overrides from the device page → **Touch points**. See
+      [coordinates.md § Unverified points](coordinates.md#unverified-points).
+- [ ] *Confirm:* whether "Use layout" still needs forcing off for a photo post —
+      the routine forces it off for any multi-select, photo mode included.
 
 ---
 
@@ -395,6 +449,7 @@ When the session is over, correct the docs rather than remembering:
 | If you learned | Fix |
 | --- | --- |
 | Real TikTok selectors | `src/tiktok/android/{post,doomscroll}.ts` and the table in `docs/android-tiktok.md` |
+| What TikTok's photo composer actually looks like | `POST_SELECTORS.photoTab` / `.photoMode` / `.photoTemplateSkip`, `docs/android-tiktok.md` §5, and the three unverified points in `docs/coordinates.md` |
 | The coordinate units | `docs/mobile-api.md` (`/remote/info`, `/remote/action`) and `docs/mobile-app.md` "Still open" |
 | Bridge behaviour on your phones | This file's §2.2 confirm boxes, and `sim-use/FARM-NOTES.md` |
 | A step that is missing here | This file |

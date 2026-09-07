@@ -97,6 +97,9 @@ alternates tried in order, kept in one table per routine:
 | Create (+) | `#create_tab`, `#iv_create`, "Create", "Add" | unmarked |
 | Upload | `#upload`, `#tv_upload`, "Upload", "Gallery" | unmarked |
 | Select multiple | `#multi_select`, "Select multiple", "Multiple" | **GUESS** — optional, skipped when absent |
+| Picker Photos tab | `#tab_photo`, `#photo_tab`, `#tv_photo`, "Photos", "Photo", "Images" | **GUESS** — photo mode only, optional |
+| Photo mode toggle | `#photo_mode`, `#btn_photo_mode`, "Switch to photo mode", "Photo mode", "Switch to photo" | **GUESS** — photo mode only, optional |
+| Photo template chooser | `#btn_skip`, `#tv_skip`, "Skip", "Not now", "Use original", "No template" | **GUESS** — photo mode only, optional |
 | Next (picker, then editor) | `#btn_next`, `#next`, "Next" | unmarked |
 | Caption field | `#caption_edit_view`, `#et_caption`, `#edit_text`, "Add a caption", "Describe your video", "Add description" | unmarked |
 | Post | `#btn_post`, `#publish_button`, "Post" | unmarked |
@@ -130,7 +133,42 @@ The full first-hardware-session procedure is
 Each failure message already lists the alternates that were tried and the texts that were on
 screen, so a wrong guess tells you what to put in its place.
 
-## 5. Running one by hand
+## 5. Photo posts and slideshows
+
+A manifest with `"format": "photo"` (one image) or `"format": "slideshow"` (2–35 images) drives
+TikTok's photo composer instead of the video one. No `format` means `video`, so every manifest
+written before photo mode existed still means exactly what it meant.
+
+The flow is the video flow with three optional screens spliced in:
+
+1. **Validate first.** `src/tiktok/post-format.ts` runs before anything is pushed or opened:
+   mixed video + image manifests are refused, `photo` needs exactly one image, `slideshow` needs
+   2 to 35, and every image must be `image/jpeg`, `image/png`, `image/webp` or `image/heic`. A bad
+   manifest fails as a sentence rather than as a phone parked in a half-filled editor.
+2. **Push.** Unchanged: files go to `/sdcard/DCIM/Camera` newest-last, so file 1 is the newest
+   (first) picker cell. The picker is tapped in that order, and TikTok orders a slideshow by tap
+   order — **manifest order is slide order**.
+3. **Create → Upload**, then the picker's **Photos** tab if the build has one.
+4. **Select multiple** when there is more than one image, then each cell in order.
+5. **Next**, then the photo editor: a **"Switch to photo mode"** toggle and a **template chooser**
+   both appear on some builds and neither on others.
+6. Caption and **Post** / **Drafts** exactly as a video post — the publish screen is the same one.
+
+Every step in 3, 5 is tolerant: a control that is not on screen is logged as
+`Skipped <control>: not on screen` and the run carries on. That is deliberate — nobody has seen
+these screens on a real phone yet, and a photo post that walks the video screens end to end is a
+better failure mode than one that stops at a toggle that this build does not have.
+
+`cover` is accepted and validated (an index into `files`) but is not driven yet: neither routine
+picks a cover slide.
+
+**What to confirm on a phone** (all three rows are **GUESS**): whether the picker has a
+Photos/Images tab and what it is labelled; whether a set of stills opens in photo mode by itself
+or needs the toggle, and what that toggle says; and whether a template chooser appears and what
+its dismiss control is called. `adb shell uiautomator dump /dev/tty` on each screen, then correct
+`POST_SELECTORS` and the table above.
+
+## 6. Running one by hand
 
 ```sh
 ANDROID_SERIAL=R58N12ABCDE DEVICE_PLATFORM=android DEVICE_DRIVER=adb \
@@ -142,5 +180,18 @@ ANDROID_SERIAL=R58N12ABCDE DEVICE_DRIVER=adb DOOMSCROLL_DURATION_MINUTES=3 \
 ```
 
 The manifest is the same shape the plugin writes (`src/tiktok/post-manifest.ts`): `device`,
-`files`, `destination`, optional `account` and `caption`. `musicUrl` is iOS-only and is ignored
-with a log line on Android.
+`files`, `destination`, optional `account`, `caption`, `format` (`video` | `photo` | `slideshow`,
+default `video`) and `cover`. `musicUrl` is iOS-only and is ignored with a log line on Android.
+
+```jsonc
+{
+  "device": { "udid": "R58N12ABCDE", "name": "pixel-03", "platform": "android" },
+  "format": "slideshow",
+  "files": [
+    { "path": "/tmp/1.jpg", "name": "1.jpg", "mimeType": "image/jpeg" },
+    { "path": "/tmp/2.jpg", "name": "2.jpg", "mimeType": "image/jpeg" }
+  ],
+  "destination": "draft",
+  "caption": "two of them"
+}
+```

@@ -10,6 +10,9 @@ import type { PostManifest } from '../src/tiktok/post-manifest.js';
 import {
     MAX_CAPTION_LENGTH, POST_SELECTORS, galleryCells, postOnAndroid, switchAccount,
 } from '../src/tiktok/android/post.js';
+import {
+    assertPostFormat, MAX_SLIDESHOW_IMAGES, resolvePostFormat,
+} from '../src/tiktok/post-format.js';
 import { doomscrollOnAndroid } from '../src/tiktok/android/doomscroll.js';
 import { driverFromEnv, driverKindFromEnv } from '../src/tiktok/android/driver-from-env.js';
 import { createTikTokPlugin } from '../src/tiktok-plugin.js';
@@ -291,9 +294,12 @@ function taskOf(plugin: ReturnType<typeof createTikTokPlugin>, type: string): Ta
 
 interface RunProcessCall { entrypoint: string; args?: string[]; env?: Record<string, string> }
 
+interface FakeAsset { id: string; path: string; name: string; mimeType: string }
+
 async function executeOn(
     plugin: ReturnType<typeof createTikTokPlugin>, type: string, platform: 'ios' | 'android',
     payload: Record<string, unknown>, workspaceDirectory: string,
+    assets: FakeAsset[] = [{ id: 'asset-1', path: '/tmp/clip.mp4', name: 'clip.mp4', mimeType: 'video/mp4' }],
 ): Promise<RunProcessCall> {
     let call: RunProcessCall | undefined;
     const context = {
@@ -301,7 +307,7 @@ async function executeOn(
         device: { udid: 'device-1', name: 'phone', platform },
         devicePluginData: {},
         driver: { kind: platform === 'android' ? 'adb' : 'wda' },
-        assets: [{ id: 'asset-1', path: '/tmp/clip.mp4', name: 'clip.mp4', mimeType: 'video/mp4', size: 1, sha256: 'x' }],
+        assets: assets.map((asset) => ({ ...asset, size: 1, sha256: 'x' })),
         signal: new AbortController().signal,
         log: async () => {},
         runProcess: async (specification: RunProcessCall) => { call = specification; return { exitCode: 0, stopped: false }; },
@@ -445,4 +451,177 @@ test('driverFromEnv refuses an a11y-bridge device with no token, and rejects an 
     assert.throws(() => driverFromEnv({ ANDROID_SERIAL: 'R58N1', DEVICE_DRIVER: 'a11y-bridge', A11Y_BRIDGE_URL: 'http://127.0.0.1:18300' }), /A11Y_BRIDGE_TOKEN/);
     assert.throws(() => driverKindFromEnv({ DEVICE_DRIVER: 'wda' }), /must be adb or a11y-bridge/);
     assert.throws(() => driverFromEnv({ DEVICE_DRIVER: 'adb' }), /ANDROID_SERIAL/);
+});
+
+/** `count` picker cells laid out three to a row, handed to the tree in reverse layout order. */
+function imageCells(count: number): Array<Partial<UiNode>> {
+    const cells = Array.from({ length: count }, (_, index) => {
+        const left = 10 + ((index % 3) * 360);
+        const top = 300 + (Math.floor(index / 3) * 400);
+        return {
+            id: 'com.zhiliaoapp.musically:id/iv_image', type: STAY, text: `slide ${index + 1}`,
+            bounds: { left, top, right: left + 340, bottom: top + 340 },
+        };
+    });
+    // Reversed on purpose: the routine must sort top-left first rather than trust tree order.
+    return cells.reverse();
+}
+
+/**
+ * The photo-mode flow with every optional screen present: the picker's Photos tab, the
+ * multi-select toggle, and the editor's "Switch to photo mode" toggle.
+ */
+function photoFlowScreens(count: number, confirmation: string): UiNode[] {
+    return [
+        screen({ text: 'Create', bounds: { left: 480, top: 2200, right: 600, bottom: 2320 } }),
+        screen({ text: 'Upload', bounds: { left: 800, top: 2100, right: 1000, bottom: 2200 } }),
+        screen(
+            { text: 'Photos', type: STAY, bounds: { left: 400, top: 150, right: 600, bottom: 230 } },
+            ...(count > 1
+                ? [{ text: 'Select multiple', type: STAY, bounds: { left: 10, top: 150, right: 300, bottom: 230 } }]
+                : []),
+            ...imageCells(count),
+            { text: 'Next', bounds: { left: 800, top: 2200, right: 1000, bottom: 2300 } },
+        ),
+        screen(
+            { text: 'Switch to photo mode', type: STAY, bounds: { left: 40, top: 1900, right: 500, bottom: 1990 } },
+            { text: 'Next', bounds: { left: 800, top: 2200, right: 1000, bottom: 2300 } },
+        ),
+        screen(
+            { id: 'com.zhiliaoapp.musically:id/et_caption', type: STAY, text: 'Add a caption', bounds: { left: 40, top: 200, right: 1040, bottom: 400 } },
+            { text: 'Drafts', bounds: { left: 40, top: 2200, right: 400, bottom: 2300 } },
+            { text: 'Post', bounds: { left: 600, top: 2200, right: 1040, bottom: 2300 } },
+        ),
+        screen({ text: confirmation, bounds: { left: 40, top: 1000, right: 1040, bottom: 1100 }, clickable: false }),
+    ];
+}
+
+const image = (name: string) => ({ path: `/tmp/${name}`, name, mimeType: 'image/jpeg' });
+
+test('a photo post takes the Photos tab, one image, and the photo-mode editor', async () => {
+    const fake = fakeDriver(photoFlowScreens(1, 'Posted'));
+    await postOnAndroid(fake.driver, manifest({
+        format: 'photo', files: [image('one.jpg')], caption: 'just the one',
+    }), FAST);
+
+    assert.deepEqual(fake.taps, [
+        'Create', 'Upload', 'Photos', 'slide 1', 'Next', 'Switch to photo mode', 'Next', 'Add a caption', 'Post',
+    ]);
+    assert.deepEqual(fake.pushed, ['one.jpg']);
+    assert.deepEqual(fake.typed, ['just the one']);
+});
+
+test('a slideshow pushes in reverse and taps the cells in manifest order', async () => {
+    const fake = fakeDriver(photoFlowScreens(3, 'Posted'));
+    await postOnAndroid(fake.driver, manifest({
+        format: 'slideshow', files: [image('a.jpg'), image('b.jpg'), image('c.jpg')],
+    }), FAST);
+
+    // Pushed newest-last so a.jpg is the newest gallery cell, then tapped 1 → 2 → 3, which is the
+    // order TikTok lays the slides out in.
+    assert.deepEqual(fake.pushed, ['c.jpg', 'b.jpg', 'a.jpg']);
+    assert.deepEqual(fake.taps, [
+        'Create', 'Upload', 'Photos', 'Select multiple', 'slide 1', 'slide 2', 'slide 3',
+        'Next', 'Switch to photo mode', 'Next', 'Post',
+    ]);
+});
+
+test('photo mode on a build with no Photos tab and no toggle walks the same screens as a video', async () => {
+    const fake = fakeDriver(postFlowScreens('Posted'));
+    await postOnAndroid(fake.driver, manifest({ format: 'photo', files: [image('one.jpg')] }), FAST);
+    // Every photo-mode step is optional; a screen that is absent is skipped rather than fatal.
+    assert.deepEqual(fake.taps, ['Create', 'Upload', 'newest', 'Next', 'Next', 'Post']);
+});
+
+test('a mixed video + image manifest is refused before anything reaches the phone', async () => {
+    const fake = fakeDriver(photoFlowScreens(2, 'Posted'));
+    await assert.rejects(
+        postOnAndroid(fake.driver, manifest({
+            format: 'slideshow',
+            files: [image('a.jpg'), { path: '/tmp/clip.mp4', name: 'clip.mp4', mimeType: 'video/mp4' }],
+        }), FAST),
+        /either one video or a set of images/,
+    );
+    assert.deepEqual(fake.pushed, []);
+    assert.deepEqual(fake.launched, []);
+});
+
+test('a slideshow of more than 35 images is refused before anything reaches the phone', async () => {
+    const fake = fakeDriver(photoFlowScreens(3, 'Posted'));
+    const files = Array.from({ length: MAX_SLIDESHOW_IMAGES + 1 }, (_, index) => image(`slide-${index}.jpg`));
+    await assert.rejects(
+        postOnAndroid(fake.driver, manifest({ format: 'slideshow', files }), FAST),
+        /2 to 35 images; this one has 36/,
+    );
+    assert.deepEqual(fake.pushed, []);
+    assert.deepEqual(fake.launched, []);
+});
+
+test('post format validation covers counts, mime types, cover and the video default', () => {
+    const one = [image('a.jpg')];
+    const two = [image('a.jpg'), image('b.jpg')];
+
+    assert.equal(resolvePostFormat(undefined), 'video');
+    assert.equal(assertPostFormat({ files: one }), 'video', 'no format means video, as it always did');
+    assert.equal(assertPostFormat({ format: 'photo', files: one }), 'photo');
+    assert.equal(assertPostFormat({ format: 'slideshow', files: two }), 'slideshow');
+    assert.throws(() => resolvePostFormat('carousel'), /Unknown post format "carousel"/);
+
+    assert.throws(() => assertPostFormat({ format: 'photo', files: two }), /exactly one image/);
+    assert.throws(() => assertPostFormat({ format: 'slideshow', files: one }), /2 to 35 images/);
+    assert.throws(() => assertPostFormat({ files: [] }), /at least one media file/);
+    assert.throws(
+        () => assertPostFormat({ format: 'photo', files: [{ name: 'a.gif', mimeType: 'image/gif' }] }),
+        /image\/jpeg, image\/png, image\/webp, image\/heic.*a\.gif is image\/gif/s,
+    );
+    // A charset parameter and shouted case are both things a multipart upload really sends.
+    assert.equal(assertPostFormat({ format: 'photo', files: [{ name: 'a.HEIC', mimeType: 'IMAGE/HEIC; charset=binary' }] }), 'photo');
+    assert.equal(assertPostFormat({ format: 'slideshow', files: two, cover: 1 }), 'slideshow');
+    assert.throws(() => assertPostFormat({ format: 'slideshow', files: two, cover: 2 }), /cover must be an index between 0 and 1/);
+});
+
+test('the plugin post task expresses a slideshow, and still holds video to one to three files', async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), 'farm-photo-'));
+    try {
+        const plugin = createTikTokPlugin();
+        const post = taskOf(plugin, 'post');
+        const now = { timingKind: 'now' } as never;
+        const slide = (index: number) => ({ assetId: `asset-${index}`, name: `s${index}.jpg`, mimeType: 'image/jpeg' });
+        const base = { destination: 'draft', account: '@farm.one' };
+
+        const payload = post.validate({ ...base, format: 'slideshow', media: [slide(1), slide(2), slide(3)] }, now);
+        assert.equal(payload.format, 'slideshow');
+        assert.match(post.summarize(payload), /slideshow/);
+
+        // A payload with no format is a video post, exactly as it was before photo mode existed.
+        const video = post.validate({ ...base, media: [{ assetId: 'asset-1', name: 'clip.mp4', mimeType: 'video/mp4' }] }, now);
+        assert.equal(video.format, undefined);
+
+        assert.throws(() => post.validate({
+            ...base, format: 'slideshow', media: [slide(1), { assetId: 'a', name: 'clip.mp4', mimeType: 'video/mp4' }],
+        }, now), /either one video or a set of images/);
+        assert.throws(() => post.validate({ ...base, format: 'photo', media: [slide(1), slide(2)] }, now), /exactly one image/);
+        assert.throws(() => post.validate({
+            ...base, format: 'slideshow',
+            media: Array.from({ length: MAX_SLIDESHOW_IMAGES + 1 }, (_, index) => slide(index)),
+        }, now), /Choose one to 35 images/);
+        assert.throws(() => post.validate({
+            ...base, media: Array.from({ length: 4 }, (_, index) => slide(index)),
+        }, now), /Choose one to three media files/);
+
+        // And the format reaches the routine the only way it can: through the manifest on disk.
+        const call = await executeOn(plugin, 'post', 'android', {
+            ...base, format: 'slideshow', cover: 1,
+            media: [slide(1), slide(2)],
+        }, workspace, [
+            { id: 'asset-1', path: '/tmp/s1.jpg', name: 's1.jpg', mimeType: 'image/jpeg' },
+            { id: 'asset-2', path: '/tmp/s2.jpg', name: 's2.jpg', mimeType: 'image/jpeg' },
+        ]);
+        const written = JSON.parse(await readFile(call.args![0]!, 'utf8')) as PostManifest;
+        assert.equal(written.format, 'slideshow');
+        assert.equal(written.cover, 1);
+        assert.deepEqual(written.files.map(({ name }) => name), ['s1.jpg', 's2.jpg']);
+    } finally {
+        await rm(workspace, { recursive: true, force: true });
+    }
 });

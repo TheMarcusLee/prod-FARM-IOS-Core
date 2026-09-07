@@ -22,6 +22,11 @@ export interface DeviceCoordinates {
         upload: Point;
         selectMultiple: Point;
         useLayout: Point;
+        /** Photo mode: the picker's images tab, the editor's photo-mode toggle, and the
+         *  way past the template chooser. Unverified — see docs/coordinates.md. */
+        photoTab: Point;
+        photoModeToggle: Point;
+        photoTemplateSkip: Point;
         picker: {
             circleX: number;
             columnStep: number;
@@ -70,6 +75,9 @@ export const DEVICE_COORDINATES = {
             upload: { x: 30, y: 635 },
             selectMultiple: { x: 24, y: 618 },
             useLayout: { x: 24, y: 489 },
+            photoTab: { x: 244, y: 62 },
+            photoModeToggle: { x: 96, y: 566 },
+            photoTemplateSkip: { x: 335, y: 62 },
             picker: {
                 circleX: 106,
                 columnStep: 126,
@@ -135,6 +143,7 @@ export function coordinatesForProfile(profile: string = DEFAULT_COORDINATE_PROFI
 // stay profile-level for now.)
 export const CALIBRATABLE_POINTS = [
     'profileTab', 'homeTab', 'accountSwitcher', 'create', 'upload', 'selectMultiple', 'useLayout',
+    'photoTab', 'photoModeToggle', 'photoTemplateSkip',
     'pickerNext', 'editorNext', 'caption', 'keyboardBack', 'draft', 'finish', 'like', 'save',
 ] as const;
 
@@ -143,6 +152,8 @@ export type CalibratablePoint = typeof CALIBRATABLE_POINTS[number];
 export const POINT_LABELS: Record<CalibratablePoint, string> = {
     profileTab: 'TikTok: Profile tab', homeTab: 'TikTok: Home tab', accountSwitcher: 'TikTok: Account switcher',
     create: 'TikTok: Create (+)', upload: 'TikTok: Upload', selectMultiple: 'TikTok: Select multiple', useLayout: 'TikTok: Use layout',
+    photoTab: 'TikTok: Picker · Photos tab', photoModeToggle: 'TikTok: Editor · Photo mode',
+    photoTemplateSkip: 'TikTok: Photo templates · Skip',
     pickerNext: 'TikTok: Media picker · Next', editorNext: 'TikTok: Editor · Next', caption: 'TikTok: Caption field',
     keyboardBack: 'TikTok: Keyboard · back', draft: 'TikTok: Save draft', finish: 'TikTok: Post / Finish',
     like: 'TikTok: Like button', save: 'TikTok: Save/bookmark button',

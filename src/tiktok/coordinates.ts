@@ -4,6 +4,8 @@ export interface TikTokCoordinates {
     tiktok: {
         profileTab: Point; homeTab: Point; accountSwitcher: Point; create: Point; upload: Point;
         selectMultiple: Point; useLayout: Point;
+        /** Photo mode. Unverified defaults — see docs/coordinates.md. */
+        photoTab: Point; photoModeToggle: Point; photoTemplateSkip: Point;
         picker: { circleX: number; columnStep: number; firstY: number; trayY: number; rowStep: number; cellX: number; cellStep: number; cellY: number };
         pickerNext: Point; editorNext: Point; caption: Point; keyboardBack: Point; draft: Point; finish: Point;
         like: Point; save: Point; swipe: { x: number; startY: number; endY: number; durationMs: number };
@@ -17,6 +19,7 @@ export const DEVICE_COORDINATES = {
             profileTab: { x: 338, y: 656 }, homeTab: { x: 38, y: 653 }, accountSwitcher: { x: 185, y: 158 },
             create: { x: 187, y: 640 }, upload: { x: 30, y: 635 }, selectMultiple: { x: 24, y: 618 },
             useLayout: { x: 24, y: 489 },
+            photoTab: { x: 244, y: 62 }, photoModeToggle: { x: 96, y: 566 }, photoTemplateSkip: { x: 335, y: 62 },
             picker: { circleX: 106, columnStep: 126, firstY: 482, trayY: 360, rowStep: 125, cellX: 62, cellStep: 125, cellY: 526 },
             pickerNext: { x: 277, y: 617 }, editorNext: { x: 277, y: 637 }, caption: { x: 120, y: 236 },
             keyboardBack: { x: 22, y: 42 }, draft: { x: 98, y: 630 }, finish: { x: 277, y: 630 },

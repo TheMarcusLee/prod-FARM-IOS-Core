@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { findByText, walk, type Recognize } from '../../drivers/verify.js';
 import { DriverError, type DeviceDriver, type UiNode } from '../../drivers/types.js';
 import type { PostManifest } from '../post-manifest.js';
+import { assertPostFormat, isPhotoFormat, type PostFormat } from '../post-format.js';
 import { driverFromEnv } from './driver-from-env.js';
 import type { MotionSource } from '../../motion/source.js';
 import {
@@ -39,6 +40,32 @@ export const POST_SELECTORS = {
     upload: [{ id: 'upload' }, { id: 'tv_upload' }, { text: 'Upload', exact: true }, { text: 'Gallery', exact: true }] as SelectorList,
     /** Multi-select toggle in the picker; only tapped when more than one file is being posted. GUESS. */
     selectMultiple: [{ id: 'multi_select' }, { text: 'Select multiple' }, { text: 'Multiple' }] as SelectorList,
+    /**
+     * The picker's images-only tab, tapped for a photo/slideshow post so the grid is not a mix of
+     * clips and stills. Optional: on builds where the picker has no tabs the whole step is skipped
+     * and the images are still the newest cells. GUESS.
+     */
+    photoTab: [
+        { id: 'tab_photo' }, { id: 'photo_tab' }, { id: 'tv_photo' },
+        { text: 'Photos', exact: true }, { text: 'Photo', exact: true }, { text: 'Images', exact: true },
+    ] as SelectorList,
+    /**
+     * The editor's "this is a photo post, not a clip" toggle. TikTok opens a set of stills in
+     * either composer depending on build and A/B bucket, and offers a switch when it guessed the
+     * other one. Optional. GUESS.
+     */
+    photoMode: [
+        { id: 'photo_mode' }, { id: 'btn_photo_mode' },
+        { text: 'Switch to photo mode' }, { text: 'Photo mode' }, { text: 'Switch to photo' },
+    ] as SelectorList,
+    /**
+     * The way past the photo-mode template/style chooser some builds open before the editor.
+     * Optional — no chooser, no tap. GUESS.
+     */
+    photoTemplateSkip: [
+        { id: 'btn_skip' }, { id: 'tv_skip' },
+        { text: 'Skip', exact: true }, { text: 'Not now' }, { text: 'Use original' }, { text: 'No template' },
+    ] as SelectorList,
     /** Advances the picker, then the editor. Both screens label the control "Next". */
     next: [{ id: 'btn_next' }, { id: 'next' }, { text: 'Next', exact: true }] as SelectorList,
     /** The caption box on the publish screen. */
@@ -155,7 +182,11 @@ export function galleryCells(root: UiNode): UiNode[] {
         .sort((a, b) => a.bounds.top - b.bounds.top || a.bounds.left - b.bounds.left);
 }
 
-/** Media lands in DCIM/Camera newest-last-pushed, so push in reverse to make file 1 the newest cell. */
+/**
+ * Media lands in DCIM/Camera newest-last-pushed, so push in reverse to make file 1 the newest
+ * cell. The picker lists newest first and TikTok orders a slideshow by the order cells are
+ * tapped, so file 1 → cell 1 → slide 1: manifest order is slide order.
+ */
 async function pushAllMedia(driver: DeviceDriver, manifest: PostManifest): Promise<void> {
     const files = [...manifest.files].reverse();
     for (const [index, file] of files.entries()) {
@@ -223,6 +254,38 @@ async function selectMedia(driver: DeviceDriver, count: number, options: PostOnA
     }
 }
 
+/**
+ * The picker's images-only tab. Tapped before the cells are read, so the grid the routine counts
+ * is the grid it selects from. Absent on builds whose picker has no tabs — then the pushed images
+ * are still the newest cells, and nothing is lost by skipping it.
+ */
+async function openPhotoTab(driver: DeviceDriver, options: PostOnAndroidOptions): Promise<void> {
+    const timing = timingOf(options);
+    if (await tapIfPresent(driver, 'picker Photos tab', POST_SELECTORS.photoTab, tapping(options))) {
+        await driver.pause(timing.settleMs, timing.signal);
+    }
+}
+
+/**
+ * Picker Next into TikTok's photo composer, and past whatever it puts in front of the editor.
+ *
+ * Both extra screens are build-dependent — some builds open a set of stills straight into photo
+ * mode, some open it as a clip with a "Switch to photo mode" toggle, some open a template chooser
+ * first. Each step is therefore tolerant: a screen that is not there is skipped, and the run
+ * carries on to the caption screen exactly as the video path does.
+ */
+async function openPhotoEditor(driver: DeviceDriver, options: PostOnAndroidOptions): Promise<void> {
+    const timing = timingOf(options);
+    await tapFirst(driver, 'Next (picker)', POST_SELECTORS.next, tapping(options));
+    await driver.pause(timing.settleMs, timing.signal);
+    if (await tapIfPresent(driver, 'photo mode toggle', POST_SELECTORS.photoMode, tapping(options))) {
+        await driver.pause(timing.settleMs, timing.signal);
+    }
+    if (await tapIfPresent(driver, 'photo template chooser', POST_SELECTORS.photoTemplateSkip, tapping(options))) {
+        await driver.pause(timing.settleMs, timing.signal);
+    }
+}
+
 /** Picker Next, then editor Next, stopping as soon as the caption screen is up. */
 async function advanceToCaptionScreen(driver: DeviceDriver, options: PostOnAndroidOptions, maxSteps = 3): Promise<void> {
     const timing = timingOf(options);
@@ -261,7 +324,12 @@ export async function postOnAndroid(driver: DeviceDriver, manifest: PostManifest
     const timing = timingOf(options);
     const packageName = options.packageName ?? TIKTOK_ANDROID_PACKAGE;
 
+    // Both checks run before anything is pushed or opened: a manifest that cannot make a post
+    // should fail as a sentence, not as a phone stuck in a half-filled editor.
+    const format: PostFormat = assertPostFormat(manifest);
     if (manifest.caption) assertCaptionIsTypeable(driver, manifest.caption);
+    const photos = isPhotoFormat(format);
+    if (photos) console.log(`Posting ${manifest.files.length} image(s) as a TikTok ${format}`);
     await pushAllMedia(driver, manifest);
 
     console.log(`Launching ${packageName} on ${driver.udid}`);
@@ -277,7 +345,9 @@ export async function postOnAndroid(driver: DeviceDriver, manifest: PostManifest
     await tapFirst(driver, 'Upload', POST_SELECTORS.upload, tapping(options));
     await driver.pause(timing.settleMs, timing.signal);
 
+    if (photos) await openPhotoTab(driver, options);
     await selectMedia(driver, manifest.files.length, options);
+    if (photos) await openPhotoEditor(driver, options);
     await advanceToCaptionScreen(driver, options);
 
     if (manifest.caption) await addCaption(driver, manifest.caption, options);

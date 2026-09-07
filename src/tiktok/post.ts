@@ -4,6 +4,7 @@ import { remote, type Browser } from 'webdriverio';
 
 import { loadRegisteredDevices, resolveDeviceCoordinates, WdaRemoteControl } from '@git-agni/backline';
 import type { PostManifest } from './post-manifest.js';
+import { assertPostFormat, isPhotoFormat, type PostFormat } from './post-format.js';
 import { type TikTokCoordinates } from './coordinates.js';
 import { coordinateProfile, registeredAccounts } from './runtime-settings.js';
 import { switchTikTokAccount, tapCoordinate } from './actions.js';
@@ -59,6 +60,42 @@ async function clickOne(driver: Browser, label: string, selectors: string[]): Pr
     await element.click();
     console.log(`Tapped ${label}`);
 }
+
+/**
+ * A photo-mode step that may not be on this build's screen at all.
+ *
+ * The accessibility query is only a presence probe — the tap itself goes to the profile
+ * coordinate, like every other step in this file, because TikTok's editor chrome is drawn rather
+ * than laid out and an element's frame is not always where the control is. Nothing on screen
+ * means nothing to do: log it and carry on.
+ */
+async function tapIfDisplayed(
+    driver: Browser, label: string, selectors: string[], point: { x: number; y: number },
+): Promise<boolean> {
+    const element = await firstDisplayed(driver, selectors).catch(() => undefined);
+    if (!element) {
+        console.log(`Skipped ${label}: not on screen`);
+        return false;
+    }
+    await tapCoordinate(driver, point.x, point.y, label);
+    return true;
+}
+
+/** The picker's images-only tab. GUESS — no row here has been confirmed against a phone. */
+const PHOTO_TAB_SELECTORS = [
+    '~Photos', '~Photo', '~Images',
+    '-ios predicate string:(label IN {"Photos","Photo","Images"}) OR (name IN {"Photos","Photo","Images"})',
+];
+/** The editor's "this is a photo post, not a clip" toggle. GUESS. */
+const PHOTO_MODE_SELECTORS = [
+    '~Switch to photo mode', '~Photo mode',
+    '-ios predicate string:(label CONTAINS[c] "photo mode") OR (name CONTAINS[c] "photo mode")',
+];
+/** The way past the photo-mode template chooser some builds open before the editor. GUESS. */
+const PHOTO_TEMPLATE_SKIP_SELECTORS = [
+    '~Skip', '~Not now', '~Use original',
+    '-ios predicate string:(label IN {"Skip","Not now","Use original"}) OR (name IN {"Skip","Not now","Use original"})',
+];
 
 async function openComposer(
     driver: Browser,
@@ -120,9 +157,16 @@ async function ensureCheckboxState(
 
 async function chooseRecentMedia(
     driver: Browser, remote: WdaRemoteControl, udid: string, count: number, assetCount: number,
-    coordinates: TikTokCoordinates['tiktok'],
+    coordinates: TikTokCoordinates['tiktok'], format: PostFormat,
 ): Promise<void> {
     const latestIndex = assetCount - 1;
+    const photos = isPhotoFormat(format);
+    // Images-only grid first, so the cells counted below are the cells that get tapped. Optional:
+    // a picker with no tabs still shows the freshly imported images as the newest cells.
+    if (photos) {
+        await tapIfDisplayed(driver, 'picker Photos tab', PHOTO_TAB_SELECTORS, coordinates.photoTab);
+        await driver.pause(1500);
+    }
     if (count > 1) {
         await ensureCheckboxState(driver, remote, udid, {
             x: coordinates.selectMultiple.x,
@@ -151,6 +195,17 @@ async function chooseRecentMedia(
     }
     await tapCoordinate(driver, coordinates.pickerNext.x, coordinates.pickerNext.y, 'picker Next');
     await driver.pause(3000);
+    // TikTok opens a set of stills in either composer depending on build and A/B bucket, and some
+    // builds put a template chooser in front of the editor. Both steps are tolerant: a screen that
+    // is not there is skipped and the run carries on to the same caption screen as a video post.
+    if (photos) {
+        if (await tapIfDisplayed(driver, 'photo mode toggle', PHOTO_MODE_SELECTORS, coordinates.photoModeToggle)) {
+            await driver.pause(2000);
+        }
+        if (await tapIfDisplayed(driver, 'photo template chooser', PHOTO_TEMPLATE_SKIP_SELECTORS, coordinates.photoTemplateSkip)) {
+            await driver.pause(2000);
+        }
+    }
     await tapCoordinate(driver, coordinates.editorNext.x, coordinates.editorNext.y, 'editor Next');
     await driver.pause(3000);
 }
@@ -175,6 +230,10 @@ async function addCaption(driver: Browser, coordinates: TikTokCoordinates['tikto
 const manifestPath = process.argv[2];
 if (!manifestPath) throw new Error('A post manifest path is required');
 const manifest = JSON.parse(await readFile(path.resolve(manifestPath), 'utf8')) as PostManifest;
+// Before the phone is unlocked and before a single byte is imported: a manifest that cannot make
+// a post should fail as a sentence rather than as a phone stuck in a half-filled editor.
+const postFormat = assertPostFormat(manifest);
+if (isPhotoFormat(postFormat)) console.log(`Posting ${manifest.files.length} image(s) as a TikTok ${postFormat}`);
 
 const switchAccountName = manifest.account?.trim() || undefined;
 const registeredDevice = (await loadRegisteredDevices()).find((device) => device.udid === manifest.device.udid);
@@ -239,7 +298,7 @@ for (let attempt = 1; attempt <= REACH_CAPTION_SCREEN_ATTEMPTS && !reachedCaptio
             await switchTikTokAccount(driver, deviceRemote, manifest.device.udid, switchAccountName, accountSwitchCoords);
         }
         await openComposer(driver, tiktokCoordinates, manifest.musicUrl);
-        await chooseRecentMedia(driver, deviceRemote, manifest.device.udid, manifest.files.length, assetCount, tiktokCoordinates);
+        await chooseRecentMedia(driver, deviceRemote, manifest.device.udid, manifest.files.length, assetCount, tiktokCoordinates, postFormat);
         reachedCaptionScreen = true;
     } catch (error) {
         lastAttemptError = error;

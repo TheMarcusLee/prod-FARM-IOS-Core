@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { pipeline } from 'node:stream/promises';
 
 import type { PhoneFarmPlugin, TaskDefinition, TaskExecutionContext } from './plugin.js';
+import { assertPostFormat, isPhotoFormat, MAX_SLIDESHOW_IMAGES, resolvePostFormat, type PostFormat } from './tiktok/post-format.js';
 import type { JsonObject, JsonValue, ScheduleTiming } from './types.js';
 import { farmEntryPath } from './runtime/farm-entry.js';
 
@@ -43,6 +44,11 @@ type PostMedia = JsonObject & {
 
 type PostPayload = JsonObject & {
     media: PostMedia[];
+    /** Which TikTok composer to drive. Absent means 'video', which is what every payload written
+     *  before photo mode existed meant. See src/tiktok/post-format.ts. */
+    format?: PostFormat;
+    /** Index into `media` of the slide to use as the post's cover. */
+    cover?: number;
     destination: 'draft' | 'publish';
     account: string;
     caption?: string;
@@ -144,8 +150,12 @@ function createPostTask(configuration: TikTokPluginConfiguration): TaskDefinitio
         type: 'post', version: 1, displayName: 'TikTok post',
         validate(value, context) {
             const input = objectPayload(value);
-            if (!Array.isArray(input.media) || input.media.length < 1 || input.media.length > 3) {
-                throw new Error('Choose one to three media files');
+            const format = resolvePostFormat(typeof input.format === 'string' ? input.format : undefined);
+            const maximumMedia = isPhotoFormat(format) ? MAX_SLIDESHOW_IMAGES : 3;
+            if (!Array.isArray(input.media) || input.media.length < 1 || input.media.length > maximumMedia) {
+                throw new Error(isPhotoFormat(format)
+                    ? `Choose one to ${MAX_SLIDESHOW_IMAGES} images`
+                    : 'Choose one to three media files');
             }
             const media = input.media.map((item) => {
                 const candidate = objectPayload(item);
@@ -154,6 +164,9 @@ function createPostTask(configuration: TikTokPluginConfiguration): TaskDefinitio
                 }
                 return { assetId: candidate.assetId, name: candidate.name, mimeType: candidate.mimeType };
             });
+            const cover = input.cover === undefined || input.cover === null ? undefined : Number(input.cover);
+            // The same rules the routines enforce on the phone, applied before anything is scheduled.
+            assertPostFormat({ format, files: media, ...(cover === undefined ? {} : { cover }) });
             if (input.destination !== 'draft' && input.destination !== 'publish') throw new Error('Invalid post destination');
             if (typeof input.account !== 'string' || !input.account.trim()) throw new Error('Choose a TikTok account');
             const caption = optionalString(input.caption, 'caption');
@@ -171,11 +184,12 @@ function createPostTask(configuration: TikTokPluginConfiguration): TaskDefinitio
             }
             return {
                 media, destination: input.destination, account: input.account,
+                ...(format === 'video' ? {} : { format }), ...(cover === undefined ? {} : { cover }),
                 ...(caption ? { caption } : {}), ...(musicUrl ? { musicUrl } : {}),
                 ...(input.recurringPublishConfirmed === true ? { recurringPublishConfirmed: true } : {}),
             };
         },
-        summarize: (payload) => `Post · ${payload.destination === 'publish' ? 'public' : 'draft'} · ${payload.media.length} media`,
+        summarize: (payload) => `Post · ${payload.format ?? 'video'} · ${payload.destination === 'publish' ? 'public' : 'draft'} · ${payload.media.length} media`,
         estimateDurationMs: () => 60_000,
         retryPolicy: () => ({ retryLimit: 0, retryDelaySeconds: 0, retryBackoff: false }),
         supportsStop: () => false,
@@ -189,6 +203,8 @@ function createPostTask(configuration: TikTokPluginConfiguration): TaskDefinitio
             const manifestPath = path.join(context.workspaceDirectory, 'manifest.json');
             await writeFile(manifestPath, JSON.stringify({
                 device: context.device, files, destination: payload.destination, account: payload.account,
+                ...(payload.format && payload.format !== 'video' ? { format: payload.format } : {}),
+                ...(payload.cover === undefined ? {} : { cover: payload.cover }),
                 ...(payload.caption ? { caption: payload.caption } : {}),
                 ...(payload.musicUrl ? { musicUrl: payload.musicUrl } : {}),
             }));
@@ -294,10 +310,16 @@ export function createTikTokPlugin(configuration: TikTokPluginConfiguration = {}
                         if (part.file.truncated) throw new Error(`${name} exceeds the upload limit`);
                         files.push({ path: filePath, name, mimeType: part.mimetype });
                     }
-                    if (files.length < 1 || files.length > 3) throw new Error('Choose one to three media files');
+                    const format = resolvePostFormat(fields.get('format'));
+                    const maximumMedia = isPhotoFormat(format) ? MAX_SLIDESHOW_IMAGES : 3;
+                    if (files.length < 1 || files.length > maximumMedia) {
+                        throw new Error(isPhotoFormat(format) ? `Choose one to ${MAX_SLIDESHOW_IMAGES} images` : 'Choose one to three media files');
+                    }
+                    // Mixed media, image types and the photo/slideshow counts, all in one place.
+                    assertPostFormat({ format, files });
                     const videos = files.filter(({ mimeType }) => mimeType.startsWith('video/'));
                     const images = files.filter(({ mimeType }) => mimeType.startsWith('image/'));
-                    if (!((videos.length === 1 && files.length === 1) || images.length === files.length)) {
+                    if (format === 'video' && !((videos.length === 1 && files.length === 1) || images.length === files.length)) {
                         throw new Error('Upload exactly one video, or upload only slideshow images');
                     }
                     const destination = fields.get('destination');
@@ -321,6 +343,7 @@ export function createTikTokPlugin(configuration: TikTokPluginConfiguration = {}
                             payload: {
                                 media: stored.map(({ id, name, mimeType }) => ({ assetId: id, name, mimeType })),
                                 destination, account,
+                                ...(format === 'video' ? {} : { format }),
                                 ...(fields.get('caption')?.trim() ? { caption: fields.get('caption')!.trim() } : {}),
                                 ...(fields.get('musicUrl')?.trim() ? { musicUrl: fields.get('musicUrl')!.trim() } : {}),
                                 ...(fields.get('recurringPublishConfirmed') === 'true' ? { recurringPublishConfirmed: true } : {}),

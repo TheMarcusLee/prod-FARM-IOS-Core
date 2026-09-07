@@ -75,8 +75,9 @@ firing single taps with `POST /api/devices/:udid/remote/action`
 
 ## Per‑device overrides (dashboard calibration)
 
-The **15 single‑tap TikTok targets** — `profileTab`, `homeTab`,
+The **18 single‑tap TikTok targets** — `profileTab`, `homeTab`,
 `accountSwitcher`, `create`, `upload`, `selectMultiple`, `useLayout`,
+`photoTab`, `photoModeToggle`, `photoTemplateSkip`,
 `pickerNext`, `editorNext`, `caption`, `keyboardBack`, `draft`, `finish`,
 `like`, `save` — can be re‑pointed per device without a code change, from the
 device page → **Touch points**: pick a target, click where it belongs
@@ -99,6 +100,31 @@ against the profile's screen bounds.
 
 The `picker` grid, `swipe` vector and `passcodeKeypad` are not single points and
 stay profile‑level — add a new profile for a materially different layout.
+
+## Unverified points
+
+These were written without a phone attached and **have never been observed on a
+device**. They are the photo‑mode (photo post / slideshow) steps, and each one
+is optional at run time: the routine probes for the control through
+accessibility first and skips the tap when nothing is there, so a wrong value
+degrades to "photo mode walked the video screens", not to a stray tap.
+
+| Point | `iphone8` default | What it should be | Status |
+|---|---|---|---|
+| `photoTab` | `{ x: 244, y: 62 }` | The media picker's Photos/Images tab | **unverified** |
+| `photoModeToggle` | `{ x: 96, y: 566 }` | The editor's "Switch to photo mode" toggle | **unverified** |
+| `photoTemplateSkip` | `{ x: 335, y: 62 }` | Skip / Not now on the photo template chooser | **unverified** |
+
+Confirm them in the first hardware session
+([device-testing-checklist.md](device-testing-checklist.md)): open TikTok's
+picker with images in Recents, screenshot each screen, read off the centres, and
+either correct `src/devices/coordinates.ts` + `src/tiktok/coordinates.ts` or set
+per‑device overrides from **Touch points**. Note as well whether the control
+exists at all on that build — some builds open stills straight into photo mode
+and show neither the toggle nor a chooser.
+
+Every Android photo‑mode *selector* is likewise a guess; see
+[android-tiktok.md §5](android-tiktok.md#5-photo-posts-and-slideshows).
 
 ## Why adding a whole profile still needs code
 
