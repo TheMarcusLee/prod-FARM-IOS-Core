@@ -94,12 +94,12 @@ test('the tool set exposes every farm tool plus the status resource and planning
     try {
         const names = (await client.listTools()).tools.map(({ name }) => name).sort();
         assert.deepEqual(names, [
-            'create_doomscroll', 'create_schedule', 'create_tiktok_post', 'discover_devices', 'find_on_screen',
-            'forget_selector', 'get_device', 'get_execution', 'launch_app', 'list_assets', 'list_devices',
-            'list_executions', 'list_plugins', 'list_schedules', 'list_selector_overrides', 'list_selectors',
-            'list_unverified_selectors', 'list_upload_dirs', 'press_key', 'read_screen', 'record_selector',
-            'retry_execution', 'screenshot', 'set_schedule_status', 'stop_execution', 'swipe', 'tap',
-            'type_text', 'upload_asset',
+            'create_doomscroll', 'create_product', 'create_schedule', 'create_tiktok_post', 'discover_devices',
+            'find_on_screen', 'forget_selector', 'get_device', 'get_execution', 'launch_app', 'list_assets',
+            'list_devices', 'list_executions', 'list_plugins', 'list_products', 'list_schedules',
+            'list_selector_overrides', 'list_selectors', 'list_unverified_selectors', 'list_upload_dirs',
+            'press_key', 'read_screen', 'recommend_presets', 'record_selector', 'retry_execution', 'screenshot',
+            'set_schedule_status', 'stop_execution', 'swipe', 'tap', 'type_text', 'upload_asset',
         ]);
 
         const resources = (await client.listResources()).resources.map(({ uri }) => uri);
@@ -252,6 +252,47 @@ test('upload_asset stores base64 media and registers it with the scheduler', asy
             arguments: { name: 'clip.mp4', mimeType: 'video/mp4', base64: 'AA==', path: '/tmp/x' },
         });
         assert.equal(both.isError, true);
+    } finally { await close(); }
+});
+
+test('the product tools rank presets and keep the store an external agent can read', async (context) => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'farm-products-'));
+    context.after(() => rm(directory, { recursive: true, force: true }));
+    const { client, close } = await connectedClient({ ...fakeDependencies(), dataDirectory: directory });
+    try {
+        // Ranking is pure: it stores nothing and spawns nothing.
+        const ranked = await client.callTool({
+            name: 'recommend_presets',
+            arguments: {
+                description: 'A sourdough bakery app with proofing timers and weeknight dinner recipes.',
+                limit: 3,
+            },
+        });
+        const recommendation = JSON.parse(textOf(ranked)) as {
+            source: string; presets: Array<{ id: string; why: string }>; extraInterests: string[];
+        };
+        assert.equal(recommendation.source, 'ranker');
+        assert.ok(recommendation.presets.length <= 3, 'the limit was respected');
+        const baking = recommendation.presets.find(({ id }) => id === 'baking');
+        assert.ok(baking, `baking missing from ${recommendation.presets.map(({ id }) => id).join(', ')}`);
+        assert.match(baking.why, /sourdough/);
+        assert.deepEqual(JSON.parse(textOf(await client.callTool({ name: 'list_products', arguments: {} }))), { products: [] });
+
+        const created = await client.callTool({
+            name: 'create_product',
+            arguments: { name: 'Crumb', description: 'A sourdough bakery app.', url: 'https://crumb.example' },
+        });
+        const product = JSON.parse(textOf(created)) as { id: string; name: string };
+        assert.equal(product.name, 'Crumb');
+        const listed = JSON.parse(textOf(await client.callTool({ name: 'list_products', arguments: {} }))) as {
+            products: Array<{ id: string }>;
+        };
+        assert.deepEqual(listed.products.map(({ id }) => id), [product.id]);
+
+        const rejected = await client.callTool({
+            name: 'create_product', arguments: { name: 'x', description: 'y', url: 'ftp://nope' },
+        });
+        assert.equal(rejected.isError, true);
     } finally { await close(); }
 });
 

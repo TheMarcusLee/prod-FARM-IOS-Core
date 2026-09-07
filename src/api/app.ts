@@ -64,6 +64,7 @@ import { calibratablePlugins } from '../agent/catalog.js';
 import { renderSelectorsPanel, selectorPanelInput } from '../agent/page.js';
 import { AGENT_PLUGIN_ID } from '../plugin-ids.js';
 import { personaHead, registerPersonaRoutes, renderCreatorsSection, renderPersonaSection } from './routes/personas.js';
+import { productsHead, registerProductRoutes, renderProductsSection } from './routes/products.js';
 import { registerPushRoutes } from './routes/push.js';
 import { registerScheduleRoutes } from './routes/schedule.js';
 import { clampScreenshotWidth, keysetPage, registerMobileRoutes, resizeScreenshot, type KeysetQuery } from './routes/mobile.js';
@@ -1060,19 +1061,23 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
     // Creators live in Postgres and personas on disk, so the Accounts page is
     // handed a lazy store and stays usable on a process that has no database.
     let personaStore: ContentStore | null | undefined;
-    registerPersonaRoutes(app, {
-        store: () => {
-            if (personaStore === undefined) {
-                try {
-                    personaStore = createContentStore(options.scheduler.connection.db);
-                } catch {
-                    personaStore = null;
-                }
+    const accountsStore = (): ContentStore | null => {
+        if (personaStore === undefined) {
+            try {
+                personaStore = createContentStore(options.scheduler.connection.db);
+            } catch {
+                personaStore = null;
             }
-            return personaStore;
-        },
+        }
+        return personaStore;
+    };
+    registerPersonaRoutes(app, {
+        store: accountsStore,
         loadDevices: async () => (await loadRegisteredDevices()).map(({ udid, name }) => ({ udid, name })),
     });
+    // Products sit above the personas on the same page and share the same store: the recommendation
+    // is applied by writing an ordinary persona, and "apply to a creator" reads the creator rows.
+    registerProductRoutes(app, { store: accountsStore });
     await registerScheduleRoutes(app, { ...options, shell });
     await registerPushRoutes(app, options);
     await registerMcpRoutes(app, {
@@ -1270,8 +1275,8 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         const rows = accountRows(devices);
         return reply.type('text/html').send(await shell(request, {
             title: 'Accounts', active: 'accounts',
-            head: personaHead() + scriptTag('personas.js'),
-            body: renderAccountsPage(rows, devices) + renderCreatorsSection()
+            head: personaHead() + productsHead() + scriptTag('personas.js'),
+            body: renderAccountsPage(rows, devices) + renderProductsSection() + renderCreatorsSection()
                 + renderPersonaSection(rows.map(({ handle }) => handle)),
         }, read));
     });

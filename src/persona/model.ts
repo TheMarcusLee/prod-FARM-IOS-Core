@@ -86,6 +86,13 @@ export interface Persona {
      * and loads exactly as it did. The editor reads it to draw the chips and to re-blend.
      */
     presets?: string[];
+    /**
+     * The product this account was pointed at, when the persona came from a recommendation. A
+     * record like `presets`: nothing downstream branches on it — `decide.ts` never reads it — and a
+     * persona file written before products existed has no key and loads exactly as it did. The
+     * Products panel reads it to say which accounts are already promoting a product.
+     */
+    productId?: string;
 }
 
 export class PersonaError extends Error {}
@@ -220,6 +227,17 @@ function presetIds(value: unknown, fallback: string[] | undefined): string[] | u
     return ids.length ? ids : undefined;
 }
 
+/** The `productId` field: an opaque id from the product store, or nothing. */
+export const PRODUCT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
+function productId(value: unknown): string | undefined {
+    if (value === undefined || value === null || value === '') return undefined;
+    if (typeof value !== 'string' || !PRODUCT_ID_PATTERN.test(value.trim())) {
+        throw new PersonaError('Product id must be an id from the product store');
+    }
+    return value.trim();
+}
+
 function hourRanges(value: unknown, fallback: HourRange[]): HourRange[] {
     if (value === undefined || value === null) return fallback.map((entry) => ({ ...entry }));
     // The editor posts "08:00-23:00, 07:00-09:00"; the API may post the structured form.
@@ -277,6 +295,7 @@ export function validatePersona(handleInput: unknown, value: unknown): Persona {
     if (!interests.length) throw new PersonaError('A persona needs at least one interest');
 
     const presets = presetIds(input.presets, undefined);
+    const product = productId(input.productId);
 
     return {
         handle,
@@ -304,6 +323,7 @@ export function validatePersona(handleInput: unknown, value: unknown): Persona {
         },
         // Absent stays absent: an old personas.json entry round-trips without growing a key.
         ...(presets ? { presets } : {}),
+        ...(product ? { productId: product } : {}),
     };
 }
 

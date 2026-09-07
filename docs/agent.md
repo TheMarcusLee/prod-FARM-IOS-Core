@@ -78,6 +78,17 @@ Backline raises an alert — with the log and the device already attached. A pas
 everything it was asked about succeeds. The task never retries: whatever stopped the agent (no
 CLI, a locked phone, a screen it could not read) is still true a minute later.
 
+## The other job: recommending personas
+
+Calibration is not the only thing the runner drives. The **Products** section on the Accounts page
+asks the same CLI, on the same Flash model, a reading question instead of a phone one: given a
+paragraph describing a product and the catalogue of a hundred persona presets, which presets should
+the promoting accounts run, and why. It is given no tools at all — not even this farm's own MCP
+server — because it has nothing to touch; the answer is strict JSON, ids outside the catalogue are
+dropped, and if `agy` is missing or the run fails, the local ranker answers instead and the result
+says which half produced it. `unavailable()`, the same check this page's Calibrate button uses, is
+what greys out "Ask the agent". See [Products and recommendations](personas.md) for the whole flow.
+
 ## Where confirmed selectors live
 
 `<SCHEDULER_DATA_DIR>/selector-overrides.json` — one JSON array, next to `devices.json` and the

@@ -12,6 +12,8 @@ import { resolveUploadPath, uploadDirectories } from './uploads.js';
 import {
     abortUpload, chunkLength, completeUpload, createUpload, uploadChunkBytes, writeChunk,
 } from '../content/uploads.js';
+import { recommendLocally } from '../persona/recommend.js';
+import { createProduct, loadProducts } from '../persona/products.js';
 
 export { TIKTOK_PLUGIN_ID } from '../plugin-ids.js';
 import { TIKTOK_PLUGIN_ID } from '../plugin-ids.js';
@@ -445,6 +447,49 @@ function registerAssetTools(server: McpServer, dependencies: McpDependencies): v
     }, async () => attempt(async () => json({ plugins: dependencies.listPlugins() })));
 }
 
+/**
+ * Products, and the same preset shortlist the Accounts page shows.
+ *
+ * An external agent gets the local ranker, never the Antigravity one: this server is what an agent
+ * is already talking through, and a tool that spawns a second model to answer a question the
+ * caller could answer itself is a loop nobody asked for. `recommend_presets` is pure and instant;
+ * the agent reads the result and decides for itself.
+ */
+function registerProductTools(server: McpServer, dependencies: McpDependencies): void {
+    server.registerTool('recommend_presets', {
+        title: 'Recommend persona presets for a product',
+        description: 'Which persona presets should promote a product, ranked from its description. '
+            + 'Pure and instant — it stores nothing and calls no model.',
+        inputSchema: {
+            description: z.string().min(3).max(2000).describe('What the product is, in plain words'),
+            name: z.string().max(80).optional(),
+            audience: z.string().max(500).optional().describe('Who it is for'),
+            limit: z.number().int().min(1).max(20).optional().describe('Default 6'),
+        },
+    }, async ({ description, name, audience, limit }) => attempt(async () => json(recommendLocally({
+        description,
+        ...(name ? { name } : {}),
+        ...(audience ? { audience } : {}),
+    }, limit === undefined ? {} : { limit }))));
+
+    server.registerTool('list_products', {
+        title: 'List products',
+        description: 'Everything this farm is promoting, newest first, with its last recommendation.',
+        inputSchema: {},
+    }, async () => attempt(async () => json({ products: await loadProducts(dataRoot(dependencies)) })));
+
+    server.registerTool('create_product', {
+        title: 'Create a product',
+        description: 'Records something to promote. Recommend presets for it with recommend_presets.',
+        inputSchema: {
+            name: z.string().min(1).max(80),
+            description: z.string().min(1).max(2000),
+            url: z.string().max(500).optional().describe('http or https'),
+            audience: z.string().max(500).optional(),
+        },
+    }, async (input) => attempt(async () => json(await createProduct(input, dataRoot(dependencies)))));
+}
+
 const PLANNING_GUIDANCE = `You are planning a day of TikTok activity on Backline, a self-hosted phone farm.
 
 Work in this order:
@@ -474,6 +519,7 @@ export function createFarmMcpServer(dependencies: McpDependencies): McpServer {
     registerTikTokTools(server, dependencies);
     registerExecutionTools(server, dependencies);
     registerAssetTools(server, dependencies);
+    registerProductTools(server, dependencies);
     // Reading a screen, tapping it, and writing down which selector was right — see docs/agent.md.
     registerDeviceControlTools(server, dependencies);
 

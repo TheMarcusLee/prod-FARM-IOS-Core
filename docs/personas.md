@@ -267,6 +267,91 @@ returns the blended persona **without storing it** — the same body the panel w
 `POST /api/accounts/:handle/persona/preset` with the same `presets` array is the version that
 saves. At most eight presets go into one blend.
 
+## Products and recommendations
+
+Blending presets by hand assumes the operator already knows which niches their product belongs in.
+The **Products** section at the top of the Accounts page is the other direction: describe what you
+are promoting in plain words, and Backline says which presets should be running it.
+
+A product is a small record — a name, a description of up to 2000 characters, an optional URL and
+an optional audience — kept next to the personas in `SCHEDULER_DATA_DIR/products.json`. There is no
+table and no migration; it is a list an operator can read, diff and copy between farms.
+
+### The two answers
+
+**Recommend** is the local ranker in `src/persona/recommend.ts`. It scores all hundred presets
+against your words and answers instantly, with no model and no network:
+
+- both sides are lowercased, stripped of punctuation and crudely stemmed, so `recipes` in a
+  description meets `recipe` in a preset's interests, and `#sourdough` counts as `sourdough`;
+- a hit on a preset's **label** or one of its **interests** is worth the most, its niche less, its
+  category and its one-line description least;
+- a preset whose **avoid** list matches the text is pushed down hard. A crypto product is not
+  handed to the account that scrolls past the word crypto.
+
+It also derives **extra interests**: the words and pairs of words in the description that no chosen
+preset already covers. That is where the brand name, the product noun and the feature words live —
+`reflect`, `meeting notes`, `proofing` — and they are exactly what a promoting account should carry
+on top of its niche.
+
+**Ask the agent** asks Gemini Flash the same question through the Antigravity CLI, using the same
+runner the [calibration agent](agent.md) uses. It reads the paragraph rather than matching it, and
+it says why in a sentence. The button is greyed out with the install command in its tooltip when
+`agy` is not installed, and the agent is **never** called on a page render or by any GET — only by
+an operator pressing the button, or by `POST /api/products/:id/recommend { "useAgent": true }`.
+
+If the CLI is missing, the run fails, or the answer cannot be parsed, the ranker answers instead and
+the result says so:
+
+```json
+{
+  "source": "ranker",
+  "note": "The Antigravity CLI (agy) is not installed. … Ranked locally instead.",
+  "presets": [{ "id": "saas-productivity", "label": "Productivity apps", "why": "Matched notion, obsidian", "score": 18 }],
+  "extraInterests": ["reflect", "meeting notes"],
+  "avoid": [],
+  "networks": []
+}
+```
+
+Preset ids the catalogue does not know are dropped rather than reported, the shortlist is capped at
+eight, and every extra interest goes through the persona validator's own rules before it is stored.
+A model that invents `productivity-pro` gets it thrown away.
+
+### Applying one
+
+The shortlist arrives as ticked checkboxes grouped by category, with the reason under each and the
+extra interests in a field you can edit. Untick what does not fit, then:
+
+- **Apply to account** — pick a handle (or type a new one) and it becomes an ordinary persona:
+  `blendPresets` over the presets you left ticked, the extra interests appended, the avoid terms
+  added, and the page returns to that account's editor.
+- **Apply to creator** — every *enabled* account that creator owns, on every network, gets the same
+  blend. One person promoting one product should not have to be pointed at four times.
+
+The persona records `productId` alongside `presets`. Like `presets` it is a record and nothing else:
+`decide.ts` never reads it, the Products panel uses it to show which accounts are already promoting
+something, and a persona file written before products existed has no key and loads exactly as it
+did.
+
+### The routes
+
+```
+GET    /api/products                      every product, newest first
+POST   /api/products                      { name, description, url?, audience? }
+GET    /api/products/:id
+PATCH  /api/products/:id                  any subset of the fields
+DELETE /api/products/:id
+POST   /api/products/:id/recommend        { useAgent?: boolean } — stores and returns it
+POST   /api/products/:id/apply            { handle, presets?, extraInterests?, avoid? }
+POST   /api/recommend-presets             { description, name?, audience?, limit? } — stores nothing
+```
+
+The MCP server carries the same three verbs for an external agent: `recommend_presets`,
+`list_products` and `create_product`. `recommend_presets` is always the local ranker — a tool that
+spawned a second model to answer a question its caller could answer itself would be a loop nobody
+asked for.
+
 ## What happens during a run
 
 Every video, the routine:
@@ -333,9 +418,13 @@ run a persona with the feed only.
 - `src/persona/model.ts` — the persona, its validation whitelist, the handle-derived default, the store.
 - `src/persona/presets.ts` — the hundred niches in their twelve categories, and applying one to a handle.
 - `src/persona/blend.ts` — several presets as one persona.
+- `src/persona/products.ts` — what the farm is promoting, and applying a recommendation to a handle.
+- `src/persona/recommend.ts` — the local ranker: words against words, and the extra interests.
+- `src/persona/recommend-agent.ts` — the same question asked of Gemini Flash, with the ranker behind it.
 - `src/persona/observe.ts` — reading the video on screen, from a tree or from OCR words.
 - `src/persona/decide.ts` — the decisions. Pure, and every random draw comes from an injected RNG,
   so a session is reproducible from a seed. One video costs a fixed six draws whatever it decides.
 - `src/persona/memory.ts` — what an account remembers between runs.
 - `src/persona/session.ts` — one sitting, from "is this account awake" to the line written back.
 - `src/api/routes/personas.ts` — the editor on the Accounts page.
+- `src/api/routes/products.ts` — the Products section above it.
