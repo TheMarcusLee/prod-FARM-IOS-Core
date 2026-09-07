@@ -3,12 +3,49 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
 import * as schema from '../database/schema.js';
 import {
-    assets, captionTemplates, contentItems, contentSetItems, contentSets, dripPlans, dripRules, executions, schedules,
-    type CaptionTemplateRow, type ContentItemRow, type ContentSetKind, type ContentSetRow, type DripPlanRow,
-    type DripRuleRow,
+    DEFAULT_DEVICE_LIMITS, assets, captionTemplates, contentItems, contentSetItems, contentSets, contentUses,
+    creatorAccounts, creators, deviceLimits, dripPlans, dripRules, executions, schedules,
+    type CaptionTemplateRow, type ContentItemRow, type ContentSetKind, type ContentSetRow, type ContentUseRow,
+    type CreatorAccountRow, type CreatorRow, type DeviceLimitRow, type DripPlanRow, type DripRuleRow,
+    type PostNetwork,
 } from '../database/schema.js';
 
 export type ContentDatabase = NodePgDatabase<typeof schema>;
+
+/** One account a post can land on: the pair per-account reuse is keyed by. */
+export interface PostTarget {
+    network: PostNetwork;
+    handle: string;
+}
+
+/**
+ * A library item as the planner sees it, plus the uploaded file's name. The name
+ * is not on `content_items` — it lives on the asset — and `filename` ordering is
+ * the only way to assemble "slide-01 … slide-05" in the order the operator meant,
+ * so it is carried along rather than fetched again per item.
+ */
+export type CandidateItem = ContentItemRow & { sortName?: string };
+
+/** What one phone may do in a day, across every account and rule on it. */
+export interface DeviceLimits {
+    maxPostsPerDay: number;
+    minMinutesBetweenPosts: number;
+}
+
+/** An already-planned post on a device, for the per-phone caps. */
+export interface DeviceLoadRow {
+    date: string;
+    plannedFor: Date;
+}
+
+/** One row of `content_uses`, as the reconcile sweep writes it. */
+export interface RecordedUse {
+    network: PostNetwork;
+    handle: string;
+    deviceUdid?: string | null;
+    scheduleId?: string | null;
+    executionId?: string | null;
+}
 
 export interface NewAsset {
     relativePath: string;
@@ -32,6 +69,9 @@ export interface QueuePlanRow {
     assetId: string;
     /** The post's format, read off the schedule payload; null before a schedule exists. */
     format: string | null;
+    /** Which account this copy goes to. `tiktok` on plans written before creators existed. */
+    network: string;
+    account: string | null;
 }
 
 export interface ThumbnailAsset {
@@ -78,7 +118,13 @@ export interface ContentStore {
     createRule(values: typeof dripRules.$inferInsert): Promise<DripRuleRow>;
     updateRule(id: string, patch: Partial<typeof dripRules.$inferInsert>): Promise<DripRuleRow | null>;
     deleteRule(id: string): Promise<boolean>;
-    candidateItems(rule: DripRuleRow, reuseCutoff: Date): Promise<ContentItemRow[]>;
+    /**
+     * Postable items for the rule. `targets` is what makes reuse per-account: an
+     * item is offered unless one of *these* accounts posted it inside the window.
+     * With no targets the old global `content_items.last_used_at` test is used,
+     * which is what a rule with no resolvable account should fall back to.
+     */
+    candidateItems(rule: DripRuleRow, reuseCutoff: Date, targets?: readonly PostTarget[]): Promise<CandidateItem[]>;
     plansForDates(ruleId: string, dates: string[]): Promise<DripPlanRow[]>;
     upcomingPlans(ruleId?: string, limit?: number): Promise<Array<DripPlanRow & { status: string | null }>>;
     insertPlan(values: typeof dripPlans.$inferInsert): Promise<DripPlanRow>;
@@ -87,8 +133,35 @@ export interface ContentStore {
     unstartedPlans(ruleId: string): Promise<Array<{ planId: string; scheduleId: string | null }>>;
     deletePlans(planIds: string[]): Promise<number>;
     succeededUnmarkedPlans(): Promise<DripPlanRow[]>;
-    /** Credits the item once. False means another process had already credited this plan. */
-    markPlanUsed(planId: string, itemId: string, at: Date): Promise<boolean>;
+    /**
+     * Credits the item once. False means another process had already credited
+     * this plan. `use` additionally records *where* it went, which is what the
+     * per-account reuse window reads; it is optional so a caller with no account
+     * to name (an old plan row) still closes the plan out.
+     */
+    markPlanUsed(planId: string, itemId: string, at: Date, use?: RecordedUse): Promise<boolean>;
+    /** Every account this item has gone out on since `since`, newest first. */
+    usesForItem(itemId: string, since?: Date): Promise<ContentUseRow[]>;
+    listCreators(): Promise<CreatorRow[]>;
+    creator(id: string): Promise<CreatorRow | null>;
+    createCreator(values: { name: string; deviceUdid: string; notes?: string | null }): Promise<CreatorRow>;
+    updateCreator(id: string, patch: {
+        name?: string; deviceUdid?: string; notes?: string | null;
+    }): Promise<CreatorRow | null>;
+    deleteCreator(id: string): Promise<boolean>;
+    /** Every account, or one creator's. Ordered network then handle, so the UI groups itself. */
+    listCreatorAccounts(creatorId?: string): Promise<CreatorAccountRow[]>;
+    createCreatorAccount(values: {
+        creatorId: string; network: PostNetwork; handle: string; enabled?: boolean;
+    }): Promise<CreatorAccountRow>;
+    updateCreatorAccount(id: string, patch: { enabled?: boolean; handle?: string }): Promise<CreatorAccountRow | null>;
+    deleteCreatorAccount(id: string): Promise<boolean>;
+    listDeviceLimits(): Promise<DeviceLimitRow[]>;
+    /** Always answers: a phone with no row is held to `DEFAULT_DEVICE_LIMITS`. */
+    deviceLimits(deviceUdid: string): Promise<DeviceLimits>;
+    setDeviceLimits(deviceUdid: string, limits: Partial<DeviceLimits>): Promise<DeviceLimitRow>;
+    /** Posts already planned on this phone for these dates, from every rule on it. */
+    deviceLoad(deviceUdid: string, dates: readonly string[]): Promise<DeviceLoadRow[]>;
     /**
      * Runs `body` while holding the cluster-wide planning lock, or returns null
      * without running it when another process already holds it.
@@ -114,6 +187,7 @@ interface QueueJoin {
     scheduleStatus: string | null;
     scheduleDevice: string | null;
     ruleDevice: string | null;
+    ruleAccount: string | null;
     caption: string | null;
     assetId: string;
     format: string | null;
@@ -126,6 +200,7 @@ function toQueuePlan(row: QueueJoin): QueuePlanRow {
         plannedFor: row.plan.plannedFor, usedMarkedAt: row.plan.usedMarkedAt,
         scheduleStatus: row.scheduleStatus, deviceUdid: row.scheduleDevice ?? row.ruleDevice,
         caption: row.caption, assetId: row.assetId, format: row.format,
+        network: row.plan.network ?? 'tiktok', account: row.plan.account ?? row.ruleAccount ?? null,
     };
 }
 
@@ -157,7 +232,8 @@ export function createContentStore(db: ContentDatabase): ContentStore {
         async queuePlans(plannedFrom, limit = 50) {
             const rows = await db.select({
                 plan: dripPlans, scheduleStatus: schedules.status, scheduleDevice: schedules.deviceUdid,
-                ruleDevice: dripRules.deviceUdid, caption: contentItems.caption, assetId: contentItems.assetId,
+                ruleDevice: dripRules.deviceUdid, ruleAccount: dripRules.account,
+                caption: contentItems.caption, assetId: contentItems.assetId,
                 // The format lives in the payload the planner wrote, so the mobile
                 // queue can badge a slideshow without a column of its own.
                 format: sql<string | null>`${schedules.payload} ->> 'format'`,
@@ -173,7 +249,8 @@ export function createContentStore(db: ContentDatabase): ContentStore {
         async queuePlan(id) {
             const rows = await db.select({
                 plan: dripPlans, scheduleStatus: schedules.status, scheduleDevice: schedules.deviceUdid,
-                ruleDevice: dripRules.deviceUdid, caption: contentItems.caption, assetId: contentItems.assetId,
+                ruleDevice: dripRules.deviceUdid, ruleAccount: dripRules.account,
+                caption: contentItems.caption, assetId: contentItems.assetId,
                 // The format lives in the payload the planner wrote, so the mobile
                 // queue can badge a slideshow without a column of its own.
                 format: sql<string | null>`${schedules.payload} ->> 'format'`,
@@ -291,23 +368,42 @@ export function createContentStore(db: ContentDatabase): ContentStore {
             const rows = await db.delete(dripRules).where(eq(dripRules.id, id)).returning({ id: dripRules.id });
             return rows.length > 0;
         },
-        async candidateItems(rule, reuseCutoff) {
-            const fresh = or(isNull(contentItems.lastUsedAt), sql`${contentItems.lastUsedAt} < ${reuseCutoff}`);
+        async candidateItems(rule, reuseCutoff, targets) {
+            // Per-account reuse. An item is fresh for this rule unless one of the
+            // accounts it is about to go to has already posted it inside the
+            // window — the same clip on a creator's second TikTok is a different
+            // feed, and the global counter cannot tell those apart.
+            //
+            // With no targets there is no account to ask about, so the old global
+            // test stands: that is what a rule whose creator has no enabled
+            // accounts left should fall back to.
+            const fresh = targets?.length
+                ? sql`not exists (select 1 from ${contentUses} u where u.item_id = ${contentItems.id}
+                    and u.used_at >= ${reuseCutoff}
+                    and (u.network, u.handle) in (${sql.join(
+                        targets.map(({ network, handle }) => sql`(${network}, ${handle})`), sql`, `,
+                    )}))`
+                : or(isNull(contentItems.lastUsedAt), sql`${contentItems.lastUsedAt} < ${reuseCutoff}`);
             if (rule.source === 'set') {
                 if (!rule.setId) return [];
-                const rows = await db.select({ item: contentItems, position: contentSetItems.position })
-                    .from(contentSetItems)
+                const rows = await db.select({
+                    item: contentItems, sortName: assets.originalName, position: contentSetItems.position,
+                }).from(contentSetItems)
                     .innerJoin(contentItems, eq(contentItems.id, contentSetItems.itemId))
+                    .leftJoin(assets, eq(assets.id, contentItems.assetId))
                     .where(and(eq(contentSetItems.setId, rule.setId), eq(contentItems.status, 'ready'), fresh))
                     .orderBy(asc(contentSetItems.position));
-                return rows.map(({ item }) => item);
+                return rows.map(({ item, sortName }) => ({ ...item, sortName: sortName ?? undefined }));
             }
             if (!rule.tag) return [];
-            return db.select().from(contentItems).where(and(
-                eq(contentItems.status, 'ready'),
-                sql`${contentItems.tags} @> ARRAY[${rule.tag}]::text[]`,
-                fresh,
-            )).orderBy(asc(contentItems.createdAt));
+            const rows = await db.select({ item: contentItems, sortName: assets.originalName }).from(contentItems)
+                .leftJoin(assets, eq(assets.id, contentItems.assetId))
+                .where(and(
+                    eq(contentItems.status, 'ready'),
+                    sql`${contentItems.tags} @> ARRAY[${rule.tag}]::text[]`,
+                    fresh,
+                )).orderBy(asc(contentItems.createdAt));
+            return rows.map(({ item, sortName }) => ({ ...item, sortName: sortName ?? undefined }));
         },
         async plansForDates(ruleId, dates) {
             if (!dates.length) return [];
@@ -355,7 +451,7 @@ export function createContentStore(db: ContentDatabase): ContentStore {
                 .where(and(isNull(dripPlans.usedMarkedAt), eq(executions.status, 'succeeded')));
             return rows.map(({ plan }) => plan);
         },
-        async markPlanUsed(planId, itemId, at) {
+        async markPlanUsed(planId, itemId, at, use) {
             return db.transaction(async (tx) => {
                 // Claiming the plan and crediting the item must be one step: two
                 // reconcile sweeps racing would otherwise both see usedMarkedAt
@@ -368,8 +464,102 @@ export function createContentStore(db: ContentDatabase): ContentStore {
                 await tx.update(contentItems).set({
                     usedCount: sql`${contentItems.usedCount} + 1`, lastUsedAt: at,
                 }).where(eq(contentItems.id, itemId));
+                // The per-account row goes in under the same claim, so the reuse
+                // window and the global counter can never disagree about whether
+                // this post happened.
+                if (use) {
+                    await tx.insert(contentUses).values({
+                        itemId, network: use.network, handle: use.handle, usedAt: at,
+                        deviceUdid: use.deviceUdid ?? null,
+                        scheduleId: use.scheduleId ?? null,
+                        executionId: use.executionId ?? null,
+                    });
+                }
                 return true;
             });
+        },
+        async usesForItem(itemId, since) {
+            return db.select().from(contentUses).where(and(
+                eq(contentUses.itemId, itemId),
+                ...(since ? [gte(contentUses.usedAt, since)] : []),
+            )).orderBy(desc(contentUses.usedAt));
+        },
+        async listCreators() {
+            return db.select().from(creators).orderBy(asc(creators.name));
+        },
+        async creator(id) {
+            return rowsOrNull(await db.select().from(creators).where(eq(creators.id, id)).limit(1));
+        },
+        async createCreator(values) {
+            const [row] = await db.insert(creators).values(values).returning();
+            if (!row) throw new Error('Unable to create creator');
+            return row;
+        },
+        async updateCreator(id, patch) {
+            const [row] = Object.keys(patch).length
+                ? await db.update(creators).set(patch).where(eq(creators.id, id)).returning()
+                : await db.select().from(creators).where(eq(creators.id, id)).limit(1);
+            return row ?? null;
+        },
+        async deleteCreator(id) {
+            const rows = await db.delete(creators).where(eq(creators.id, id)).returning({ id: creators.id });
+            return rows.length > 0;
+        },
+        async listCreatorAccounts(creatorId) {
+            const query = db.select().from(creatorAccounts);
+            const filtered = creatorId ? query.where(eq(creatorAccounts.creatorId, creatorId)) : query;
+            return filtered.orderBy(asc(creatorAccounts.network), asc(creatorAccounts.handle));
+        },
+        async createCreatorAccount(values) {
+            const [row] = await db.insert(creatorAccounts).values(values).returning();
+            if (!row) throw new Error('Unable to add account');
+            return row;
+        },
+        async updateCreatorAccount(id, patch) {
+            const [row] = Object.keys(patch).length
+                ? await db.update(creatorAccounts).set(patch).where(eq(creatorAccounts.id, id)).returning()
+                : await db.select().from(creatorAccounts).where(eq(creatorAccounts.id, id)).limit(1);
+            return row ?? null;
+        },
+        async deleteCreatorAccount(id) {
+            const rows = await db.delete(creatorAccounts).where(eq(creatorAccounts.id, id))
+                .returning({ id: creatorAccounts.id });
+            return rows.length > 0;
+        },
+        async listDeviceLimits() {
+            return db.select().from(deviceLimits).orderBy(asc(deviceLimits.deviceUdid));
+        },
+        async deviceLimits(deviceUdid) {
+            const row = rowsOrNull(await db.select().from(deviceLimits)
+                .where(eq(deviceLimits.deviceUdid, deviceUdid)).limit(1));
+            return {
+                maxPostsPerDay: row?.maxPostsPerDay ?? DEFAULT_DEVICE_LIMITS.maxPostsPerDay,
+                minMinutesBetweenPosts: row?.minMinutesBetweenPosts ?? DEFAULT_DEVICE_LIMITS.minMinutesBetweenPosts,
+            };
+        },
+        async setDeviceLimits(deviceUdid, limits) {
+            const values = {
+                deviceUdid,
+                maxPostsPerDay: limits.maxPostsPerDay ?? DEFAULT_DEVICE_LIMITS.maxPostsPerDay,
+                minMinutesBetweenPosts:
+                    limits.minMinutesBetweenPosts ?? DEFAULT_DEVICE_LIMITS.minMinutesBetweenPosts,
+                updatedAt: new Date(),
+            };
+            const [row] = await db.insert(deviceLimits).values(values)
+                .onConflictDoUpdate({ target: deviceLimits.deviceUdid, set: values }).returning();
+            if (!row) throw new Error('Unable to store device limits');
+            return row;
+        },
+        async deviceLoad(deviceUdid, dates) {
+            if (!dates.length) return [];
+            // Across every rule on the phone, not just the one being planned:
+            // that is the whole point of a per-device cap. Distinct, because a
+            // slideshow writes one plan row per slide and is still one post.
+            return db.selectDistinct({ date: dripPlans.date, plannedFor: dripPlans.plannedFor })
+                .from(dripPlans)
+                .innerJoin(dripRules, eq(dripRules.id, dripPlans.ruleId))
+                .where(and(eq(dripRules.deviceUdid, deviceUdid), inArray(dripPlans.date, [...dates])))
+                .orderBy(asc(dripPlans.plannedFor));
         },
         async withPlannerLock(body) {
             let outcome: { value: unknown } | null = null;

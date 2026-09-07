@@ -7,6 +7,7 @@
  */
 
 import type { CaptionTemplateRow, ContentItemRow, ContentSetRow, DripPlanRow, DripRuleRow } from '../database/schema.js';
+import { NETWORK_IDS, networkLabel, type NetworkId } from './networks.js';
 import { assignAccountColours, colourFor, type AccountColour } from '../schedule/accounts.js';
 import { icon } from '../ui/icons.js';
 import type { ShellPage } from '../ui/context.js';
@@ -115,14 +116,27 @@ function windowBar(rule: DripRuleRow, colour: AccountColour): string {
     return `<div class="bl-window" role="img" aria-label="Posts between ${escapeHtml(rule.windowStart)} and ${escapeHtml(rule.windowEnd)}">${fills}</div>`;
 }
 
-function ruleRow(view: RuleView, colour: AccountColour): string {
+/** What a rule posts to: one handle on one network, or a creator's whole set of accounts. */
+function ruleAudience(rule: DripRuleRow, creators: ReadonlyMap<string, string>): string {
+    if (!rule.creatorId) {
+        return `<strong>${escapeHtml(rule.account)}</strong>`
+            + `<span class="bl-tagchip">${escapeHtml(networkLabel(rule.network as NetworkId))}</span>`;
+    }
+    const name = creators.get(rule.creatorId) ?? 'creator';
+    const networks = rule.networks?.length ? rule.networks : NETWORK_IDS;
+    return `<strong>${escapeHtml(name)}</strong>`
+        + networks.map((network) => `<span class="bl-tagchip">${escapeHtml(networkLabel(network as NetworkId))}</span>`).join('')
+        + `<span class="bl-faint">every ${rule.crossPostGapMinutes} min</span>`;
+}
+
+function ruleRow(view: RuleView, colour: AccountColour, creators: ReadonlyMap<string, string>): string {
     const { rule, plans } = view;
     const source = rule.source === 'set' ? `set ${escapeHtml(rule.setId ?? '—')}` : `tag ${escapeHtml(rule.tag ?? '—')}`;
     const next = plans.slice(0, 5).map((plan) => `<span>${escapeHtml(plan.plannedFor.toISOString().slice(11, 16))} UTC`
         + `${plan.status && plan.status !== 'active' ? ` · ${escapeHtml(plan.status)}` : ''}</span>`).join('');
     return `<article class="bl-rule" data-rule="${escapeHtml(rule.id)}">
 <div class="bl-rule-head"><span class="bl-rule-swatch" style="background:${colour.fill};border-color:${colour.line}"></span>
-<strong>${escapeHtml(rule.account)}</strong>
+${ruleAudience(rule, creators)}
 <span class="bl-muted">${escapeHtml(rule.deviceUdid)}</span>
 <span class="bl-state ${rule.enabled ? 'online' : ''}"><span class="bl-dot ${rule.enabled ? 'ok' : ''}"></span>${rule.enabled ? 'enabled' : 'paused'}</span>
 <span class="bl-rule-actions">
@@ -131,18 +145,53 @@ function ruleRow(view: RuleView, colour: AccountColour): string {
 </span></div>
 <p class="bl-rule-meta">${rule.postsPerDay}× a day between ${escapeHtml(rule.windowStart)} and ${escapeHtml(rule.windowEnd)} ${escapeHtml(rule.timezone)},
  at least ${rule.minGapMinutes} minutes apart · ${escapeHtml(rule.destination)} · ${source}
- · ${rule.format === 'any' ? 'any format' : `${escapeHtml(rule.format)} only`} · ${escapeHtml(rule.pickOrder)} · reuse after ${rule.avoidReuseDays} days</p>
+ · ${rule.format === 'any' ? 'any format' : `${escapeHtml(rule.format)} only`}${rule.format === 'slideshow' && rule.source === 'tag' ? ` of ${rule.slideSize} slides` : ''} · ${escapeHtml(rule.pickOrder)} · reuse after ${rule.avoidReuseDays} days, per account</p>
 ${windowBar(rule, colour)}
 <div class="bl-rule-next">${next || '<span>Nothing planned yet.</span>'}</div>
 </article>`;
 }
 
-export function renderRules(views: RuleView[], colours?: ReadonlyMap<string, AccountColour>): string {
+export function renderRules(
+    views: RuleView[],
+    colours?: ReadonlyMap<string, AccountColour>,
+    creators: ReadonlyMap<string, string> = new Map(),
+): string {
     if (!views.length) {
-        return '<div id="drip-rules" class="bl-empty">No drip rules yet. A rule turns tagged media into scheduled posts on one account.</div>';
+        return '<div id="drip-rules" class="bl-empty">No drip rules yet. A rule turns tagged media into scheduled posts on one account, or on every account a creator owns.</div>';
     }
     const palette = colours ?? assignAccountColours(views.map(({ rule }) => rule.account));
-    return `<div id="drip-rules">${views.map((view) => ruleRow(view, colourFor(palette, view.rule.account))).join('')}</div>`;
+    return `<div id="drip-rules">${views.map((view) => ruleRow(view, colourFor(palette, view.rule.account), creators)).join('')}</div>`;
+}
+
+export interface DeviceLimitView {
+    deviceUdid: string;
+    name: string;
+    maxPostsPerDay: number;
+    minMinutesBetweenPosts: number;
+    /** False means the phone has no stored row and is running on the defaults. */
+    configured: boolean;
+}
+
+/**
+ * What each phone may do in a day, across every account and every rule on it.
+ * Rules cannot see each other, so this is the only place the total is bounded —
+ * six rules of two posts a day on one handset is twelve posts through one IP.
+ */
+export function renderDeviceLimits(rows: readonly DeviceLimitView[]): string {
+    if (!rows.length) {
+        return '<div id="device-limits" class="bl-empty">No phones registered yet.</div>';
+    }
+    const body = rows.map((row) => `<tr><td>${escapeHtml(row.name)}
+${row.configured ? '' : '<span class="bl-faint"> · default</span>'}</td>
+<td><form class="bl-limit-form" data-device-limit="${escapeHtml(row.deviceUdid)}">
+<input class="bl-input" type="number" name="maxPostsPerDay" min="1" max="96" value="${row.maxPostsPerDay}" aria-label="Posts a day on ${escapeHtml(row.name)}">
+<span class="bl-faint">a day, at least</span>
+<input class="bl-input" type="number" name="minMinutesBetweenPosts" min="0" max="1440" value="${row.minMinutesBetweenPosts}" aria-label="Minutes between posts on ${escapeHtml(row.name)}">
+<span class="bl-faint">min apart</span>
+<button class="bl-btn bl-btn-sm" type="submit">Save</button>
+</form></td></tr>`).join('');
+    return `<div id="device-limits"><table class="bl-table">
+<thead><tr><th>Phone</th><th>Across every account on it</th></tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 // ---- the page itself -------------------------------------------------------
@@ -190,11 +239,37 @@ ${icon('upload', 20)}<strong>Drop clips and images here</strong>
 </div></section>`;
 }
 
+/** One checkbox per network, for narrowing a creator rule to some of its accounts. */
+function networkFilter(): string {
+    const boxes = NETWORK_IDS.map((network) => `<label class="bl-check bl-check-sm">`
+        + `<input type="checkbox" name="networks" value="${network}" data-rule-network>`
+        + `${escapeHtml(networkLabel(network))}</label>`).join('');
+    return `<div class="bl-field bl-field-wide" id="rule-networks-field" hidden><span>Cross-post to</span>
+<div class="bl-check-row">${boxes}</div>
+<span class="bl-faint">Leave every box clear to post to all of this creator's accounts.</span></div>`;
+}
+
+/** A caption template per network, so the same clip does not carry TikTok's hook onto YouTube. */
+function networkCaptionFields(): string {
+    const rows = NETWORK_IDS.map((network) => `<label class="bl-field">`
+        + `<span>${escapeHtml(networkLabel(network))} caption</span>`
+        + `<select class="bl-select" data-network-template="${network}"><option value="">Same as the rule's</option></select>`
+        + '</label>').join('');
+    return `<details class="bl-rule-captions" id="rule-captions"><summary>Per-network captions</summary>
+<div class="bl-form-grid">${rows}</div></details>`;
+}
+
 function rulesForm(): string {
     return `<form id="rule-form">
 <div class="bl-form-grid">
 <label class="bl-field"><span>Phone</span><select id="rule-device" name="deviceUdid" class="bl-select" required></select></label>
+<label class="bl-field"><span>Posts to</span><select id="rule-creator" name="creatorId" class="bl-select">
+<option value="">One account</option></select>
+<span class="bl-faint">A creator posts every copy to each of their accounts.</span></label>
 <label class="bl-field"><span>Account</span><input id="rule-account" name="account" type="text" class="bl-input" placeholder="@handle" required></label>
+<label class="bl-field" id="rule-network-field"><span>Network</span><select id="rule-network" name="network" class="bl-select">
+${NETWORK_IDS.map((network) => `<option value="${network}">${escapeHtml(networkLabel(network))}</option>`).join('')}
+</select></label>
 <label class="bl-field"><span>Posts per day</span><input id="rule-posts" name="postsPerDay" type="number" class="bl-input" min="1" max="24" value="2"></label>
 <label class="bl-field"><span>Window start</span><input id="rule-start" name="windowStart" type="time" class="bl-input" value="09:00"></label>
 <label class="bl-field"><span>Window end</span><input id="rule-end" name="windowEnd" type="time" class="bl-input" value="21:00"></label>
@@ -207,8 +282,13 @@ function rulesForm(): string {
 <label class="bl-field"><span>Tag</span><input id="rule-tag" name="tag" type="text" class="bl-input" placeholder="fitness"></label>
 <label class="bl-field"><span>Set</span><select id="rule-set" name="setId" class="bl-select"><option value="">—</option></select></label>
 <label class="bl-field"><span>Caption template</span><select id="rule-template" name="captionTemplateId" class="bl-select"><option value="">—</option></select></label>
-<label class="bl-field"><span>Order</span><select id="rule-order" name="order" class="bl-select"><option value="random">Random</option><option value="fifo">FIFO</option></select></label>
+<label class="bl-field"><span>Order</span><select id="rule-order" name="order" class="bl-select"><option value="random">Random</option><option value="fifo">Oldest first</option><option value="filename">Filename</option></select></label>
+<label class="bl-field" id="rule-gap-cross-field" hidden><span>Cross-post gap (minutes)</span><input id="rule-cross-gap" name="crossPostGapMinutes" type="number" class="bl-input" min="1" max="1440" value="20"></label>
+<label class="bl-field" id="rule-slides-field" hidden><span>Slides per slideshow</span><input id="rule-slides" name="slideSize" type="number" class="bl-input" min="2" max="35" value="5">
+<span class="bl-faint">Assembled from unused images in the tag, in the order above.</span></label>
+${networkFilter()}
 </div>
+${networkCaptionFields()}
 <div class="bl-form-actions"><button class="bl-btn bl-btn-primary" type="submit">Create rule</button>
 <button id="plan-now" class="bl-btn" type="button">Plan now</button></div>
 <p id="rule-result" class="bl-muted" aria-live="polite"></p>
@@ -266,6 +346,9 @@ ${panel('Sets', `<form id="set-form" class="bl-inline-form">
 <p class="bl-faint">A pool posts one item at a time. A slideshow posts every image it holds as one post, in order.</p>
 ${load('/api/content/sets', 'content-sets')}`)}
 ${slideshowPanel()}
+${panel('Device limits', `<p class="bl-faint">What one phone may do in a day, across every account and
+every rule on it. A rule cannot see the others, so this is the only ceiling on the total.</p>
+${load('/api/device-limits', 'device-limits')}`)}
 ${panel('Caption templates', `<form id="template-form" class="bl-inline-form">
 <label class="bl-field"><span>Name</span><input name="name" type="text" class="bl-input" placeholder="Hook" required></label>
 <label class="bl-field"><span>Template</span><input name="template" type="text" class="bl-input" placeholder="{title} {hashtags}" required></label>

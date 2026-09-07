@@ -31,6 +31,8 @@ function dripRule(overrides: Partial<DripRuleRow> = {}): DripRuleRow {
         windowStart: '09:00', windowEnd: '21:00', timezone: 'UTC', minGapMinutes: 120,
         destination: 'draft', source: 'tag', format: 'any', setId: null, tag: 'fitness', captionTemplateId: null,
         pickOrder: 'random', avoidReuseDays: 30, lastPlannedDate: null,
+        network: 'tiktok', creatorId: null, networks: [], crossPostGapMinutes: 20, slideSize: 5,
+        networkCaptions: {},
         createdAt: new Date('2026-02-01T00:00:00Z'), updatedAt: new Date('2026-02-01T00:00:00Z'),
         ...overrides,
     };

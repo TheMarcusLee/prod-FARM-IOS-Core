@@ -5,11 +5,14 @@ import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { DripRuleRow } from '../../database/schema.js';
+import { DEFAULT_DEVICE_LIMITS, type DripRuleRow } from '../../database/schema.js';
+import type { PluginRegistry } from '../../registry.js';
 import type { SchedulerRepository } from '../../scheduler/repository.js';
 import { downloadWithYtDlp, ytDlpPath } from '../../content/ffmpeg.js';
 import { ingestDirectory, ingestMedia, listMediaFiles, mimeTypeFor, removeItemFiles } from '../../content/ingest.js';
-import { contentPage, escapeHtml, renderLibrary, renderRules, renderSets, renderTemplates } from '../../content/page.js';
+import {
+    contentPage, escapeHtml, renderDeviceLimits, renderLibrary, renderRules, renderSets, renderTemplates,
+} from '../../content/page.js';
 import type { ShellRenderer } from '../../ui/context.js';
 import { loadRegisteredDevices, type RegisteredDevice } from '../../devices/registry.js';
 import { assignAccountColours, collectAccounts } from '../../schedule/accounts.js';
@@ -18,7 +21,8 @@ import { renderCaptionTemplate } from '../../content/templates.js';
 import { replanRule, runDripPlanner, startDripPlannerTick } from '../../content/runner.js';
 import { createContentStore, type ContentStore } from '../../content/store.js';
 import {
-    asObject, parseIngestRequest, parseIngestUrl, parseItemPatch, parseRuleInput, parseRulePatch,
+    asObject, parseCreatorAccountInput, parseCreatorInput, parseCreatorPatch, parseDeviceLimitInput,
+    parseIngestRequest, parseIngestUrl, parseItemPatch, parseRuleInput, parseRulePatch,
     parseSetInput, parseSetItems, parseSetPatch, parseTemplateInput, requiredText, tagList,
 } from '../../content/validate.js';
 
@@ -32,6 +36,8 @@ export interface ContentRouteOptions {
     shell: ShellRenderer;
     /** Test seam for the device registry, which supplies the account colour order. */
     loadDevices?: () => Promise<RegisteredDevice[]>;
+    /** The plugins this process booted with, so a planned post names a task that exists. */
+    plugins?: PluginRegistry;
 }
 
 const STATIC_ROOT = fileURLToPath(new URL('../../../static/dashboard/', import.meta.url));
@@ -60,10 +66,17 @@ function badRequest(reply: FastifyReply, error: unknown): FastifyReply {
 const PLANNING_FIELDS = [
     'deviceUdid', 'account', 'postsPerDay', 'windowStart', 'windowEnd', 'timezone', 'minGapMinutes',
     'destination', 'source', 'format', 'setId', 'tag', 'captionTemplateId', 'pickOrder', 'avoidReuseDays',
+    'network', 'creatorId', 'crossPostGapMinutes', 'slideSize',
 ] as const satisfies ReadonlyArray<keyof DripRuleRow>;
 
+/** The two planning-relevant fields that are not scalars, compared by value. */
+function sameShape(before: unknown, after: unknown): boolean {
+    return JSON.stringify(before ?? null) === JSON.stringify(after ?? null);
+}
+
 export function affectsPlanning(before: DripRuleRow, after: DripRuleRow): boolean {
-    return PLANNING_FIELDS.some((field) => before[field] !== after[field]);
+    if (PLANNING_FIELDS.some((field) => before[field] !== after[field])) return true;
+    return !sameShape(before.networks, after.networks) || !sameShape(before.networkCaptions, after.networkCaptions);
 }
 
 /**
@@ -344,7 +357,11 @@ export async function registerContentRoutes(app: FastifyInstance, options: Conte
             rule, plans: await active.upcomingPlans(rule.id, 20),
         })));
         if (request.headers['hx-request']) {
-            return reply.type('text/html').send(renderRules(views, await ruleColours(rules.map(({ account }) => account))));
+            // A creator rule shows the creator's name, not the placeholder handle
+            // stored in `account`, so the list reads as what it will actually do.
+            const creators = new Map((await active.listCreators()).map(({ id, name }) => [id, name]));
+            const colours = await ruleColours(rules.map(({ account }) => account));
+            return reply.type('text/html').send(renderRules(views, colours, creators));
         }
         return { rules: views };
     });
@@ -396,13 +413,117 @@ export async function registerContentRoutes(app: FastifyInstance, options: Conte
     const plan = async () => {
         const active = store();
         if (!active) throw new Error('The content library needs a database connection');
-        return runDripPlanner({ store: active, scheduler: options.scheduler });
+        return runDripPlanner({
+            store: active, scheduler: options.scheduler,
+            ...(options.plugins ? { plugins: options.plugins } : {}),
+        });
     };
 
     app.post('/api/drip/plan', async (_request, reply) => {
         const active = store();
         if (!active) return notConfigured(reply);
         return reply.code(202).send(await plan());
+    });
+
+    // ---- creators and their accounts ----------------------------------------
+
+    app.get('/api/creators', async (_request, reply) => {
+        const active = store();
+        if (!active) return notConfigured(reply);
+        const [rows, accounts] = await Promise.all([active.listCreators(), active.listCreatorAccounts()]);
+        return {
+            creators: rows.map((creator) => ({
+                ...creator, accounts: accounts.filter(({ creatorId }) => creatorId === creator.id),
+            })),
+        };
+    });
+
+    app.post('/api/creators', async (request, reply) => {
+        const active = store();
+        if (!active) return notConfigured(reply);
+        try {
+            return reply.code(201).send(await active.createCreator(parseCreatorInput(request.body)));
+        } catch (error) {
+            return badRequest(reply, error);
+        }
+    });
+
+    app.patch<{ Params: { id: string } }>('/api/creators/:id', async (request, reply) => {
+        const active = store();
+        if (!active) return notConfigured(reply);
+        try {
+            const updated = await active.updateCreator(request.params.id, parseCreatorPatch(request.body));
+            return updated ?? reply.code(404).send({ error: 'Creator not found' });
+        } catch (error) {
+            return badRequest(reply, error);
+        }
+    });
+
+    app.delete<{ Params: { id: string } }>('/api/creators/:id', async (request, reply) => {
+        const active = store();
+        if (!active) return notConfigured(reply);
+        const removed = await active.deleteCreator(request.params.id);
+        return removed ? reply.code(204).send() : reply.code(404).send({ error: 'Creator not found' });
+    });
+
+    app.post<{ Params: { id: string } }>('/api/creators/:id/accounts', async (request, reply) => {
+        const active = store();
+        if (!active) return notConfigured(reply);
+        const creator = await active.creator(request.params.id);
+        if (!creator) return reply.code(404).send({ error: 'Creator not found' });
+        try {
+            const input = parseCreatorAccountInput(request.body);
+            return reply.code(201).send(await active.createCreatorAccount({ creatorId: creator.id, ...input }));
+        } catch (error) {
+            return badRequest(reply, error);
+        }
+    });
+
+    app.patch<{ Params: { id: string }; Body: { enabled?: unknown } }>('/api/creator-accounts/:id', async (request, reply) => {
+        const active = store();
+        if (!active) return notConfigured(reply);
+        const enabled = asObject(request.body ?? {}).enabled;
+        if (typeof enabled !== 'boolean') return badRequest(reply, new Error('enabled must be true or false'));
+        const updated = await active.updateCreatorAccount(request.params.id, { enabled });
+        return updated ?? reply.code(404).send({ error: 'Account not found' });
+    });
+
+    app.delete<{ Params: { id: string } }>('/api/creator-accounts/:id', async (request, reply) => {
+        const active = store();
+        if (!active) return notConfigured(reply);
+        const removed = await active.deleteCreatorAccount(request.params.id);
+        return removed ? reply.code(204).send() : reply.code(404).send({ error: 'Account not found' });
+    });
+
+    // ---- per-phone limits ---------------------------------------------------
+
+    app.get('/api/device-limits', async (request, reply) => {
+        const active = store();
+        if (!active) return unavailableFragment(request, reply, 'device-limits');
+        const devices = await loadDevices().catch(() => [] as RegisteredDevice[]);
+        const stored = new Map((await active.listDeviceLimits()).map((row) => [row.deviceUdid, row]));
+        const rows = devices.map(({ udid, name }) => ({
+            deviceUdid: udid,
+            name,
+            maxPostsPerDay: stored.get(udid)?.maxPostsPerDay ?? DEFAULT_DEVICE_LIMITS.maxPostsPerDay,
+            minMinutesBetweenPosts:
+                stored.get(udid)?.minMinutesBetweenPosts ?? DEFAULT_DEVICE_LIMITS.minMinutesBetweenPosts,
+            /** False means "still on the defaults" — worth showing, so the card is not a lie. */
+            configured: stored.has(udid),
+        }));
+        if (request.headers['hx-request']) return reply.type('text/html').send(renderDeviceLimits(rows));
+        return { limits: rows };
+    });
+
+    app.put<{ Params: { udid: string } }>('/api/device-limits/:udid', async (request, reply) => {
+        const active = store();
+        if (!active) return notConfigured(reply);
+        try {
+            const input = parseDeviceLimitInput(request.body);
+            return await active.setDeviceLimits(requiredText(request.params.udid, 'udid', 128), input);
+        } catch (error) {
+            return badRequest(reply, error);
+        }
     });
 
     // ---- hourly tick --------------------------------------------------------

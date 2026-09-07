@@ -24,6 +24,8 @@ function rule(overrides: Partial<DripRuleRow> = {}): DripRuleRow {
         postsPerDay: 3, windowStart: '09:00', windowEnd: '21:00', timezone: 'UTC',
         minGapMinutes: 120, destination: 'draft', source: 'tag', format: 'any', setId: null, tag: 'fitness',
         captionTemplateId: null, pickOrder: 'random', avoidReuseDays: 30, lastPlannedDate: null,
+        network: 'tiktok', creatorId: null, networks: [], crossPostGapMinutes: 20, slideSize: 5,
+        networkCaptions: {},
         createdAt: new Date('2026-01-01T00:00:00Z'), updatedAt: new Date('2026-01-01T00:00:00Z'),
         ...overrides,
     };
@@ -52,7 +54,10 @@ function ports(overrides: Partial<PlannerPorts> & { pool?: ContentItemRow[] } = 
         now: new Date('2026-03-10T08:00:00Z'),
         random: seeded(7),
         rules: async () => [rule()],
+        async targets(current) { return [{ network: current.network, handle: current.account }]; },
         async candidates(_rule, cutoff) { cutoffs.push(cutoff); return pool.map((entry) => [entry]); },
+        async deviceLimits() { return { maxPostsPerDay: 999, minMinutesBetweenPosts: 0 }; },
+        async deviceLoad() { return []; },
         async plansForDates(ruleId, dates) {
             return plans.filter((plan) => plan.ruleId === ruleId && dates.includes(plan.date));
         },
@@ -63,6 +68,7 @@ function ports(overrides: Partial<PlannerPorts> & { pool?: ContentItemRow[] } = 
                 plans.push({
                     id: `plan-${plans.length + 1}`, ruleId: post.rule.id, date: post.date, scheduleId,
                     itemId: entry.id, plannedFor: post.runAt, usedMarkedAt: null, createdAt: new Date(),
+                    network: post.target.network, account: post.target.handle,
                 } as DripPlanRow);
             }
         },

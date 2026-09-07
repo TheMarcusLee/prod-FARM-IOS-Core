@@ -55,11 +55,12 @@ import {
 } from '../live/scrcpy.js';
 import { LiveUnavailableError, createSessionManager, type StartLiveStream } from '../live/sessions.js';
 import { registerContentRoutes } from './routes/content.js';
+import { createContentStore, type ContentStore } from '../content/store.js';
 import { registerUploadRoutes } from './routes/uploads.js';
 import { registerLiveRoutes } from './routes/live.js';
 import { registerFleetRoutes } from './routes/fleet.js';
 import { registerMcpRoutes } from './routes/mcp.js';
-import { personaHead, registerPersonaRoutes, renderPersonaSection } from './routes/personas.js';
+import { personaHead, registerPersonaRoutes, renderCreatorsSection, renderPersonaSection } from './routes/personas.js';
 import { registerPushRoutes } from './routes/push.js';
 import { registerScheduleRoutes } from './routes/schedule.js';
 import { clampScreenshotWidth, keysetPage, registerMobileRoutes, resizeScreenshot, type KeysetQuery } from './routes/mobile.js';
@@ -1007,10 +1008,25 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         return reply.code(204).send();
     });
 
-    await registerContentRoutes(app, { scheduler: options.scheduler, shell });
+    await registerContentRoutes(app, { scheduler: options.scheduler, shell, plugins: options.plugins });
     await registerUploadRoutes(app, { scheduler: options.scheduler });
     await registerFleetRoutes(app, options);
-    registerPersonaRoutes(app);
+    // Creators live in Postgres and personas on disk, so the Accounts page is
+    // handed a lazy store and stays usable on a process that has no database.
+    let personaStore: ContentStore | null | undefined;
+    registerPersonaRoutes(app, {
+        store: () => {
+            if (personaStore === undefined) {
+                try {
+                    personaStore = createContentStore(options.scheduler.connection.db);
+                } catch {
+                    personaStore = null;
+                }
+            }
+            return personaStore;
+        },
+        loadDevices: async () => (await loadRegisteredDevices()).map(({ udid, name }) => ({ udid, name })),
+    });
     await registerScheduleRoutes(app, { ...options, shell });
     await registerPushRoutes(app, options);
     await registerMcpRoutes(app, {
@@ -1209,7 +1225,8 @@ export async function createApp(options: CreateAppOptions): Promise<FastifyInsta
         return reply.type('text/html').send(await shell(request, {
             title: 'Accounts', active: 'accounts',
             head: personaHead(),
-            body: renderAccountsPage(rows, devices) + renderPersonaSection(rows.map(({ handle }) => handle)),
+            body: renderAccountsPage(rows, devices) + renderCreatorsSection()
+                + renderPersonaSection(rows.map(({ handle }) => handle)),
         }, read));
     });
 

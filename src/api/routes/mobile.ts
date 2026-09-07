@@ -284,6 +284,10 @@ function queueItem(plan: QueuePlanRow): JsonObject {
         // What the phone will actually do with the media. Absent on posts planned
         // before formats existed, which were all videos.
         format: plan.format ?? 'video',
+        // Which account this copy is for. A creator rule plans the same item
+        // several times over, and the phone's queue has to tell them apart.
+        network: plan.network,
+        account: plan.account,
         assetId: plan.assetId,
         thumbnailUrl: `/api/assets/${plan.assetId}/thumbnail`,
         plannedFor: plan.plannedFor.toISOString(),

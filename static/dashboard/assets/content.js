@@ -30,6 +30,7 @@ function refresh(section) {
         sets: ['/api/content/sets', '#content-sets'],
         templates: ['/api/content/templates', '#caption-templates'],
         rules: ['/api/drip/rules', '#drip-rules'],
+        limits: ['/api/device-limits', '#device-limits'],
     }[section];
     if (typeof htmx === 'undefined') {
         location.reload();
@@ -601,13 +602,60 @@ byId('template-preview-button').addEventListener('click', () => {
         .then((body) => say(byId('template-preview'), body.preview || '(empty)'))
         .catch((error) => say(byId('template-preview'), error.message));
 });
+/**
+ * The rule form asks for different things depending on what it is pointed at: a
+ * creator hides the single account and shows the network filter and the
+ * cross-post gap; a slideshow rule over a tag shows the slide count. Doing it
+ * here rather than with four separate forms keeps one POST body.
+ */
+function syncRuleForm() {
+    const creator = byId('rule-creator').value;
+    const account = byId('rule-account');
+    account.required = !creator;
+    account.closest('label').hidden = Boolean(creator);
+    byId('rule-network-field').hidden = Boolean(creator);
+    byId('rule-networks-field').hidden = !creator;
+    byId('rule-gap-cross-field').hidden = !creator;
+    byId('rule-captions').hidden = !creator;
+    const slideshow = byId('rule-format').value === 'slideshow'
+        && byId('rule-source').value === 'tag';
+    byId('rule-slides-field').hidden = !slideshow;
+}
+for (const id of ['rule-creator', 'rule-format', 'rule-source']) {
+    byId(id).addEventListener('change', syncRuleForm);
+}
+/** The form's own fields, plus the two shapes a form cannot express: a list and a map. */
+function ruleBody(form) {
+    const values = formValues(form);
+    delete values.networks;
+    values.networks = [...form.querySelectorAll('[data-rule-network]:checked')]
+        .map((box) => box.value);
+    const captions = {};
+    for (const select of form.querySelectorAll('[data-network-template]')) {
+        if (select.value)
+            captions[select.dataset.networkTemplate] = select.value;
+    }
+    values.networkCaptions = captions;
+    return values;
+}
 byId('rule-form').addEventListener('submit', (event) => {
     event.preventDefault();
     const form = event.currentTarget;
     const result = byId('rule-result');
-    void json('/api/drip/rules', 'POST', formValues(form))
+    void json('/api/drip/rules', 'POST', ruleBody(form))
         .then(() => { say(result, 'Rule created.'); refresh('rules'); })
         .catch((error) => say(result, error.message));
+});
+/** The per-phone caps. One tiny form per row, submitted where it sits. */
+document.addEventListener('submit', (event) => {
+    const form = event.target.closest('[data-device-limit]');
+    if (!form)
+        return;
+    event.preventDefault();
+    const udid = form.dataset.deviceLimit;
+    void json(`/api/device-limits/${encodeURIComponent(udid)}`, 'PUT', formValues(form))
+        .then(() => refresh('limits'))
+        .catch((error) => window.alert(error.message));
 });
 byId('plan-now').addEventListener('click', (event) => {
     const button = event.currentTarget;
@@ -631,17 +679,41 @@ function fill(select, options, keepBlank) {
     select.value = current;
 }
 async function loadChoices() {
-    const [devices, sets, templates] = await Promise.all([
+    const [devices, sets, templates, creators] = await Promise.all([
         request('/api/devices').catch(() => []),
         request('/api/content/sets').catch(() => ({ sets: [] })),
         request('/api/content/templates').catch(() => ({ templates: [] })),
+        request('/api/creators').catch(() => ({ creators: [] })),
     ]);
     fill(byId('rule-device'), devices.map((device) => ({ value: device.udid, label: device.name })), false);
     fill(byId('rule-set'), sets.sets.map((set) => ({ value: set.id, label: set.name })), true);
-    fill(byId('rule-template'), templates.templates.map((template) => ({ value: template.id, label: template.name })), true);
+    const options = templates.templates.map((template) => ({ value: template.id, label: template.name }));
+    fill(byId('rule-template'), options, true);
+    // Every per-network picker offers the same templates; a blank one means
+    // "whatever the rule itself uses", which is the common case.
+    for (const select of document.querySelectorAll('[data-network-template]')) {
+        const current = select.value;
+        select.replaceChildren(new Option("Same as the rule's", ''));
+        for (const option of options)
+            select.append(new Option(option.label, option.value));
+        select.value = current;
+    }
+    // The creator picker names the phone too: an operator with four handsets
+    // needs to see that "Mia" is the one on slot 3.
+    const byUdid = new Map(devices.map((device) => [device.udid, device.name]));
+    fill(byId('rule-creator'), creators.creators.map((creator) => ({
+        value: creator.id,
+        label: `${creator.name} · ${byUdid.get(creator.deviceUdid) ?? creator.deviceUdid}`
+            + ` · ${creator.accounts.filter(({ enabled }) => enabled).length} accounts`,
+    })), false);
+    const picker = byId('rule-creator');
+    picker.prepend(new Option('One account', ''));
+    if (!creators.creators.some(({ id }) => id === picker.value))
+        picker.value = '';
+    syncRuleForm();
 }
 byId('refresh-content').addEventListener('click', () => {
-    for (const section of ['library', 'sets', 'templates', 'rules'])
+    for (const section of ['library', 'sets', 'templates', 'rules', 'limits'])
         refresh(section);
     void loadChoices();
 });

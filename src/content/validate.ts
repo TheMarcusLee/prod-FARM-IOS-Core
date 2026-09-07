@@ -1,6 +1,7 @@
 import type {
-    ContentSetKind, ContentStatus, DripFormat, DripOrder, DripSource, PostDestination,
+    ContentSetKind, ContentStatus, DripFormat, DripOrder, DripSource, PostDestination, PostNetwork,
 } from '../database/schema.js';
+import { NETWORK_IDS, isNetwork } from './networks.js';
 import { isLocalTime, isTimeZone, minutesOfDay } from './time.js';
 
 /**
@@ -182,6 +183,12 @@ export interface RuleInput {
     captionTemplateId: string | null;
     pickOrder: DripOrder;
     avoidReuseDays: number;
+    network: PostNetwork;
+    creatorId: string | null;
+    networks: PostNetwork[];
+    crossPostGapMinutes: number;
+    slideSize: number;
+    networkCaptions: Partial<Record<PostNetwork, string>>;
 }
 
 function assertWindow(rule: Pick<RuleInput, 'windowStart' | 'windowEnd' | 'postsPerDay' | 'minGapMinutes'>): void {
@@ -199,10 +206,45 @@ function assertSource(rule: Pick<RuleInput, 'source' | 'setId' | 'tag'>): void {
     if (rule.source === 'tag' && !rule.tag) fail('Choose a tag');
 }
 
+/** Handle shapes differ per network; the loosest of them is what is enforced here. */
+const HANDLE = /^@?[A-Za-z0-9._-]{1,64}$/;
+
+/** A network list, from an array or the comma-separated string the HTML form sends. */
+export function networkList(value: unknown, name: string): PostNetwork[] {
+    if (value === undefined || value === null || value === '') return [];
+    const raw = Array.isArray(value) ? value
+        : typeof value === 'string' ? value.split(/[\s,]+/).filter(Boolean)
+            : fail(`${name} must be a list of networks`);
+    const seen = new Set<PostNetwork>();
+    for (const entry of raw) {
+        if (!isNetwork(entry)) fail(`${name} must contain only ${NETWORK_IDS.join(', ')}`);
+        seen.add(entry);
+    }
+    return [...seen];
+}
+
+/** `{ instagram: "<uuid>" }` — a template per network, whitelisted key and value. */
+function networkCaptionMap(value: unknown): Partial<Record<PostNetwork, string>> {
+    if (value === undefined || value === null || value === '') return {};
+    const input = asObject(value);
+    const map: Partial<Record<PostNetwork, string>> = {};
+    for (const network of NETWORK_IDS) {
+        const id = uuidOrUndefined(input[network], `networkCaptions.${network}`);
+        if (id) map[network] = id;
+    }
+    return map;
+}
+
 export function parseRuleInput(body: unknown): RuleInput {
     const input = asObject(body);
-    const account = requiredText(input.account, 'account', 80);
-    if (!/^@?[A-Za-z0-9._]{1,64}$/.test(account)) fail('account must be a TikTok handle');
+    const creatorId = uuidOrUndefined(input.creatorId, 'creatorId') ?? null;
+    // A creator rule still stores a handle — the form keeps whatever was typed —
+    // but it is the creator's own accounts the planner posts to, so an empty box
+    // is no longer an error the operator has to work around.
+    const account = creatorId
+        ? optionalText(input.account, 'account', 80) ?? '@creator'
+        : requiredText(input.account, 'account', 80);
+    if (!HANDLE.test(account)) fail('account must be a handle');
     const timezone = optionalText(input.timezone, 'timezone', 64) ?? 'UTC';
     if (!isTimeZone(timezone)) fail('timezone must be an IANA time zone');
     const windowStart = optionalText(input.windowStart, 'windowStart', 5) ?? '09:00';
@@ -223,8 +265,14 @@ export function parseRuleInput(body: unknown): RuleInput {
         setId: uuidOrUndefined(input.setId, 'setId') ?? null,
         tag: tagList(input.tag, 'tag', 1)?.[0] ?? null,
         captionTemplateId: uuidOrUndefined(input.captionTemplateId, 'captionTemplateId') ?? null,
-        pickOrder: oneOf(input.order ?? input.pickOrder, 'order', ['random', 'fifo'] as const) ?? 'random',
+        pickOrder: oneOf(input.order ?? input.pickOrder, 'order', ['random', 'fifo', 'filename'] as const) ?? 'random',
         avoidReuseDays: boundedInteger(input.avoidReuseDays, 'avoidReuseDays', 0, 3650) ?? 30,
+        network: oneOf(input.network, 'network', NETWORK_IDS) ?? 'tiktok',
+        creatorId,
+        networks: networkList(input.networks, 'networks'),
+        crossPostGapMinutes: boundedInteger(input.crossPostGapMinutes, 'crossPostGapMinutes', 1, 1440) ?? 20,
+        slideSize: boundedInteger(input.slideSize, 'slideSize', 2, 35) ?? 5,
+        networkCaptions: networkCaptionMap(input.networkCaptions),
     };
     assertWindow(rule);
     assertSource(rule);
@@ -250,6 +298,69 @@ export function parseRulePatch(body: unknown, current: RuleInput): RuleInput {
         captionTemplateId: 'captionTemplateId' in input ? input.captionTemplateId : current.captionTemplateId,
         order: input.order ?? input.pickOrder ?? current.pickOrder,
         avoidReuseDays: input.avoidReuseDays ?? current.avoidReuseDays,
+        network: input.network ?? current.network,
+        creatorId: 'creatorId' in input ? input.creatorId : current.creatorId,
+        networks: 'networks' in input ? input.networks : current.networks,
+        crossPostGapMinutes: input.crossPostGapMinutes ?? current.crossPostGapMinutes,
+        slideSize: input.slideSize ?? current.slideSize,
+        networkCaptions: 'networkCaptions' in input ? input.networkCaptions : current.networkCaptions,
     };
     return parseRuleInput(merged);
+}
+
+/* ---- creators and per-phone limits ------------------------------------- */
+
+export interface CreatorInput {
+    name: string;
+    deviceUdid: string;
+    notes: string | null;
+}
+
+export function parseCreatorInput(body: unknown): CreatorInput {
+    const input = asObject(body);
+    return {
+        name: requiredText(input.name, 'name', 120),
+        deviceUdid: requiredText(input.deviceUdid, 'deviceUdid', 128),
+        notes: optionalText(input.notes, 'notes', 1000) ?? null,
+    };
+}
+
+export function parseCreatorPatch(body: unknown): Partial<CreatorInput> {
+    const input = asObject(body);
+    const patch: Partial<CreatorInput> = {};
+    if ('name' in input) patch.name = requiredText(input.name, 'name', 120);
+    if ('deviceUdid' in input) patch.deviceUdid = requiredText(input.deviceUdid, 'deviceUdid', 128);
+    if ('notes' in input) patch.notes = optionalText(input.notes, 'notes', 1000) ?? null;
+    if (!Object.keys(patch).length) fail('Nothing to update');
+    return patch;
+}
+
+export interface CreatorAccountInput {
+    network: PostNetwork;
+    handle: string;
+    enabled: boolean;
+}
+
+export function parseCreatorAccountInput(body: unknown): CreatorAccountInput {
+    const input = asObject(body);
+    const handle = requiredText(input.handle, 'handle', 80);
+    if (!HANDLE.test(handle)) fail('handle must be an account handle');
+    return {
+        network: oneOf(input.network, 'network', NETWORK_IDS) ?? fail('Choose a network'),
+        handle: handle.startsWith('@') ? handle : `@${handle}`,
+        enabled: booleanFlag(input.enabled, 'enabled') ?? true,
+    };
+}
+
+export interface DeviceLimitInput {
+    maxPostsPerDay: number;
+    minMinutesBetweenPosts: number;
+}
+
+export function parseDeviceLimitInput(body: unknown): DeviceLimitInput {
+    const input = asObject(body);
+    return {
+        maxPostsPerDay: boundedInteger(input.maxPostsPerDay, 'maxPostsPerDay', 1, 96) ?? 8,
+        minMinutesBetweenPosts: boundedInteger(input.minMinutesBetweenPosts, 'minMinutesBetweenPosts', 0, 1440) ?? 30,
+    };
 }

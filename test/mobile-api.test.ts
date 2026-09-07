@@ -117,7 +117,7 @@ function queuePlan(overrides: Partial<QueuePlanRow> = {}): QueuePlanRow {
         id: 'plan-1', ruleId: 'rule-1', itemId: 'item-1', scheduleId: 'schedule-1',
         plannedFor: new Date('2026-09-06T18:00:00Z'), usedMarkedAt: null, scheduleStatus: 'paused',
         deviceUdid: 'device-1', caption: 'day 14 of building the farm', assetId: 'asset-1',
-        format: 'video', ...overrides,
+        format: 'video', network: 'tiktok', account: '@handle', ...overrides,
     };
 }
 
@@ -594,7 +594,8 @@ test('GET /api/content/queue returns planned posts with a thumbnail URL', async 
     const [item] = (await app.inject({ method: 'GET', url: '/api/content/queue' })).json().items;
     assert.deepEqual(item, {
         id: 'plan-1', status: 'planned', deviceUdid: 'device-1', caption: 'day 14 of building the farm',
-        format: 'video', assetId: 'asset-1', thumbnailUrl: '/api/assets/asset-1/thumbnail',
+        format: 'video', network: 'tiktok', account: '@handle',
+        assetId: 'asset-1', thumbnailUrl: '/api/assets/asset-1/thumbnail',
         plannedFor: '2026-09-06T18:00:00.000Z', scheduleId: 'schedule-1',
     });
 

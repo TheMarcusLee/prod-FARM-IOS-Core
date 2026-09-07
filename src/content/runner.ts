@@ -3,13 +3,17 @@ import { copyFile, link, mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import { loadRegisteredDevices } from '../devices/registry.js';
+import type { PluginRegistry } from '../registry.js';
 import type { SchedulerRepository } from '../scheduler/repository.js';
-import type { ContentItemRow, DripRuleRow } from '../database/schema.js';
+import type { ContentItemRow, DripRuleRow, PostNetwork } from '../database/schema.js';
 import type { JsonObject } from '../types.js';
 import { dataRoot } from './paths.js';
 import { limitsFor } from './formats.js';
-import { planDripRules, type ContentGroup, type PlanReport, type PlannedPost, type PlannerPorts } from './planner.js';
-import type { ContentStore } from './store.js';
+import { isNetwork, postPayloadFor, taskForNetwork, type NetworkId } from './networks.js';
+import {
+    orderItems, planDripRules, type ContentGroup, type PlanReport, type PlannedPost, type PlannerPorts,
+} from './planner.js';
+import type { CandidateItem, ContentStore, PostTarget } from './store.js';
 
 export const TIKTOK_PLUGIN_ID = 'com.git-agni.tiktok';
 
@@ -19,6 +23,8 @@ export interface DripRunnerOptions {
     now?: Date;
     random?: () => number;
     horizonDays?: number;
+    /** The plugins this process booted with, so a post names the task actually registered. */
+    plugins?: PluginRegistry;
 }
 
 /** The most slides one post can carry, from the shared format table. */
@@ -36,8 +42,9 @@ export async function candidateGroups(
     store: ContentStore,
     rule: DripRuleRow,
     reuseCutoff: Date,
+    options: { targets?: readonly PostTarget[]; random?: () => number } = {},
 ): Promise<ContentGroup[]> {
-    const available = await store.candidateItems(rule, reuseCutoff);
+    const available = await store.candidateItems(rule, reuseCutoff, options.targets);
     if (rule.source === 'set' && rule.setId) {
         const set = await store.set(rule.setId);
         if (set?.kind === 'slideshow') {
@@ -49,7 +56,49 @@ export async function candidateGroups(
             return members.every((item) => ready.has(item.id)) ? [members] : [];
         }
     }
+    if (rule.format === 'slideshow' && rule.source === 'tag') {
+        return assembleSlideshows(available, rule, options.random ?? Math.random);
+    }
     return available.map((item) => [item]);
+}
+
+/**
+ * A `slideshow` rule over a tag builds its own posts: `slide_size` unused images
+ * from the tag, in the rule's own pick order, chunked into whole slideshows.
+ *
+ * The last, short chunk is dropped rather than posted: a rule that asks for five
+ * slides and gets two has produced a different post from the one it describes,
+ * and the shortfall is already reported by the planner when the pool runs dry.
+ */
+export function assembleSlideshows(
+    available: readonly CandidateItem[],
+    rule: DripRuleRow,
+    random: () => number,
+): ContentGroup[] {
+    const size = Math.min(MAX_SLIDES, Math.max(2, rule.slideSize));
+    const images = available.filter((item) => item.kind === 'image' && item.status === 'ready');
+    // Ordered before chunking, so `filename` really does put slide-1 first.
+    const ordered = orderItems(images, rule.pickOrder, random);
+    const groups: ContentGroup[] = [];
+    for (let index = 0; index + size <= ordered.length; index += size) {
+        groups.push(ordered.slice(index, index + size));
+    }
+    return groups;
+}
+
+/**
+ * Where a rule posts. An account rule is one target on its own network; a creator
+ * rule is every enabled account that creator owns, optionally narrowed by the
+ * rule's `networks` list, in a stable order so the stagger below is repeatable.
+ */
+export async function ruleTargets(store: ContentStore, rule: DripRuleRow): Promise<PostTarget[]> {
+    if (!rule.creatorId) {
+        return [{ network: rule.network, handle: rule.account }];
+    }
+    const wanted = new Set((rule.networks ?? []).filter(isNetwork));
+    return (await store.listCreatorAccounts(rule.creatorId))
+        .filter((account) => account.enabled && (!wanted.size || wanted.has(account.network as NetworkId)))
+        .map(({ network, handle }) => ({ network, handle }));
 }
 
 /**
@@ -92,10 +141,41 @@ async function linkPostAsset(store: ContentStore, item: ContentItemRow): Promise
     return { assetId: id, name: source.originalName, mimeType: source.mimeType };
 }
 
-async function devicePluginData(deviceUdid: string): Promise<JsonObject | null> {
+async function devicePluginData(deviceUdid: string, pluginId: string): Promise<JsonObject | null> {
     const device = (await loadRegisteredDevices()).find(({ udid }) => udid === deviceUdid);
     if (!device || device.disabled) return null;
-    return device.pluginData[TIKTOK_PLUGIN_ID] ?? {};
+    return device.pluginData[pluginId] ?? {};
+}
+
+/** The name an auto-assembled slideshow is filed under, so an operator can see what went out. */
+export function assembledSetName(rule: DripRuleRow, date: string, scheduleId: string): string {
+    return `${rule.tag ?? 'slideshow'} · ${date} · ${scheduleId.slice(0, 8)}`;
+}
+
+/**
+ * An auto-assembled slideshow is filed as a real `content_sets` row of kind
+ * `slideshow`, named from the rule and the date. Nothing in the pipeline reads
+ * it back — the post already carries its slides — but an operator who wants to
+ * know what went out on Tuesday has somewhere to look, which a slideshow that
+ * only ever existed inside one planning run would not give them.
+ *
+ * Only the first copy records it: a creator rule posting the same five slides to
+ * nine accounts assembled one slideshow, not nine.
+ */
+async function recordAssembledSet(store: ContentStore, post: PlannedPost, scheduleId: string): Promise<void> {
+    if (post.copyIndex !== 0 || post.format !== 'slideshow') return;
+    if (post.rule.source !== 'tag' || post.items.length < 2) return;
+    try {
+        const set = await store.createSet({
+            name: assembledSetName(post.rule, post.date, scheduleId),
+            notes: `Assembled by drip rule ${post.rule.id}`,
+            kind: 'slideshow',
+        });
+        await store.setSetItems(set.id, post.items.map(({ id }) => id));
+    } catch {
+        // A name collision or a set the operator deleted mid-run must not lose
+        // the post that is already scheduled. The record is a convenience.
+    }
 }
 
 /**
@@ -111,11 +191,19 @@ export function dripPorts(options: DripRunnerOptions): { ports: PlannerPorts; sk
         random: options.random ?? Math.random,
         ...(options.horizonDays === undefined ? {} : { horizonDays: options.horizonDays }),
         rules: () => store.listRules(),
-        candidates: (rule, reuseCutoff) => candidateGroups(store, rule, reuseCutoff),
+        targets: (rule) => ruleTargets(store, rule),
+        candidates: (rule, reuseCutoff, targets) => candidateGroups(store, rule, reuseCutoff, {
+            targets, random: options.random ?? Math.random,
+        }),
         plansForDates: (ruleId, dates) => store.plansForDates(ruleId, dates),
         captionTemplate: (id) => store.template(id),
+        deviceLimits: (deviceUdid) => store.deviceLimits(deviceUdid),
+        deviceLoad: (deviceUdid, dates) => store.deviceLoad(deviceUdid, dates),
         async createPost(post: PlannedPost) {
-            const pluginData = await devicePluginData(post.rule.deviceUdid);
+            // The plugin is the network's, not always TikTok's: a creator rule
+            // fans one item out over four different apps on the same handset.
+            const task = taskForNetwork(post.target.network, options.plugins);
+            const pluginData = await devicePluginData(post.rule.deviceUdid, task.pluginId);
             if (!pluginData) {
                 skipped.push(`${post.rule.id}: device ${post.rule.deviceUdid} is not registered or is disabled`);
                 return null;
@@ -128,13 +216,13 @@ export function dripPorts(options: DripRunnerOptions): { ports: PlannerPorts; sk
                 const schedule = await scheduler.createTask({
                     deviceUdid: post.rule.deviceUdid,
                     task: {
-                        pluginId: TIKTOK_PLUGIN_ID, taskType: 'post', taskVersion: 1,
-                        payload: {
-                            media, format: post.format, destination: post.rule.destination,
-                            account: post.rule.account,
+                        ...task,
+                        payload: postPayloadFor({
+                            network: post.target.network, media, format: post.format,
+                            destination: post.rule.destination, account: post.target.handle,
                             ...(cover === undefined ? {} : { cover }),
                             ...(post.caption ? { caption: post.caption } : {}),
-                        },
+                        }),
                     },
                     // Always `once`. A recurring publish is what the plugin makes
                     // you confirm; the drip queue plans discrete posts instead.
@@ -151,8 +239,10 @@ export function dripPorts(options: DripRunnerOptions): { ports: PlannerPorts; sk
             for (const item of post.items) {
                 await store.insertPlan({
                     ruleId: post.rule.id, date: post.date, scheduleId, itemId: item.id, plannedFor: post.runAt,
+                    network: post.target.network, account: post.target.handle,
                 });
             }
+            await recordAssembledSet(store, post, scheduleId);
         },
         async markRulePlanned(ruleId, date) {
             await store.updateRule(ruleId, { lastPlannedDate: date });
@@ -178,8 +268,29 @@ export function dripPorts(options: DripRunnerOptions): { ports: PlannerPorts; sk
  */
 export async function reconcileUsage(store: ContentStore, now = new Date()): Promise<number> {
     const plans = await store.succeededUnmarkedPlans();
+    const devices = new Map<string, string | null>();
     let credited = 0;
-    for (const plan of plans) if (await store.markPlanUsed(plan.id, plan.itemId, now)) credited += 1;
+    for (const plan of plans) {
+        // The handle is on the plan row from this release onward; a row written
+        // before it has none, and falls back to the rule's own account.
+        let handle = plan.account;
+        let deviceUdid = devices.get(plan.ruleId) ?? null;
+        if (!handle || !deviceUdid) {
+            // `rule` may be absent on a hand-built store in a test; the plan is
+            // still closed out, it just carries no per-account row.
+            const rule = await store.rule?.(plan.ruleId).catch(() => null) ?? null;
+            handle = handle ?? rule?.account ?? null;
+            deviceUdid = rule?.deviceUdid ?? null;
+            devices.set(plan.ruleId, deviceUdid);
+        }
+        const use = handle
+            ? {
+                network: (plan.network ?? 'tiktok') as PostNetwork, handle,
+                deviceUdid, scheduleId: plan.scheduleId,
+            }
+            : undefined;
+        if (await store.markPlanUsed(plan.id, plan.itemId, now, use)) credited += 1;
+    }
     return credited;
 }
 

@@ -108,6 +108,39 @@ export const NETWORKS = {
             },
         },
     },
+    /**
+     * A Short is one vertical clip and nothing else — no photo surface, no
+     * carousel. The absence matters: a cross-post rule that fans a slideshow out
+     * across a creator's accounts has to be told YouTube will not take it, and an
+     * empty entry here is how it finds that out.
+     */
+    youtube: {
+        label: 'YouTube',
+        formats: {
+            video: {
+                mediaKind: 'video', minFiles: 1, maxFiles: 1, mimeTypes: VIDEO_MIME_TYPES,
+                recommendedRatios: [RATIO_9_16],
+            },
+        },
+    },
+    /** Threads takes one video, one image, or up to twenty images as a carousel. */
+    threads: {
+        label: 'Threads',
+        formats: {
+            video: {
+                mediaKind: 'video', minFiles: 1, maxFiles: 1, mimeTypes: VIDEO_MIME_TYPES,
+                recommendedRatios: [RATIO_9_16],
+            },
+            photo: {
+                mediaKind: 'image', minFiles: 1, maxFiles: 1, mimeTypes: IMAGE_MIME_TYPES,
+                recommendedRatios: [RATIO_4_5],
+            },
+            slideshow: {
+                mediaKind: 'image', minFiles: 2, maxFiles: 20, mimeTypes: IMAGE_MIME_TYPES,
+                recommendedRatios: [RATIO_4_5],
+            },
+        },
+    },
 } as const satisfies Record<string, NetworkFormats>;
 
 export type Network = keyof typeof NETWORKS;
@@ -124,7 +157,10 @@ export function postFormat(value: unknown): PostFormat {
 }
 
 export function limitsFor(network: Network, format: PostFormat): FormatLimits | undefined {
-    return NETWORKS[network].formats[format];
+    // The literal table narrows each network's `formats` to exactly the keys it
+    // declares — YouTube has no `photo` at all — so the lookup is widened here
+    // rather than forcing every network to carry entries it does not support.
+    return (NETWORKS[network].formats as Partial<Record<PostFormat, FormatLimits>>)[format];
 }
 
 function normalizeMimeType(mimeType: string): string {

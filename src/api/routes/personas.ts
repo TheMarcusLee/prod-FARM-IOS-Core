@@ -22,10 +22,22 @@ import {
 } from '../../persona/model.js';
 import { readMemory, summariseMemory, type MemorySummary } from '../../persona/memory.js';
 import { PERSONA_PRESETS, applyPreset, findPreset } from '../../persona/presets.js';
+import { NETWORK_IDS, networkLabel, type NetworkId } from '../../content/networks.js';
+import { parseCreatorAccountInput, parseCreatorInput } from '../../content/validate.js';
+import type { ContentStore } from '../../content/store.js';
+import type { CreatorAccountRow, CreatorRow } from '../../database/schema.js';
 
 export interface PersonaRouteOptions {
     /** Overrides SCHEDULER_DATA_DIR; tests point it at a temporary directory. */
     dataDirectory?: string;
+    /**
+     * The content store, if this process has a database. Creators live in
+     * Postgres while personas live on disk, so the Accounts page needs both and
+     * has to keep working with only one of them.
+     */
+    store?: () => ContentStore | null;
+    /** The phones a creator can be pinned to, for the picker. */
+    loadDevices?: () => Promise<ReadonlyArray<{ udid: string; name: string }>>;
 }
 
 /* ---- Reading the form -------------------------------------------------- */
@@ -281,8 +293,139 @@ function badHandle(reply: FastifyReply, error: unknown): FastifyReply {
         .send(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
 }
 
+/* ---- creators ---------------------------------------------------------- */
+
+/**
+ * A creator is a person and their phone: three TikToks, three Instagrams and
+ * three YouTube channels signed in on one handset. The per-device handle list is
+ * untouched and still what the phone's account switcher reads — these rows are
+ * the addition that says which network a handle is on and whose it is, which is
+ * what a cross-posting drip rule needs to know.
+ */
+export function renderCreators(
+    creators: ReadonlyArray<CreatorRow & { accounts: CreatorAccountRow[] }>,
+    devices: ReadonlyArray<{ udid: string; name: string }>,
+    note?: string,
+): string {
+    const deviceOptions = devices.map(({ udid, name }) =>
+        `<option value="${escapeHtml(udid)}">${escapeHtml(name)}</option>`).join('');
+    const networkOptions = NETWORK_IDS.map((network) =>
+        `<option value="${network}">${escapeHtml(networkLabel(network))}</option>`).join('');
+    const byUdid = new Map(devices.map(({ udid, name }) => [udid, name]));
+    const cards = creators.map((creator) => {
+        const grouped = NETWORK_IDS.map((network) => {
+            const handles = creator.accounts.filter((account) => account.network === network);
+            if (!handles.length) return '';
+            return `<div><span>${escapeHtml(networkLabel(network))}</span><span class="bl-chip-row">`
+                + handles.map((account) => `<span class="bl-chip bl-chip-sm${account.enabled ? '' : ' bl-faint'}">`
+                    + `${escapeHtml(account.handle)}`
+                    + `<button type="button" class="bl-linkish" hx-delete="/accounts/creators/accounts/${escapeHtml(account.id)}"`
+                    + ' hx-target="#creators" hx-swap="outerHTML" aria-label="Remove this account">×</button></span>').join('')
+                + '</span></div>';
+        }).join('');
+        return `<section class="bl-panel"><div class="bl-panel-head">${escapeHtml(creator.name)}
+<span class="bl-spacer"></span>
+<span class="bl-chip bl-chip-sm">${escapeHtml(byUdid.get(creator.deviceUdid) ?? creator.deviceUdid)}</span>
+<button type="button" class="bl-btn bl-btn-sm" hx-delete="/accounts/creators/${escapeHtml(creator.id)}"
+ hx-confirm="Delete this creator? Their accounts go with them; rules pointing at them stop fanning out."
+ hx-target="#creators" hx-swap="outerHTML">Delete</button></div>
+<div class="bl-panel-body">
+${creator.notes ? `<p class="bl-muted">${escapeHtml(creator.notes)}</p>` : ''}
+<div class="bl-rows">${grouped || '<div><span class="bl-faint">No accounts yet.</span></div>'}</div>
+<form class="bl-inline-form" hx-post="/accounts/creators/${escapeHtml(creator.id)}/accounts"
+ hx-target="#creators" hx-swap="outerHTML">
+<label class="bl-field"><span>Network</span><select class="bl-select" name="network">${networkOptions}</select></label>
+<label class="bl-field"><span>Handle</span><input class="bl-input" type="text" name="handle" placeholder="@handle" required></label>
+<button class="bl-btn" type="submit">Add account</button></form>
+</div></section>`;
+    }).join('');
+    return `<div class="bl-page" id="creators">
+<h2 class="bl-persona-heading">Creators</h2>
+<p class="bl-muted">A creator is one person and one phone. Group their accounts here and a drip rule
+can post each item to every one of them, staggered so no two copies land in the same minute.</p>
+${note ? `<p class="bl-muted bl-persona-bad" role="status">${escapeHtml(note)}</p>` : ''}
+<section class="bl-panel"><div class="bl-panel-head">New creator</div><div class="bl-panel-body">
+<form class="bl-inline-form" hx-post="/accounts/creators" hx-target="#creators" hx-swap="outerHTML">
+<label class="bl-field"><span>Name</span><input class="bl-input" type="text" name="name" placeholder="Mia" required></label>
+<label class="bl-field"><span>Phone</span><select class="bl-select" name="deviceUdid" required>${deviceOptions}</select></label>
+<label class="bl-field"><span>Notes</span><input class="bl-input" type="text" name="notes"></label>
+<button class="bl-btn bl-btn-primary" type="submit">Create</button></form>
+</div></section>
+${cards}</div>`;
+}
+
+/** The placeholder the Accounts page drops in; it loads itself, like the persona panels. */
+export function renderCreatorsSection(): string {
+    return '<div id="creators" hx-get="/accounts/creators" hx-trigger="load" hx-swap="outerHTML">'
+        + '<div class="bl-page"><p class="bl-faint">Reading creators…</p></div></div>';
+}
+
 export function registerPersonaRoutes(app: FastifyInstance, options: PersonaRouteOptions = {}): void {
     const directory = options.dataDirectory;
+    const store = options.store ?? (() => null);
+    const loadDevices = options.loadDevices ?? (async () => []);
+
+    /**
+     * The creators fragment, rendered from scratch after every change. It is one
+     * small list; re-reading it is cheaper than keeping a client-side copy in
+     * step, and it means a rejected form comes back as the list with the reason
+     * on it rather than as a status code htmx will not swap.
+     */
+    const creatorsFragment = async (note?: string): Promise<string> => {
+        const active = store();
+        if (!active) {
+            return '<div id="creators" class="bl-page"><p class="bl-muted">Creators need a database connection.</p></div>';
+        }
+        const [rows, accounts, devices] = await Promise.all([
+            active.listCreators(), active.listCreatorAccounts(), loadDevices().catch(() => []),
+        ]);
+        return renderCreators(
+            rows.map((creator) => ({
+                ...creator, accounts: accounts.filter(({ creatorId }) => creatorId === creator.id),
+            })),
+            devices,
+            note,
+        );
+    };
+    const sendCreators = async (reply: FastifyReply, note?: string): Promise<FastifyReply> =>
+        reply.type('text/html').send(await creatorsFragment(note));
+
+    app.get('/accounts/creators', async (_request, reply) => sendCreators(reply));
+
+    app.post<{ Body: FormBody }>('/accounts/creators', async (request, reply) => {
+        const active = store();
+        if (!active) return sendCreators(reply);
+        try {
+            await active.createCreator(parseCreatorInput(request.body ?? {}));
+            return await sendCreators(reply);
+        } catch (error) {
+            return sendCreators(reply, error instanceof Error ? error.message : String(error));
+        }
+    });
+
+    app.delete<{ Params: { id: string } }>('/accounts/creators/:id', async (request, reply) => {
+        const active = store();
+        if (active) await active.deleteCreator(request.params.id).catch(() => false);
+        return sendCreators(reply);
+    });
+
+    app.post<{ Params: { id: string }; Body: FormBody }>('/accounts/creators/:id/accounts', async (request, reply) => {
+        const active = store();
+        if (!active) return sendCreators(reply);
+        try {
+            const input = parseCreatorAccountInput(request.body ?? {});
+            await active.createCreatorAccount({ creatorId: request.params.id, ...input });
+            return await sendCreators(reply);
+        } catch (error) {
+            return sendCreators(reply, error instanceof Error ? error.message : String(error));
+        }
+    });
+
+    app.delete<{ Params: { id: string } }>('/accounts/creators/accounts/:id', async (request, reply) => {
+        const active = store();
+        if (active) await active.deleteCreatorAccount(request.params.id).catch(() => false);
+        return sendCreators(reply);
+    });
 
     app.get<{ Params: { handle: string }; Querystring: { preset?: string } }>('/accounts/:handle/persona', async (request, reply) => {
         try {

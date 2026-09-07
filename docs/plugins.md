@@ -253,3 +253,25 @@ carousels — [instagram.md](instagram.md)), and `com.farm.runbook`
 the contract above; read `src/instagram-plugin.ts` for a worked example of a
 two-task plugin with per-platform routines, its own device panel and its own
 routes.
+
+## Posting for the drip queue
+
+The drip planner does not know about plugins; it knows about **networks**. One
+module, `src/content/networks.ts`, maps each of `tiktok`, `instagram`, `youtube`
+and `threads` to the plugin and task that posts to it, and builds the payload
+that plugin's own `post` validator accepts — the four disagree about shape, and
+pretending they do not is how a cross-post silently posts the wrong thing:
+
+| Network | Plugin | Task | Payload |
+| --- | --- | --- | --- |
+| `tiktok` | `com.git-agni.tiktok` | `post` v1 | `media`, `format`, `cover?`, `caption?` |
+| `instagram` | `com.backline.instagram` | `post` v1 | `media`, `format` (reel/photo/carousel), `caption?` |
+| `youtube` | `com.backline.youtube` | `post` v1 | `media`, `title`, `caption?` |
+| `threads` | `com.backline.threads` | `post` v1 | `media`, `text?` |
+
+`taskForNetwork()` prefers the task the process actually registered over that
+table, so a farm shipping a replacement plugin at a higher version gets the
+version it registered. A plugin that wants to be a drip target adds a row to
+`NETWORKS` in `src/content/formats.ts` (what it will take) and one to
+`NETWORK_TASKS` here (how to ask for it). See
+[content-queue.md](content-queue.md#creators-and-cross-posting).

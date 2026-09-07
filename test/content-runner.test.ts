@@ -14,6 +14,7 @@ function plan(overrides: Partial<DripPlanRow> = {}): DripPlanRow {
     return {
         id: 'plan-1', ruleId: 'rule-1', date: '2026-03-10', scheduleId: 'schedule-1', itemId: 'item-1',
         plannedFor: new Date('2026-03-10T12:00:00Z'), usedMarkedAt: null,
+        network: 'tiktok', account: '@handle',
         createdAt: new Date('2026-03-10T08:00:00Z'), ...overrides,
     };
 }
@@ -24,6 +25,8 @@ function rule(overrides: Partial<DripRuleRow> = {}): DripRuleRow {
         windowStart: '09:00', windowEnd: '21:00', timezone: 'UTC', minGapMinutes: 120,
         destination: 'draft', source: 'tag', format: 'any', setId: null, tag: 'fitness', captionTemplateId: null,
         pickOrder: 'random', avoidReuseDays: 30, lastPlannedDate: null,
+        network: 'tiktok', creatorId: null, networks: [], crossPostGapMinutes: 20, slideSize: 5,
+        networkCaptions: {},
         createdAt: new Date('2026-01-01T00:00:00Z'), updatedAt: new Date('2026-01-01T00:00:00Z'),
         ...overrides,
     };
@@ -120,9 +123,17 @@ test('only the fields that decide when and what a rule posts trigger a re-plan',
         { postsPerDay: 4 }, { minGapMinutes: 30 }, { tag: 'cooking' }, { source: 'set' as const },
         { destination: 'publish' as const }, { pickOrder: 'fifo' as const }, { deviceUdid: 'device-2' },
         { account: '@other' }, { avoidReuseDays: 1 }, { captionTemplateId: 'tpl' }, { setId: 'set-1' },
+        { network: 'instagram' as const }, { creatorId: 'creator-1' }, { crossPostGapMinutes: 5 },
+        { slideSize: 9 },
     ]) {
         assert.equal(affectsPlanning(before, rule(patch)), true, JSON.stringify(patch));
     }
+    // The two that are not scalars: a fresh array or object with the same
+    // contents must not look like an edit, and a real change must.
+    assert.equal(affectsPlanning(before, rule({ networks: [] })), false);
+    assert.equal(affectsPlanning(before, rule({ networks: ['instagram'] })), true);
+    assert.equal(affectsPlanning(before, rule({ networkCaptions: {} })), false);
+    assert.equal(affectsPlanning(before, rule({ networkCaptions: { threads: 'tpl' } })), true);
 });
 
 test('the repeated hour of a fall-back resolves to its first occurrence', () => {

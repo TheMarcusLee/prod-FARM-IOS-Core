@@ -15,6 +15,10 @@ posts. It does three things:
    09:00 and 21:00 local, at least two hours apart, from the `fitness` tag". A
    planner turns that into ordinary one-off schedules through the existing
    scheduler, so everything the Schedule page can do to a schedule still works.
+4. **Cross-post** — a rule can name a **creator** instead of one account, and
+   every item it picks goes to each of that creator's accounts across TikTok,
+   Instagram, YouTube and Threads. See
+   [Creators and cross-posting](#creators-and-cross-posting).
 
 ## Requirements
 
@@ -127,11 +131,15 @@ without saving it.
 A post is one of three things, and every part of the pipeline calls them by the
 same three names:
 
-| Format | What it carries | TikTok | Instagram |
-| --- | --- | --- | --- |
-| `video` | one clip | 1 | 1 |
-| `photo` | one image | 1 | 1 |
-| `slideshow` | images, **in order** | 2–35 | 2–20 (carousel) |
+| Format | What it carries | TikTok | Instagram | YouTube | Threads |
+| --- | --- | --- | --- | --- | --- |
+| `video` | one clip | 1–3 | 1 | 1 (a Short) | 1 |
+| `photo` | one image | 1 | 1 | — | 1 |
+| `slideshow` | images, **in order** | 2–35 | 2–20 (carousel) | — | 2–20 |
+
+A dash is a surface the network does not have. It is not a rounding error the
+planner may ignore: a slideshow fanned out to a creator's YouTube channel is
+**refused for YouTube**, by name, in the plan report.
 
 Images must be `jpeg`, `png`, `webp` or `heic`/`heif`. GIF and AVIF are refused
 rather than silently posted as a still. Video stays as permissive as it always
@@ -195,6 +203,137 @@ Drip rules gain a **format** filter — `any`, `video`, `photo` or `slideshow` �
 which narrows the pool before anything is planned. `any` takes whatever the pool
 holds.
 
+
+## Creators and cross-posting
+
+A creator is one person and one phone: three TikToks, three Instagrams and three
+YouTube channels signed in on the same handset. Before this, a drip rule knew
+one handle and one network (TikTok), so posting the same clip to nine accounts
+meant nine rules and nine chances to get the window wrong.
+
+Two tables carry it:
+
+- `creators` — `id`, `name`, `device_udid`, `notes`. Devices are `devices.json`,
+  not Postgres, so `device_udid` is a plain string checked against the registry
+  at plan time, exactly as `drip_rules.device_udid` always was.
+- `creator_accounts` — `id`, `creator_id`, `network`, `handle`, `enabled`.
+
+**The per-device handle list still works.** `devices.json` keeps the handles the
+phone's account switcher reads, and those stay TikTok accounts with no creator.
+Creators are an addition, not a migration: nothing has to be moved for an
+existing farm to keep planning exactly what it planned yesterday.
+
+Manage them on **Accounts**: name a creator, pick their phone, then add handles
+one network at a time. Disabling an account leaves the row (and its history) in
+place and stops posting to it.
+
+### One rule, several accounts
+
+A rule now carries either:
+
+- `account` + `network` — one handle, as before. `network` defaults to `tiktok`,
+  which is what every rule written before this release was; or
+- `creator_id` — the rule posts each chosen item to **every enabled account** of
+  that creator, optionally narrowed by `networks` (leave it empty for all of
+  them).
+
+The copies are staggered by `cross_post_gap_minutes` (default 20) so no two land
+in the same minute — nine simultaneous uploads from one handset is a pattern, not
+a schedule. A copy staggered past the end of the rule's window is reported rather
+than posted late.
+
+Each copy is validated against **its own** network's row in
+`src/content/formats.ts` before it is created. A 35-slide TikTok slideshow going
+out to a creator who is also on Instagram is planned for TikTok and refused for
+Instagram, with the reason in `skipped`:
+
+```
+rule-1: @mia.ig on Instagram did not get this slideshow — Instagram takes 2–20 files in a slideshow, not 35
+```
+
+It is never silently truncated to twenty: half a slideshow is a different post.
+
+Every planned post names **its network's own plugin**, not always TikTok's —
+`src/content/networks.ts` is the single map, and it prefers the task the process
+actually registered over its own static table:
+
+| Network | Plugin | Task | Payload shape |
+| --- | --- | --- | --- |
+| `tiktok` | `com.git-agni.tiktok` | `post` v1 | `media`, `format`, `cover?`, `caption?` |
+| `instagram` | `com.backline.instagram` | `post` v1 | `media`, `format` as reel/photo/carousel, `caption?` |
+| `youtube` | `com.backline.youtube` | `post` v1 | `media`, `title`, `caption?` (the description) |
+| `threads` | `com.backline.threads` | `post` v1 | `media`, `text?` |
+
+Captions can differ per network — `drip_rules.network_captions` is
+`{ "instagram": "<caption template id>", … }`, and a network with no entry uses
+the rule's own template. It is a JSON column rather than a table because it is
+only ever read and written whole, with the rule.
+
+### Reuse is per account
+
+`content_uses` records **every** post: `(item_id, network, handle, device_udid,
+schedule_id, execution_id, used_at)`. "Never reuse inside N days" is now a
+question about *this account* — the same clip on a creator's second TikTok is a
+different feed, and refusing it because the first account had it was the bug this
+table exists to fix.
+
+`content_items.used_count` and `last_used_at` are unchanged and still what the
+library grid shows: they are the **global** counters, "this clip has gone out
+eleven times", which is a different and still useful question.
+
+Nothing is back-filled. There was no per-account history to convert, and
+inventing rows from `last_used_at` would credit a use to whichever account
+happens to be first in a rule — a lie the reuse window would then act on. An item
+posted before this release is therefore reusable once per account, and the table
+is true from that point on.
+
+Both are written under the same claim in `markPlanUsed`, so the reuse window and
+the counter can never disagree about whether a post happened.
+
+### Auto-assembled slideshows
+
+A rule with `format: 'slideshow'` over a **tag** no longer needs a hand-built
+set. It assembles one: `slide_size` (2–35, default 5) unused images from the tag,
+in the rule's `pick_order`:
+
+| Order | What it means |
+| --- | --- |
+| `random` | shuffled, from the injected generator |
+| `fifo` | oldest first — never-used media, then the least recently used |
+| `filename` | the uploaded file's own name, compared naturally, so `slide-2` sorts before `slide-10` |
+
+`filename` is what makes a numbered set post in the order it was numbered. A
+short final chunk is left in the library rather than posted: a rule that asks for
+five slides and posts two has made a different post from the one it describes.
+
+Each assembled slideshow is filed as a real `content_sets` row of kind
+`slideshow`, named from the rule's tag, the date and the schedule's short id, so
+an operator can see what actually went out on Tuesday. A creator rule assembles
+**one** slideshow and cross-posts it, not one per account.
+
+### What a phone may do in a day
+
+Rules cannot see each other, so six rules of two posts a day on one handset is
+twelve posts through four apps on one IP. `device_limits` is the ceiling:
+
+| Column | Default | Meaning |
+| --- | --- | --- |
+| `device_udid` | — | The phone. Devices live in `devices.json`, so this is a plain string. |
+| `max_posts_per_day` | `8` | Across every account and every rule on that phone. |
+| `min_minutes_between_posts` | `30` | Across every account and every rule on that phone. |
+
+A phone with no row is held to those defaults. The planner reads the row once per
+run, counts what is already on the calendar for the dates it is planning
+(`drip_plans` joined to `drip_rules` by device — every rule, not just the one
+being planned), and refuses anything over the line, saying so:
+
+```
+rule-1: dropped a post for @mia — 2026-03-10 is already at this phone's 8 posts a day
+rule-1: dropped a post for @mia — 14:20 UTC is inside this phone's 30-minute gap
+```
+
+Edit them in the **Device limits** card on the Content page.
+
 ## The drip planner
 
 ### Who ticks, and the lock
@@ -219,15 +358,19 @@ and tomorrow **in the rule's own timezone**:
 
 - skip the date if `drip_plans` already has rows for it — a re-run plans nothing
   twice, so the hourly tick and a manual run converge;
-- pick `posts_per_day` items that have not been used within `avoid_reuse_days`,
-  ordered `random` or `fifo` (never-used first, then least recently used);
+- pick `posts_per_day` items **none of this rule's target accounts** has used
+  within `avoid_reuse_days`, ordered `random`, `fifo` (never-used first, then
+  least recently used) or `filename`;
 - choose random times inside the window, at least `min_gap_minutes` apart, never
   in the past — times are drawn, sorted, and spread across whatever slack the
   window has left once every mandatory gap is reserved, so a tight window plans
   fewer posts rather than illegal ones;
-- render the caption and create a `once` schedule via the normal
-  `repository.createTask` with the TikTok `post` payload;
-- record each `(rule, date, schedule, item)` in `drip_plans`.
+- render the caption — the network's own template when the rule has one — and
+  create a `once` schedule via the normal `repository.createTask`, with the
+  **network's** `post` payload, for every account the rule targets, staggered by
+  `cross_post_gap_minutes` and checked against each network's format table;
+- refuse anything over the phone's `device_limits`, and say what was dropped;
+- record each `(rule, date, schedule, item, network, account)` in `drip_plans`.
 
 A set marked `slideshow` is planned as one post carrying every slide in order;
 any other set is a pool of individual posts. Each planned post is stamped with
@@ -240,7 +383,8 @@ Disabling a rule cancels the schedules it planned that have not started yet.
 /api/drip/rules/:id` compares the row before and after; if any of `deviceUdid`,
 `account`, `postsPerDay`, `windowStart`, `windowEnd`, `timezone`,
 `minGapMinutes`, `destination`, `source`, `format`, `setId`, `tag`,
-`captionTemplateId`, `pickOrder` or `avoidReuseDays` changed, the rule's unrun posts are cancelled
+`captionTemplateId`, `pickOrder`, `avoidReuseDays`, `network`, `creatorId`,
+`networks`, `networkCaptions`, `crossPostGapMinutes` or `slideSize` changed, the rule's unrun posts are cancelled
 and their `drip_plans` rows deleted, so the next pass rebuilds today's queue
 from the new settings. The response carries `replanned: { cancelled, released }`.
 Editing anything else (the `enabled` flag aside) leaves the queue alone. A post
@@ -265,6 +409,14 @@ is where an unattended farm says what it could not do. Lines to watch for:
   a phone that is gone.
 - `<rule>: "<zone>" is not a time zone this host knows` — a restored dump or a
   hand-edited row; the other rules still plan.
+- `<rule>: no enabled account to post to` — a creator rule whose creator has no
+  enabled account left, or whose `networks` filter matches none of them.
+- `<rule>: @h on Instagram did not get this slideshow — …` — the copy was too
+  long, or that network has no such surface. The other copies still went out.
+- `<rule>: @h on YouTube fell outside the window once staggered by 20 minutes` —
+  the cross-post gap pushed the last copy past the window's end.
+- `<rule>: dropped a post for @h — … posts a day` / `… minute gap` — the phone's
+  `device_limits` refused it, counting every rule on that handset.
 - `Another planning run is already in progress` — another process held the
   advisory lock. Nothing is wrong; the run that held it did the work.
 
@@ -298,6 +450,9 @@ worker.
 | `GET/POST /api/content/sets`, `GET/PATCH/DELETE /api/content/sets/:id`, `PUT /api/content/sets/:id/items` | Sets, their kind and cover, and membership in order. |
 | `GET/POST /api/content/templates`, `DELETE …/:id`, `POST …/preview` | Caption templates. |
 | `GET/POST /api/drip/rules`, `PATCH/DELETE /api/drip/rules/:id` | Drip rules. |
+| `GET/POST /api/creators`, `PATCH/DELETE /api/creators/:id` | Creators and their phone. |
+| `POST /api/creators/:id/accounts`, `PATCH/DELETE /api/creator-accounts/:id` | Accounts on a creator, by network. |
+| `GET /api/device-limits`, `PUT /api/device-limits/:udid` | What one phone may do in a day. |
 | `GET /api/drip/plans`, `POST /api/drip/plan` | What is planned, and plan now. |
 
 Every request body is read through an explicit whitelist; anything not named is
@@ -306,8 +461,16 @@ dropped rather than persisted.
 ## Tables
 
 `content_items`, `content_sets`, `content_set_items`, `caption_templates`,
-`drip_rules`, `drip_plans` — all in the `scheduler` Postgres schema, defined in
+`drip_rules`, `drip_plans`, `creators`, `creator_accounts`, `content_uses`,
+`device_limits` — all in the `scheduler` Postgres schema, defined in
 `src/database/schema-content.ts` and created by `drizzle/0002_content.sql`.
 `drizzle/0005_post-formats.sql` adds `content_sets.kind`,
 `content_sets.cover_index` and `drip_rules.format`, and marks the sets that were
 implicitly slideshows before it.
+
+`drizzle/0006_creators-and-cross-posting.sql` adds the four new tables, the
+`network` / `account` columns on `drip_plans`, and `network`, `creator_id`,
+`networks`, `cross_post_gap_minutes`, `slide_size` and `network_captions` on
+`drip_rules`. It back-fills **nothing** — every added column defaults to the
+behaviour that was already there, so an upgraded farm keeps planning the same
+TikTok posts until an operator points a rule at a creator.
