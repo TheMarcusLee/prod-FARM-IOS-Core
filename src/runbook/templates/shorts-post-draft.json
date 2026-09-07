@@ -1,0 +1,282 @@
+{
+  "id": "rb-starter-shorts-post-draft",
+  "name": "Shorts post to draft",
+  "description": "The same as posting a Short, up to the details screen \u2014 then it keeps the clip as a draft instead.",
+  "platform": "android",
+  "appId": "com.google.android.youtube",
+  "createdFor": {
+    "udid": "starter-template",
+    "screen": {
+      "width": 1080,
+      "height": 2400,
+      "scale": 1
+    }
+  },
+  "template": "shorts-post-draft",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.google.android.youtube"
+    },
+    {
+      "type": "wait",
+      "ms": 4000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.5,
+          "y": 0.965
+        },
+        "id": "create_tab",
+        "text": "Create"
+      },
+      "seen": [
+        "Home",
+        "Shorts",
+        "Subscriptions",
+        "You",
+        "Create",
+        "Add"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 4000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.5,
+          "y": 0.62
+        },
+        "id": "upload_video",
+        "text": "Upload a video"
+      },
+      "seen": [
+        "Create a Short",
+        "Upload a video",
+        "Go live",
+        "Create a post",
+        "Add"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 4000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.16,
+          "y": 0.28
+        }
+      },
+      "seen": [
+        "Recents",
+        "Camera roll",
+        "Videos",
+        "Photos",
+        "Gallery",
+        "Next"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 2500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.86,
+          "y": 0.94
+        },
+        "id": "btn_next",
+        "text": "Next"
+      },
+      "seen": [
+        "Next",
+        "Trim",
+        "Sound",
+        "Text",
+        "Filters"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 4000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.86,
+          "y": 0.94
+        },
+        "id": "btn_next",
+        "text": "Next"
+      },
+      "seen": [
+        "Next",
+        "Trim",
+        "Sound",
+        "Text",
+        "Filters"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 4000
+    },
+    {
+      "type": "waitForText",
+      "text": "Add a title",
+      "timeoutMs": 60000,
+      "seen": [
+        "Add a title",
+        "Add description",
+        "Visibility",
+        "Public",
+        "Upload Short",
+        "Save draft",
+        "Is this video made for kids?",
+        "No, it's not made for kids"
+      ],
+      "guess": true
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.5,
+          "y": 0.16
+        },
+        "id": "title_edit_text",
+        "text": "Add a title"
+      },
+      "seen": [
+        "Add a title",
+        "Add description",
+        "Visibility",
+        "Public",
+        "Upload Short",
+        "Save draft",
+        "Is this video made for kids?",
+        "No, it's not made for kids"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    },
+    {
+      "type": "type",
+      "text": "{{title}}"
+    },
+    {
+      "type": "key",
+      "key": "back"
+    },
+    {
+      "type": "wait",
+      "ms": 1500
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.5,
+          "y": 0.58
+        },
+        "text": "made for kids"
+      },
+      "seen": [
+        "Add a title",
+        "Add description",
+        "Visibility",
+        "Public",
+        "Upload Short",
+        "Save draft",
+        "Is this video made for kids?",
+        "No, it's not made for kids"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 2000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.5,
+          "y": 0.66
+        },
+        "text": "No, it's not made for kids"
+      },
+      "seen": [
+        "Yes, it's made for kids",
+        "No, it's not made for kids"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 2000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.22,
+          "y": 0.95
+        },
+        "id": "save_draft",
+        "text": "Save draft"
+      },
+      "seen": [
+        "Add a title",
+        "Add description",
+        "Visibility",
+        "Public",
+        "Upload Short",
+        "Save draft",
+        "Is this video made for kids?",
+        "No, it's not made for kids"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 20000
+    },
+    {
+      "type": "screenshot",
+      "label": "after-the-short"
+    },
+    {
+      "type": "key",
+      "key": "home"
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "title": "new one today"
+  }
+}

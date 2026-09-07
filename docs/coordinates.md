@@ -15,6 +15,15 @@ A profile is a full set of tap targets for one screen geometry, in
 - `passcodeKeypad` — column x's and row y's for auto‑unlock
 - `tiktok` — every tap/swipe the built‑in TikTok plugin uses (tabs, create,
   media picker grid, caption field, like/save, feed swipe, …)
+- `youtube` — the same for the built‑in YouTube Shorts plugin (create, upload,
+  the newest picker cell, Next, title/description, visibility, the audience
+  answer, Upload Short / Save draft, like/subscribe/comment, feed swipe).
+  **Every value in the shipped `iphone8` block is unverified** — it was reasoned
+  from the 375 × 667 layout, never measured on a phone, and it is the first thing
+  to check when an iPhone Shorts run misses. Correcting it means editing
+  `src/devices/coordinates.ts` and re-running `npm run check`; unlike the TikTok
+  points, the YouTube ones are not yet re‑pointable per device from the
+  dashboard (`CALIBRATABLE_POINTS` still covers only the TikTok block).
 
 ```ts
 export const DEVICE_COORDINATES = {

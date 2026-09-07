@@ -217,6 +217,23 @@ Plugins are **not sandboxed** — a plugin has the full filesystem, network,
 process, and device access of the service account. Only install reviewed,
 exactly‑pinned packages.
 
+## The built-in plugins
+
+Three plugins are registered without any configuration, in `defaultPlugins()`
+(`src/api/server.ts`) and the worker's `main()`:
+
+| Plugin | id | Tasks |
+|---|---|---|
+| TikTok automation | `com.git-agni.tiktok` | `doomscroll@1`, `post@1` |
+| YouTube Shorts | `com.backline.youtube` | `post@1`, `warmup@1` — see [youtube.md](youtube.md) |
+| Runbooks | `com.farm.runbook` | `run@1` |
+
+The Control Center's **Schedule a post** and **Warm up** dialogs are built from
+this list rather than from a hard-coded one: `GET /api/plugins` reports every
+registered plugin with its tasks, and any plugin shipping a `post` task (or a
+warm-up task — TikTok calls its own `doomscroll`) gets a row in the network
+picker automatically. A third-party plugin needs no dashboard change to appear.
+
 ## Trying the reference plugin
 
 `src/example-plugin.ts` is a complete minimal plugin (`open-app@1`). To load it
