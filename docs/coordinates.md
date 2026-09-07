@@ -146,7 +146,25 @@ source (validated at startup, same shape) would be a reasonable contribution.
 Until then, treat new device geometries as a small PR against
 `src/devices/coordinates.ts` + `src/tiktok/coordinates.ts`.
 
+## The `threads` block — every value unverified
+
+The Threads plugin's iOS routines read a second block on the same profile,
+`threads` (`ThreadsCoordinates` in `src/devices/coordinates.ts`): the tab bar,
+the composer and its text box, the attach button and picker grid, Post, the
+draft sheet, and the like / repost / follow targets in the feed.
+
+> **Every number in the shipped `iphone8` `threads` block is a guess.** Nobody
+> has opened Threads on hardware from this repository. They are plausible
+> positions on a 375 × 667 screen and nothing more — expect to re-measure all of
+> them in the first hardware session, and do a `draft` run before a `publish`
+> one. The Android Threads routines never read these; they use the accessibility
+> tree, which is why Android is the cheaper place to start.
+
+The `threads` points are **not** in `CALIBRATABLE_POINTS`, so they cannot yet be
+re-pointed per device from the dashboard's Touch points editor — correct them in
+the profile.
+
 A plugin **cannot** currently register its own coordinate profiles; the
-`tiktok` block is specific to the built‑in plugin. A third‑party plugin that
+`tiktok` and `threads` blocks are specific to the built‑in plugins. A third‑party plugin that
 needs screen‑relative taps should ship its own coordinate map inside the
 package and key it on `device.productType` or its own `pluginData`.

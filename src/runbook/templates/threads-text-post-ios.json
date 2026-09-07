@@ -1,0 +1,154 @@
+{
+  "id": "rb-starter-threads-text-post-ios",
+  "name": "Threads text post (iPhone)",
+  "description": "Posts a text-only thread with wording you fill in each run.",
+  "platform": "ios",
+  "appId": "com.burbn.barcelona",
+  "createdFor": {
+    "udid": "starter-template-iphone8",
+    "screen": {
+      "width": 375,
+      "height": 667,
+      "scale": 2
+    }
+  },
+  "template": "threads-text-post-ios",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.burbn.barcelona"
+    },
+    {
+      "type": "wait",
+      "ms": 6000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.5,
+          "y": 0.62
+        },
+        "text": "Not now"
+      },
+      "seen": [
+        "Not now",
+        "Allow",
+        "Continue",
+        "Skip"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.699,
+          "y": 0.979
+        },
+        "text": "Create"
+      },
+      "seen": [
+        "For you",
+        "Following",
+        "Home",
+        "Search",
+        "Activity",
+        "Profile",
+        "Create",
+        "Compose"
+      ],
+      "guess": true
+    },
+    {
+      "type": "waitForText",
+      "text": "Post",
+      "timeoutMs": 30000,
+      "seen": [
+        "What's new?",
+        "Start a thread",
+        "Post",
+        "New thread",
+        "Cancel",
+        "Add to thread"
+      ],
+      "guess": true
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.5,
+          "y": 0.27
+        },
+        "text": "What's new?"
+      },
+      "seen": [
+        "What's new?",
+        "Start a thread",
+        "Post",
+        "New thread",
+        "Cancel",
+        "Add to thread"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 1200
+    },
+    {
+      "type": "type",
+      "text": "{{text}}"
+    },
+    {
+      "type": "wait",
+      "ms": 800
+    },
+    {
+      "type": "wait",
+      "ms": 1200
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.88,
+          "y": 0.945
+        },
+        "text": "Post"
+      },
+      "seen": [
+        "What's new?",
+        "Start a thread",
+        "Post",
+        "New thread",
+        "Cancel",
+        "Add to thread"
+      ],
+      "guess": true
+    },
+    {
+      "type": "waitForText",
+      "text": "Posted",
+      "timeoutMs": 120000,
+      "seen": [
+        "Posted",
+        "Your thread was posted",
+        "Posting"
+      ],
+      "guess": true
+    },
+    {
+      "type": "key",
+      "key": "home"
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "text": "morning from the workshop"
+  }
+}

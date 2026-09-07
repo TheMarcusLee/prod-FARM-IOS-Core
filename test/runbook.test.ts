@@ -900,6 +900,7 @@ const STARTER_SLUGS = [
     'warm-up-scroll', 'post-from-recents', 'save-to-drafts', 'follow-back-sweep', 'search-a-niche',
     'clear-notifications', 'switch-account', 'like-a-hashtag-feed', 'login-check', 'repost-from-feed',
     'instagram-warm-up', 'instagram-reel-post', 'instagram-carousel-post',
+    'threads-warm-up', 'threads-text-post', 'threads-photo-post',
 ] as const;
 
 test('every starter runbook validates and reads back as sentences', async () => {

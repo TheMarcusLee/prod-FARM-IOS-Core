@@ -172,6 +172,31 @@ public, until the order is right.
 - [ ] Correct `POST_SELECTORS` in `src/instagram/android/post.ts` and
       `FEED_SELECTORS` in `src/instagram/android/warmup.ts`, then update the
       table in [instagram.md](instagram.md#selectors-to-verify).
+### 1.8 Threads
+
+Do this on the same Android phone, straight after TikTok — every Threads
+selector in the tree is a `GUESS` and this is the cheapest place to correct
+them. See [threads.md](threads.md).
+
+- [ ] Threads is installed, logged in, and has been through its own cold-start
+      nudges by hand once (*Not now*, notifications, the gallery permission).
+      The routines tap those through when they see them, but never answer a
+      system dialog.
+- [ ] Run **warmup** for 2 minutes with `repostEnabled` off. *Confirm:* it lands
+      on the feed, flicks with a curved arc rather than a straight drag, taps
+      Like at most as often as the persona's budget allows, and **ends on the
+      home screen**.
+- [ ] Run **post** as a `draft` with text only. *Confirm:* the composer opens,
+      the body is typed, and leaving the composer raises the "keep draft?"
+      sheet rather than a Drafts button.
+- [ ] Repeat the draft with one image, then with three, and *confirm the
+      carousel order*: manifest file 1 must be card 1. If it is reversed, the
+      push order or the cell sort in `android/post.ts` is wrong.
+- [ ] Only then run a `publish`.
+- [ ] *Confirm:* a body with an emoji in it is refused **before** anything is
+      pushed, on the adb driver, with a message naming the character.
+- [ ] Correct every `GUESS` you touched in `POST_SELECTORS` / `FEED_SELECTORS`
+      and drop the marker.
 
 ---
 
@@ -465,6 +490,8 @@ When the session is over, correct the docs rather than remembering:
 | What TikTok's photo composer actually looks like | `POST_SELECTORS.photoTab` / `.photoMode` / `.photoTemplateSkip`, `docs/android-tiktok.md` §5, and the three unverified points in `docs/coordinates.md` |
 | Real Instagram selectors | `src/instagram/android/{post,warmup}.ts` and the table in `docs/instagram.md` |
 | Real Instagram coordinates on an iPhone | the `instagram` section of `src/devices/coordinates.ts`, and `docs/coordinates.md` |
+| Real Threads selectors | `src/threads/android/{post,warmup}.ts` and `docs/threads.md` |
+| Real Threads iOS tap targets | the `threads` block in `src/devices/coordinates.ts` and `docs/coordinates.md` |
 | The coordinate units | `docs/mobile-api.md` (`/remote/info`, `/remote/action`) and `docs/mobile-app.md` "Still open" |
 | Bridge behaviour on your phones | This file's §2.2 confirm boxes, and `sim-use/FARM-NOTES.md` |
 | A step that is missing here | This file |

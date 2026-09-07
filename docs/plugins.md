@@ -217,6 +217,25 @@ Plugins are **not sandboxed** — a plugin has the full filesystem, network,
 process, and device access of the service account. Only install reviewed,
 exactly‑pinned packages.
 
+## The built-in plugins as worked examples
+
+Three plugins ship registered by default, and each is a complete example of a
+different shape:
+
+- **TikTok** (`com.git-agni.tiktok`) — `post` and `doomscroll`, an iOS routine
+  and an Android one behind each task, plus a device panel and its own HTTP
+  routes. See [android-tiktok.md](android-tiktok.md).
+- **Threads** (`com.backline.threads`) — `post` (text · photo · carousel ·
+  video) and `warmup`, built to the same shape with no routes or panel of its
+  own. It is the smallest complete two-platform plugin in the tree, and the one
+  to copy from. See [threads.md](threads.md).
+- **Runbooks** (`com.farm.runbook`) — `run`, replaying a recorded flow.
+
+Every plugin's tasks are reported by `GET /api/plugins`, which is what the
+Control Center's **network picker** on *Schedule post* and *Warm up* is built
+from: a plugin that registers a `post` task (or a `warmup` / `doomscroll` one)
+appears in that dropdown without any dashboard change.
+
 ## Trying the reference plugin
 
 `src/example-plugin.ts` is a complete minimal plugin (`open-app@1`). To load it

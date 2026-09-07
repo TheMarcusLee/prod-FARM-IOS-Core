@@ -3,7 +3,7 @@
   "version": "0.1.0-review.0",
   "private": false,
   "license": "Apache-2.0",
-  "description": "Backline: a self-hosted control center for a phone farm — a wall of live Android and iPhone screens, guided device registration, remote input, PostgreSQL-backed scheduling, a content drip queue, alerts, plugins, an MCP server and TikTok automation",
+  "description": "Backline: a self-hosted control center for a phone farm \u2014 a wall of live Android and iPhone screens, guided device registration, remote input, PostgreSQL-backed scheduling, a content drip queue, alerts, plugins, an MCP server and TikTok automation",
   "files": [
     "src",
     "static",
@@ -21,6 +21,7 @@
     ".": "./src/index.ts",
     "./tiktok": "./src/tiktok-plugin.ts",
     "./instagram": "./src/instagram-plugin.ts",
+    "./threads": "./src/threads-plugin.ts",
     "./example-plugin": "./src/example-plugin.ts",
     "./server": "./src/api/server.ts",
     "./worker": "./src/scheduler/worker.ts"

@@ -1,0 +1,157 @@
+{
+  "id": "rb-starter-threads-text-post",
+  "name": "Threads text post",
+  "description": "Posts a text-only thread with wording you fill in each run.",
+  "platform": "android",
+  "appId": "com.instagram.barcelona",
+  "createdFor": {
+    "udid": "starter-template",
+    "screen": {
+      "width": 1080,
+      "height": 2400,
+      "scale": 1
+    }
+  },
+  "template": "threads-text-post",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.instagram.barcelona"
+    },
+    {
+      "type": "wait",
+      "ms": 6000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.5,
+          "y": 0.62
+        },
+        "text": "Not now"
+      },
+      "seen": [
+        "Not now",
+        "Allow",
+        "Continue",
+        "Skip"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.7,
+          "y": 0.965
+        },
+        "id": "compose_tab",
+        "text": "Create"
+      },
+      "seen": [
+        "For you",
+        "Following",
+        "Home",
+        "Search",
+        "Activity",
+        "Profile",
+        "Create",
+        "Compose"
+      ],
+      "guess": true
+    },
+    {
+      "type": "waitForText",
+      "text": "Post",
+      "timeoutMs": 30000,
+      "seen": [
+        "What's new?",
+        "Start a thread",
+        "Post",
+        "New thread",
+        "Cancel",
+        "Add to thread"
+      ],
+      "guess": true
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.5,
+          "y": 0.2
+        },
+        "id": "text_post_composer_edit_text",
+        "text": "What's new?"
+      },
+      "seen": [
+        "What's new?",
+        "Start a thread",
+        "Post",
+        "New thread",
+        "Cancel",
+        "Add to thread"
+      ],
+      "guess": true
+    },
+    {
+      "type": "wait",
+      "ms": 1200
+    },
+    {
+      "type": "type",
+      "text": "{{text}}"
+    },
+    {
+      "type": "key",
+      "key": "back"
+    },
+    {
+      "type": "wait",
+      "ms": 1200
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.86,
+          "y": 0.94
+        },
+        "id": "share_button",
+        "text": "Post"
+      },
+      "seen": [
+        "What's new?",
+        "Start a thread",
+        "Post",
+        "New thread",
+        "Cancel",
+        "Add to thread"
+      ],
+      "guess": true
+    },
+    {
+      "type": "waitForText",
+      "text": "Posted",
+      "timeoutMs": 120000,
+      "seen": [
+        "Posted",
+        "Your thread was posted",
+        "Posting"
+      ],
+      "guess": true
+    },
+    {
+      "type": "key",
+      "key": "home"
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "text": "morning from the workshop"
+  }
+}

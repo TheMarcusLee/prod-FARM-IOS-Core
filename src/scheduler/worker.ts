@@ -16,6 +16,7 @@ import { SchedulerRepository, STUCK_EXECUTION_ERROR } from './repository.js';
 import { createRunbookPlugin } from '../runbook-plugin.js';
 import { createTikTokPlugin } from '../tiktok-plugin.js';
 import { createInstagramPlugin } from '../instagram-plugin.js';
+import { createThreadsPlugin } from '../threads-plugin.js';
 
 export interface WorkerRuntime { close(): Promise<void> }
 
@@ -147,6 +148,7 @@ async function main(): Promise<void> {
             ...(process.env.INSTAGRAM_BUNDLE_ID ? { bundleId: process.env.INSTAGRAM_BUNDLE_ID } : {}),
             ...(process.env.INSTAGRAM_PACKAGE ? { packageName: process.env.INSTAGRAM_PACKAGE } : {}),
         }),
+        createThreadsPlugin({ bundleId: process.env.THREADS_BUNDLE_ID, packageName: process.env.THREADS_PACKAGE }),
         createRunbookPlugin(),
         ...await loadPlugins(configuredPluginModules()),
     ]);

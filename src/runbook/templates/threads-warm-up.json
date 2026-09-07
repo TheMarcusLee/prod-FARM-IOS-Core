@@ -1,0 +1,82 @@
+{
+  "id": "rb-starter-threads-warm-up",
+  "name": "Threads warm-up",
+  "description": "Opens Threads, lands on the feed, and scrolls it as many times as you ask for, then goes Home.",
+  "platform": "android",
+  "appId": "com.instagram.barcelona",
+  "createdFor": {
+    "udid": "starter-template",
+    "screen": {
+      "width": 1080,
+      "height": 2400,
+      "scale": 1
+    }
+  },
+  "template": "threads-warm-up",
+  "steps": [
+    {
+      "type": "launchApp",
+      "appId": "com.instagram.barcelona"
+    },
+    {
+      "type": "wait",
+      "ms": 6000
+    },
+    {
+      "type": "tap",
+      "target": {
+        "fraction": {
+          "x": 0.1,
+          "y": 0.965
+        },
+        "id": "feed_tab",
+        "text": "Home"
+      },
+      "seen": [
+        "For you",
+        "Following",
+        "Home",
+        "Search",
+        "Activity",
+        "Profile"
+      ],
+      "guess": true,
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "ms": 2500
+    },
+    {
+      "type": "swipe",
+      "from": {
+        "x": 0.5,
+        "y": 0.78
+      },
+      "to": {
+        "x": 0.5,
+        "y": 0.28
+      },
+      "durationMs": 420,
+      "repeat": "{{scrolls}}",
+      "repeatDelayMs": 5200
+    },
+    {
+      "type": "assert",
+      "text": "For you",
+      "expect": "present",
+      "optional": true,
+      "guess": true
+    },
+    {
+      "type": "key",
+      "key": "home"
+    }
+  ],
+  "version": 1,
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "lastValues": {
+    "scrolls": "12"
+  }
+}

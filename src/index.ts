@@ -10,6 +10,7 @@ export * from './security.js';
 export * from './tiktok-plugin.js';
 export * from './instagram-plugin.js';
 export * from './instagram/post-manifest.js';
+export * from './threads-plugin.js';
 export * from './runbook-plugin.js';
 export * from './runbook/model.js';
 export * from './runbook/replay.js';
@@ -19,7 +20,7 @@ export * from './dashboard-theme.js';
 export { activeDevices, loadRegisteredDevices, saveRegisteredDevices } from './devices/registry.js';
 export {
     CALIBRATABLE_POINTS, POINT_LABELS, resolveDeviceCoordinates, validateCoordinateOverrides,
-    type CalibratablePoint, type DeviceCoordinateOverrides,
+    type CalibratablePoint, type DeviceCoordinateOverrides, type ThreadsCoordinates,
 } from './devices/coordinates.js';
 export {
     DeviceRegistrationService,
