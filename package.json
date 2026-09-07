@@ -20,6 +20,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./tiktok": "./src/tiktok-plugin.ts",
+    "./youtube": "./src/youtube-plugin.ts",
     "./example-plugin": "./src/example-plugin.ts",
     "./server": "./src/api/server.ts",
     "./worker": "./src/scheduler/worker.ts"

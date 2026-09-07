@@ -47,6 +47,42 @@ export interface DeviceCoordinates {
             durationMs: number;
         };
     };
+    /**
+     * Every tap the built-in YouTube Shorts plugin's iOS routines use. **None of these have been
+     * measured on a real device** — they are the TikTok layout's geometry reasoned onto YouTube's
+     * screens, and they are the first thing to check when an iPhone Shorts run misses. See
+     * docs/coordinates.md and docs/youtube.md.
+     */
+    youtube: {
+        homeTab: Point;
+        shortsTab: Point;
+        accountAvatar: Point;
+        create: Point;
+        upload: Point;
+        /** The newest cell in the picker's Recents grid. */
+        firstCell: Point;
+        next: Point;
+        titleField: Point;
+        descriptionField: Point;
+        keyboardBack: Point;
+        visibility: Point;
+        publicOption: Point;
+        audience: Point;
+        notMadeForKids: Point;
+        uploadShort: Point;
+        saveDraft: Point;
+        like: Point;
+        subscribe: Point;
+        comment: Point;
+        commentField: Point;
+        commentSend: Point;
+        swipe: {
+            x: number;
+            startY: number;
+            endY: number;
+            durationMs: number;
+        };
+    };
 }
 
 export const DEFAULT_COORDINATE_PROFILE = 'iphone8';
@@ -88,6 +124,31 @@ export const DEVICE_COORDINATES = {
             finish: { x: 277, y: 630 },
             like: { x: 345, y: 313 },
             save: { x: 345, y: 444 },
+            swipe: { x: 187, startY: 550, endY: 150, durationMs: 450 },
+        },
+        // UNVERIFIED. Reasoned from the 375x667 layout, never measured on a phone.
+        youtube: {
+            homeTab: { x: 38, y: 653 },
+            shortsTab: { x: 112, y: 653 },
+            accountAvatar: { x: 350, y: 40 },
+            create: { x: 187, y: 650 },
+            upload: { x: 187, y: 560 },
+            firstCell: { x: 62, y: 300 },
+            next: { x: 330, y: 42 },
+            titleField: { x: 187, y: 150 },
+            descriptionField: { x: 187, y: 210 },
+            keyboardBack: { x: 22, y: 42 },
+            visibility: { x: 187, y: 300 },
+            publicOption: { x: 187, y: 360 },
+            audience: { x: 187, y: 360 },
+            notMadeForKids: { x: 187, y: 420 },
+            uploadShort: { x: 300, y: 630 },
+            saveDraft: { x: 75, y: 630 },
+            like: { x: 350, y: 380 },
+            subscribe: { x: 300, y: 560 },
+            comment: { x: 350, y: 440 },
+            commentField: { x: 160, y: 600 },
+            commentSend: { x: 350, y: 600 },
             swipe: { x: 187, startY: 550, endY: 150, durationMs: 450 },
         },
     },

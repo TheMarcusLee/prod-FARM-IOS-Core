@@ -15,6 +15,7 @@ import { createQueue, ensureDeviceQueue, type ExecutionJob } from './queue.js';
 import { SchedulerRepository, STUCK_EXECUTION_ERROR } from './repository.js';
 import { createRunbookPlugin } from '../runbook-plugin.js';
 import { createTikTokPlugin } from '../tiktok-plugin.js';
+import { createYouTubePlugin } from '../youtube-plugin.js';
 
 export interface WorkerRuntime { close(): Promise<void> }
 
@@ -142,6 +143,10 @@ export async function startWorker(plugins: PluginRegistry): Promise<WorkerRuntim
 async function main(): Promise<void> {
     const plugins = new PluginRegistry([
         createTikTokPlugin({ bundleId: process.env.TIKTOK_BUNDLE_ID }),
+        createYouTubePlugin({
+            ...(process.env.YOUTUBE_BUNDLE_ID ? { bundleId: process.env.YOUTUBE_BUNDLE_ID } : {}),
+            ...(process.env.YOUTUBE_PACKAGE ? { packageName: process.env.YOUTUBE_PACKAGE } : {}),
+        }),
         createRunbookPlugin(),
         ...await loadPlugins(configuredPluginModules()),
     ]);
